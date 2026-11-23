@@ -44,7 +44,7 @@ class GeminiStreamClient:
         self._client = genai.Client(api_key=cleaned)
 
     @classmethod
-    def _call_with_retry(cls, fn: Callable[[], T], max_attempts: int = 3) -> T:
+    def _call_with_retry(cls, fn: Callable[[], T], max_attempts: int = 4) -> T:
         import time
 
         last_exc: genai_errors.APIError | None = None
@@ -55,7 +55,7 @@ class GeminiStreamClient:
                 last_exc = exc
                 if exc.code not in cls.RETRYABLE_STATUS_CODES or attempt == max_attempts - 1:
                     raise
-                time.sleep(1.5 * (2**attempt))
+                time.sleep(2.0 * (2**attempt))
         raise last_exc  # type: ignore[misc]
 
     def _generate_structured_sync(
