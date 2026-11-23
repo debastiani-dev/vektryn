@@ -4,12 +4,14 @@ import { vektrynApi } from "../../api/client";
 import type { ApplicationLead, LeadPriority, LeadStatus } from "../../types/models";
 
 const PIPELINE_STAGES: Array<{ id: LeadStatus; label: string }> = [
+    { id: "discovered", label: "Discovered" },
     { id: "saved", label: "Saved" },
     { id: "applied", label: "Applied" },
     { id: "screening", label: "Screening" },
     { id: "interviewing", label: "Interviewing" },
     { id: "offer", label: "Offer" },
     { id: "rejected", label: "Rejected" },
+    { id: "withdrawn", label: "Withdrawn" },
 ];
 
 const PRIORITY_STYLES: Record<LeadPriority, string> = {
@@ -77,7 +79,7 @@ export function PipelineTrackerView() {
     }
 
     return (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {PIPELINE_STAGES.map((stage) => {
                 const stageLeads = leads.filter((item) => item.status === stage.id);
 
