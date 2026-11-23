@@ -3,6 +3,11 @@ from typing import Any, Optional
 
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from enum import StrEnum
+
+
+def enum_choices(enum_cls: type[StrEnum]) -> list[tuple[str, str]]:
+    return [(member.value, member.name.replace("_", " ").title()) for member in enum_cls]
 
 
 class BaseQuerySet(models.QuerySet):
