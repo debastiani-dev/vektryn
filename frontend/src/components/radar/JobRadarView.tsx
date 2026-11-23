@@ -15,6 +15,17 @@ function formatScoreLabel(score: number | null): string {
     return score !== null ? `${score}% Fit` : "Vector Only";
 }
 
+function extractJobPostingId(jobPosting: unknown): string | null {
+    if (typeof jobPosting === "string" && jobPosting.length > 0) {
+        return jobPosting;
+    }
+    if (typeof jobPosting === "object" && jobPosting !== null && "uuid" in jobPosting) {
+        const uuid = (jobPosting as { uuid?: unknown }).uuid;
+        return typeof uuid === "string" && uuid.length > 0 ? uuid : null;
+    }
+    return null;
+}
+
 export function JobRadarView() {
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [loading, setLoading] = useState(true);
@@ -22,8 +33,20 @@ export function JobRadarView() {
     const [searchTerm, setSearchTerm] = useState("");
     const [minScore, setMinScore] = useState<number>(0);
     const [selectedMatch, setSelectedMatch] = useState<MatchScore | null>(null);
-    const [savedJobIds, setSavedJobIds] = useState<Set<string>>(new Set());
+    const [savedLeadsByJobId, setSavedLeadsByJobId] = useState<Record<string, string>>({});
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
+
+    async function refreshSavedLeads() {
+        const leadRes = await vektrynApi.listLeads();
+        const nextMap: Record<string, string> = {};
+        for (const lead of leadRes.results) {
+            const jobId = extractJobPostingId(lead.job_posting);
+            if (jobId && lead.uuid) {
+                nextMap[jobId] = lead.uuid;
+            }
+        }
+        setSavedLeadsByJobId(nextMap);
+    }
 
     useEffect(() => {
         let cancelled = false;
@@ -37,7 +60,14 @@ export function JobRadarView() {
                 ]);
                 if (cancelled) return;
                 setMatches(matchRes.results);
-                setSavedJobIds(new Set(leadRes.results.map((l) => l.job_posting.uuid)));
+                const nextMap: Record<string, string> = {};
+                for (const lead of leadRes.results) {
+                    const jobId = extractJobPostingId(lead.job_posting);
+                    if (jobId && lead.uuid) {
+                        nextMap[jobId] = lead.uuid;
+                    }
+                }
+                setSavedLeadsByJobId(nextMap);
             } catch (err) {
                 if (!cancelled) {
                     setError(err instanceof Error ? err.message : "Failed to load matches");
@@ -52,17 +82,46 @@ export function JobRadarView() {
         };
     }, []);
 
-    async function handleSaveLead(match: MatchScore) {
+    async function handleToggleSaveLead(match: MatchScore) {
         const jobId = match.job_posting.uuid;
-        if (savedJobIds.has(jobId)) return;
+        const existingLeadUuid = savedLeadsByJobId[jobId];
         setSavingJobId(jobId);
+        setError(null);
+
         try {
-            await vektrynApi.createLead({
-                job_posting: jobId,
-                resume_profile: match.resume_profile,
-                status: "saved",
-            });
-            setSavedJobIds((prev) => new Set(prev).add(jobId));
+            if (existingLeadUuid) {
+                await vektrynApi.deleteLead(existingLeadUuid);
+                setSavedLeadsByJobId((prev) => {
+                    const copy = { ...prev };
+                    delete copy[jobId];
+                    return copy;
+                });
+            } else {
+                const created = await vektrynApi.createLead({
+                    job_posting: jobId,
+                    resume_profile: match.resume_profile,
+                    status: "saved",
+                });
+                setSavedLeadsByJobId((prev) => ({
+                    ...prev,
+                    [jobId]: created.uuid,
+                }));
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const normalized = message.toLowerCase();
+
+            if (!existingLeadUuid && (message.includes("API 400") || message.includes("API 409") || normalized.includes("already exists") || normalized.includes("unique"))) {
+                await refreshSavedLeads();
+            } else if (existingLeadUuid && message.includes("API 404")) {
+                setSavedLeadsByJobId((prev) => {
+                    const copy = { ...prev };
+                    delete copy[jobId];
+                    return copy;
+                });
+            } else {
+                setError(message || "Failed to update saved lead");
+            }
         } finally {
             setSavingJobId(null);
         }
@@ -95,8 +154,15 @@ export function JobRadarView() {
             <div className="grid gap-3">
                 {filtered.map((match) => {
                     const job = match.job_posting;
-                    const isSaved = savedJobIds.has(job.uuid);
-                    const saveLabel = savingJobId === job.uuid ? "Saving..." : "Save";
+                    const isSaved = Boolean(savedLeadsByJobId[job.uuid]);
+                    const isBusy = savingJobId === job.uuid;
+                    const actionLabel = isBusy
+                        ? isSaved
+                            ? "Removing..."
+                            : "Saving..."
+                        : isSaved
+                            ? "Saved"
+                            : "Save";
 
                     return (
                         <article
@@ -158,19 +224,23 @@ export function JobRadarView() {
 
                                     <button
                                         type="button"
-                                        disabled={isSaved || savingJobId === job.uuid}
-                                        onClick={() => void handleSaveLead(match)}
-                                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-700 disabled:opacity-60"
+                                        disabled={isBusy}
+                                        onClick={() => void handleToggleSaveLead(match)}
+                                        title={isSaved ? "Click to unsave from pipeline" : "Save to pipeline"}
+                                        className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-60 ${isSaved
+                                                ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200 hover:border-red-500/40 hover:bg-red-950/30 hover:text-red-200"
+                                                : "border-zinc-700 bg-zinc-800/80 text-zinc-200 hover:bg-zinc-700"
+                                            }`}
                                     >
                                         {isSaved ? (
                                             <>
                                                 <BookmarkCheck className="h-3.5 w-3.5 text-emerald-400" />
-                                                Saved
+                                                {actionLabel}
                                             </>
                                         ) : (
                                             <>
                                                 <BookmarkPlus className="h-3.5 w-3.5 text-violet-400" />
-                                                {saveLabel}
+                                                {actionLabel}
                                             </>
                                         )}
                                     </button>
@@ -235,9 +305,9 @@ export function JobRadarView() {
             <GapAnalysisDrawer
                 match={selectedMatch}
                 saving={selectedMatch ? savingJobId === selectedMatch.job_posting.uuid : false}
-                saved={selectedMatch ? savedJobIds.has(selectedMatch.job_posting.uuid) : false}
+                saved={selectedMatch ? Boolean(savedLeadsByJobId[selectedMatch.job_posting.uuid]) : false}
                 onClose={() => setSelectedMatch(null)}
-                onSaveLead={(m) => void handleSaveLead(m)}
+                onSaveLead={(m) => void handleToggleSaveLead(m)}
             />
         </div>
     );

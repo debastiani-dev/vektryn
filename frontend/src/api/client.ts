@@ -62,6 +62,11 @@ export const vektrynApi = {
             body: JSON.stringify(payload),
         }),
 
+    deleteLead: (uuid: string) =>
+        apiFetch<void>(`/api/v1/leads/${uuid}/`, {
+            method: "DELETE",
+        }),
+
     listTrends: (params = "") =>
         apiFetch<PaginatedResponse<StackTrendDaily>>(`/api/v1/analytics/trends/${params}`),
 };
