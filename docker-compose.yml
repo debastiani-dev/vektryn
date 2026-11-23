@@ -79,6 +79,123 @@ services:
         echo "Kafka topics provisioned:"
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
 
+  control-plane:
+    build:
+      context: .
+      dockerfile: services/control-plane/Dockerfile
+    container_name: vektryn-control-plane
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-vektryn}
+      POSTGRES_USER: ${POSTGRES_USER:-vektryn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/schema/')\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  stream-edge:
+    build:
+      context: .
+      dockerfile: services/stream-edge/Dockerfile
+    container_name: vektryn-stream-edge
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-vektryn}
+      POSTGRES_USER: ${POSTGRES_USER:-vektryn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  enrichment-worker:
+    build:
+      context: .
+      dockerfile: services/stream-edge/Dockerfile
+    container_name: vektryn-enrichment-worker
+    restart: unless-stopped
+    command: [ "python", "-m", "stream_edge.workers.enrichment" ]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-vektryn}
+      POSTGRES_USER: ${POSTGRES_USER:-vektryn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  matcher-worker:
+    build:
+      context: .
+      dockerfile: services/stream-edge/Dockerfile
+    container_name: vektryn-matcher-worker
+    restart: unless-stopped
+    command: [ "python", "-m", "stream_edge.workers.matcher" ]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-vektryn}
+      POSTGRES_USER: ${POSTGRES_USER:-vektryn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vektryn-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - control-plane
+      - stream-edge
+
 volumes:
   postgres_data:
   redis_data:
