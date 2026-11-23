@@ -1,0 +1,30 @@
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "vektryn-control-plane"
+version = "0.1.0"
+description = "Django + DRF control plane and persistence owner for Vektryn"
+authors = ["Rafael Debastiani <rjdebastiani@hotmail.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.13"
+django = ">=5.2,<6.2"
+djangorestframework = "^3.15"
+psycopg = { extras = ["binary"], version = "^3.2" }
+pgvector = "^0.3.6"
+django-filter = "^24.3"
+django-cors-headers = "^4.6"
+drf-spectacular = "^0.28"
+pydantic-settings = "^2.7"
+gunicorn = "^23.0"
+vektryn-contracts = { path = "../../packages/contracts", develop = true }
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-django = "^4.9"
+ruff = "^0.9"
+black = "^25.1"
+mypy = "^1.14"
