@@ -2,11 +2,24 @@ from enum import StrEnum
 
 
 class ATSSource(StrEnum):
+    # Global ATS platforms
     GREENHOUSE = "greenhouse"
-    LEVER = "lever"
     ASHBY = "ashby"
+    LEVER = "lever"
     WORKABLE = "workable"
-    FEED = "feed"
+    SMARTRECRUITERS = "smartrecruiters"
+    RECRUITEE = "recruitee"
+    BREEZY = "breezy"
+    # Brazilian ATS platforms
+    GUPY = "gupy"
+    SOLIDES = "solides"
+    INHIRE = "inhire"
+    # Multi-company feeds (Global & Brazil)
+    REMOTIVE = "remotive"
+    HIMALAYAS = "himalayas"
+    JOBICY = "jobicy"
+    TRAMPOS = "trampos"
+    GITHUB_VAGAS = "github_vagas"
 
 
 class SeniorityLevel(StrEnum):
