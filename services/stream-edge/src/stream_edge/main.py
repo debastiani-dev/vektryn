@@ -3,9 +3,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import inspect
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from prometheus_client import make_asgi_app
 
 from stream_edge.api.alerts_sse import router as alerts_router
 from stream_edge.api.ingest import router as ingest_router
@@ -18,6 +26,23 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _configure_telemetry(app: FastAPI) -> None:
+    app.mount("/metrics", make_asgi_app())
+
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    if not endpoint:
+        return
+
+    resource = Resource.create({"service.name": "vektryn-stream-edge"})
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(
+        BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces"))
+    )
+    trace.set_tracer_provider(provider)
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="/health,/metrics")
+    logger.info("OpenTelemetry tracing enabled -> %s", endpoint)
 
 
 async def _shutdown_producer(producer: KafkaEventProducer) -> None:
@@ -69,6 +94,7 @@ app.add_middleware(
 
 app.include_router(ingest_router)
 app.include_router(alerts_router)
+_configure_telemetry(app)
 
 
 @app.get("/health", tags=["health"])

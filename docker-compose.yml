@@ -96,6 +96,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     ports:
       - "8000:8000"
     depends_on:
@@ -126,6 +127,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     ports:
       - "8001:8001"
     depends_on:
@@ -154,6 +156,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       control-plane:
         condition: service_healthy
@@ -178,6 +181,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       control-plane:
         condition: service_healthy
@@ -196,7 +200,46 @@ services:
       - control-plane
       - stream-edge
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    container_name: vektryn-otel-collector
+    restart: unless-stopped
+    command: [ "--config=/etc/otelcol-contrib/config.yaml" ]
+    volumes:
+      - ./infra/docker/observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: vektryn-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./infra/docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: vektryn-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-vektryn_admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/docker/observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   redis_data:
   kafka_data:
+  grafana_data:
