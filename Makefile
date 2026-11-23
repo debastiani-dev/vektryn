@@ -120,6 +120,18 @@ worker/rollup:
 	@echo "${GREEN}Running daily StackTrendDaily rollup${RESET}"
 	cd $(STREAM_EDGE_DIR) && $(EDGE_ENV) poetry run python -m stream_edge.workers.rollup
 
+## Check active JobPostings upstream and mark closed listings inactive
+.PHONY: worker/lifecycle
+worker/lifecycle:
+	@echo "${GREEN}Running upstream closed-job lifecycle check${RESET}"
+	cd $(STREAM_EDGE_DIR) && $(EDGE_ENV) poetry run python -m stream_edge.workers.lifecycle
+
+## Inspect or replay failed events from jobs.dlq (pass args="--execute" to replay)
+.PHONY: worker/dlq
+worker/dlq:
+	@echo "${GREEN}Running DLQ inspection/replay${RESET}"
+	cd $(STREAM_EDGE_DIR) && $(EDGE_ENV) poetry run python -m stream_edge.workers.dlq_replay $(args)
+	
 ## Run pytest test suite (pass opts="..." for extra pytest flags)
 .PHONY: test
 test:
