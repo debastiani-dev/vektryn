@@ -1,0 +1,71 @@
+name: Deploy - GCP Cloud Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "packages/contracts/**"
+      - "services/**"
+      - "frontend/**"
+      - "infra/terraform/**"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  REGION: us-central1
+  REPO: vektryn
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: vars.GCP_PROJECT_ID != ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push container images
+        run: |
+          REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
+          TAG="${{ github.sha }}"
+
+          docker build -f services/control-plane/Dockerfile -t "$REGISTRY/control-plane:$TAG" -t "$REGISTRY/control-plane:latest" .
+          docker build -f services/stream-edge/Dockerfile -t "$REGISTRY/stream-edge:$TAG" -t "$REGISTRY/stream-edge:latest" .
+          docker build -f frontend/Dockerfile -t "$REGISTRY/frontend:$TAG" -t "$REGISTRY/frontend:latest" frontend
+
+          docker push --all-tags "$REGISTRY/control-plane"
+          docker push --all-tags "$REGISTRY/stream-edge"
+          docker push --all-tags "$REGISTRY/frontend"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.11"
+
+      - name: Terraform Apply
+        working-directory: infra/terraform
+        run: |
+          REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
+          TAG="${{ github.sha }}"
+
+          terraform init
+          terraform apply -auto-approve \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="region=${{ env.REGION }}" \
+            -var="control_plane_image=$REGISTRY/control-plane:$TAG" \
+            -var="stream_edge_image=$REGISTRY/stream-edge:$TAG" \
+            -var="frontend_image=$REGISTRY/frontend:$TAG"

@@ -1,0 +1,36 @@
+name: CI - Stream Edge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/stream-edge/**"
+      - "packages/contracts/**"
+      - ".github/workflows/ci-stream-edge.yml"
+  pull_request:
+    paths:
+      - "services/stream-edge/**"
+      - "packages/contracts/**"
+
+jobs:
+  test-stream-edge:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/stream-edge
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: pip install "poetry>=2.0,<3.0"
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Run pytest
+        run: poetry run pytest
