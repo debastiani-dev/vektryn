@@ -114,6 +114,12 @@ worker/matcher:
 	@echo "${GREEN}Starting Kafka matching worker${RESET}"
 	cd $(STREAM_EDGE_DIR) && $(EDGE_ENV) poetry run python -m stream_edge.workers.matcher
 
+## Run daily StackTrendDaily analytics rollup
+.PHONY: worker/rollup
+worker/rollup:
+	@echo "${GREEN}Running daily StackTrendDaily rollup${RESET}"
+	cd $(STREAM_EDGE_DIR) && $(EDGE_ENV) poetry run python -m stream_edge.workers.rollup
+
 ## Run pytest test suite (pass opts="..." for extra pytest flags)
 .PHONY: test
 test:

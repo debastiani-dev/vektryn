@@ -8,6 +8,7 @@ import httpx
 import redis.asyncio as aioredis
 
 from stream_edge.config import settings
+from vektryn_contracts.enums import TechCategory
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class TechTaxonomy:
     disciplines: dict[str, tuple[str, ...]]
     seniority_markers: dict[str, tuple[str, ...]]
     remote_markers: tuple[str, ...]
+    tag_to_category: dict[str, str]
 
 
 def _extract_devicon_stacks(entries: list[dict]) -> list[str]:
@@ -42,6 +44,17 @@ def _extract_devicon_stacks(entries: list[dict]) -> list[str]:
             if len(clean) >= 2:
                 stacks.add(clean)
     return sorted(stacks)
+
+
+def _build_tag_category_map(raw_categories: dict[str, list[str]]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for raw_cat, tags in raw_categories.items():
+        category = TechCategory(raw_cat.strip().lower()).value
+        for tag in tags:
+            clean_tag = tag.strip().lower()
+            if clean_tag:
+                mapping[clean_tag] = category
+    return mapping
 
 
 async def sync_dynamic_stacks(
@@ -86,4 +99,5 @@ def load_taxonomy(dynamic_stacks: frozenset[str] = frozenset()) -> TechTaxonomy:
         disciplines={k: tuple(v) for k, v in raw["disciplines"].items()},
         seniority_markers={k: tuple(v) for k, v in raw["seniority_markers"].items()},
         remote_markers=tuple(raw["remote_markers"]),
+        tag_to_category=_build_tag_category_map(raw.get("categories", {})),
     )
