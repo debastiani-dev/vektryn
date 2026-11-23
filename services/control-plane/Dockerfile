@@ -15,6 +15,7 @@ WORKDIR /app/services/control-plane
 RUN poetry install --only main --no-interaction --no-ansi
 
 COPY services/control-plane /app/services/control-plane
+RUN SECRET_KEY=collectstatic-build-placeholder poetry run python manage.py collectstatic --noinput
 
 EXPOSE 8000
 CMD ["sh", "-c", "python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2"]
