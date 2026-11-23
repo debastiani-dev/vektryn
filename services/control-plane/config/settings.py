@@ -1,7 +1,10 @@
 from pathlib import Path
+from enum import StrEnum
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from vektryn_contracts.enums import ContractType, RegionEligibility, SeniorityLevel
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BASE_DIR.parent.parent
@@ -24,6 +27,11 @@ class ControlPlaneSettings(BaseSettings):
     postgres_password: str = "vektryn_dev_password"
     postgres_host: str = Field(default="localhost")
     postgres_port: int = 5432
+
+    gemini_api_key: str = ""
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_scoring_model: str = "gemini-4-hydrogen"
+    gemini_fallback_scoring_model: str = "gemini-3.5-flash-lite"
 
 
 env = ControlPlaneSettings()
@@ -118,7 +126,19 @@ CORS_ALLOWED_ORIGINS = [
     o.strip() for o in env.cors_allowed_origins.split(",") if o.strip()
 ]
 
+GEMINI_API_KEY = env.gemini_api_key
+GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model
+GEMINI_SCORING_MODEL = env.gemini_scoring_model
+GEMINI_FALLBACK_SCORING_MODEL = env.gemini_fallback_scoring_model
+
 REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework.authentication.BasicAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
@@ -128,8 +148,17 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 25,
 }
 
+def _choices(enum_cls: type[StrEnum]) -> list[tuple[str, str]]:
+    return [(member.value, member.name.replace("_", " ").title()) for member in enum_cls]
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Vektryn Control Plane API",
     "DESCRIPTION": "Tech market intelligence, semantic resume matching, and application tracker API.",
     "VERSION": "0.1.0",
+    "COMPONENT_SPLIT_REQUEST": True,
+    "ENUM_NAME_OVERRIDES": {
+        "SeniorityLevelEnum": _choices(SeniorityLevel),
+        "ContractTypeEnum": _choices(ContractType),
+        "RegionEligibilityEnum": _choices(RegionEligibility),
+    },
 }

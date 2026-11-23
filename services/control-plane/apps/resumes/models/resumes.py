@@ -3,6 +3,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.db.models import Q
 from pgvector.django import VectorField
+from django.core.validators import MaxValueValidator, MinValueValidator
 
 from apps.base.models.base_model import BaseModel, enum_choices
 from vektryn_contracts.enums import ContractType, RegionEligibility, SeniorityLevel
@@ -41,7 +42,10 @@ class ResumeProfile(BaseModel):
         default=list,
         blank=True,
     )
-    min_alert_score = models.PositiveSmallIntegerField(default=75)
+    min_alert_score = models.PositiveSmallIntegerField(
+        default=75,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
 
     raw_text = models.TextField()
     source_file_gcs_uri = models.CharField(max_length=512, blank=True, default="")

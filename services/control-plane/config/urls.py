@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.http import JsonResponse
-from django.urls import path
+from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
@@ -13,4 +13,7 @@ urlpatterns = [
     path("health/", healthcheck, name="healthcheck"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    path("api/v1/resumes/", include("apps.resumes.urls")),
+    path("api/v1/jobs/", include("apps.jobs.urls")),
+    path("api/v1/matches/", include("apps.matching.urls")),
 ]
