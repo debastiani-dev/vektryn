@@ -1,0 +1,260 @@
+import asyncio
+from datetime import datetime, timezone
+import logging
+
+import httpx
+
+from stream_edge.collectors.base import CollectedJob, html_to_clean_text
+from vektryn_contracts.enums import ATSSource
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_iso_dt(raw: str | int | float | None) -> datetime | None:
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, (int, float)):
+        return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+class MultiCompanyFeedCollector:
+    """Fetches remote and Brazilian software jobs from public multi-company JSON feeds."""
+
+    def __init__(self, http_client: httpx.AsyncClient) -> None:
+        self.http_client = http_client
+
+    async def fetch_remotive(self, category: str = "software-dev") -> list[CollectedJob]:
+        resp = await self.http_client.get(
+            "https://remotive.com/api/remote-jobs",
+            params={"category": category, "limit": 100},
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        jobs: list[CollectedJob] = []
+        for item in resp.json().get("jobs", []):
+            raw_html = item.get("description") or ""
+            jobs.append(
+                CollectedJob(
+                    ats_source=ATSSource.REMOTIVE,
+                    external_id=str(item["id"]),
+                    title=(item.get("title") or "").strip(),
+                    company_name=(item.get("company_name") or "Remotive Company").strip(),
+                    apply_url=item.get("url") or "",
+                    location_raw=(item.get("candidate_required_location") or "Worldwide").strip(),
+                    raw_html=raw_html,
+                    description_clean=html_to_clean_text(raw_html),
+                    posted_at=_parse_iso_dt(item.get("publication_date")),
+                )
+            )
+        return [j for j in jobs if j.apply_url and j.title]
+
+    async def fetch_himalayas(self, limit: int = 100) -> list[CollectedJob]:
+        resp = await self.http_client.get(
+            "https://himalayas.app/jobs/api",
+            params={"limit": limit},
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        jobs: list[CollectedJob] = []
+        for item in resp.json().get("jobs", []):
+            raw_html = item.get("description") or item.get("excerpt") or ""
+            loc_restrictions = item.get("locationRestrictions") or []
+            location_raw = ", ".join(loc_restrictions) if loc_restrictions else "Remote"
+            apply_url = item.get("applicationLink") or item.get("guid") or ""
+            ext_id = str(item.get("id") or item.get("guid") or apply_url[-40:])
+            jobs.append(
+                CollectedJob(
+                    ats_source=ATSSource.HIMALAS if hasattr(ATSSource, "HIMALAS") else ATSSource.HIMALAYAS,
+                    external_id=ext_id,
+                    title=(item.get("title") or "").strip(),
+                    company_name=(item.get("companyName") or "Himalayas Company").strip(),
+                    apply_url=apply_url,
+                    location_raw=location_raw,
+                    raw_html=raw_html,
+                    description_clean=html_to_clean_text(raw_html),
+                    posted_at=_parse_iso_dt(item.get("pubDate")),
+                )
+            )
+        return [j for j in jobs if j.apply_url and j.title]
+
+    async def fetch_jobicy(self, tag: str = "python") -> list[CollectedJob]:
+        resp = await self.http_client.get(
+            "https://jobicy.com/api/v2/remote-jobs",
+            params={"count": 50, "tag": tag},
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        jobs: list[CollectedJob] = []
+        for item in resp.json().get("jobs", []):
+            raw_html = item.get("jobDescription") or item.get("jobExcerpt") or ""
+            jobs.append(
+                CollectedJob(
+                    ats_source=ATSSource.JOBICY,
+                    external_id=str(item["id"]),
+                    title=(item.get("jobTitle") or "").strip(),
+                    company_name=(item.get("companyName") or "Jobicy Company").strip(),
+                    apply_url=item.get("url") or "",
+                    location_raw=(item.get("jobGeo") or "Anywhere").strip(),
+                    raw_html=raw_html,
+                    description_clean=html_to_clean_text(raw_html),
+                    posted_at=_parse_iso_dt(item.get("pubDate")),
+                )
+            )
+        return [j for j in jobs if j.apply_url and j.title]
+
+    async def fetch_gupy_portal(self, job_name: str = "python") -> list[CollectedJob]:
+        resp = await self.http_client.get(
+            "https://portal.gupy.io/api/job-search/jobs",
+            params={"jobName": job_name, "limit": 50, "offset": 0},
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        jobs: list[CollectedJob] = []
+        for item in resp.json().get("data", []):
+            job_id = str(item.get("id") or "")
+            apply_url = item.get("jobUrl") or ""
+            if not apply_url or not job_id:
+                continue
+            loc_parts = [
+                item.get("city") or "",
+                item.get("state") or "",
+                item.get("country") or "Brazil",
+                "Remote" if item.get("isRemoteWork") else "",
+            ]
+            raw_html = item.get("description") or item.get("name") or ""
+            jobs.append(
+                CollectedJob(
+                    ats_source=ATSSource.GUPY,
+                    external_id=job_id,
+                    title=(item.get("name") or "").strip(),
+                    company_name=(item.get("careerPageName") or "Gupy Company").strip(),
+                    apply_url=apply_url,
+                    location_raw=", ".join(p for p in loc_parts if p),
+                    raw_html=raw_html,
+                    description_clean=html_to_clean_text(raw_html),
+                    posted_at=_parse_iso_dt(item.get("publishedDate")),
+                )
+            )
+        return [j for j in jobs if j.title]
+
+    async def fetch_trampos(self) -> list[CollectedJob]:
+        resp = await self.http_client.get(
+            "https://trampos.co/api/v2/opportunities.json",
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        items = payload if isinstance(payload, list) else payload.get("opportunities", [])
+        jobs: list[CollectedJob] = []
+        for entry in items:
+            item = entry.get("opportunity", entry) if isinstance(entry, dict) else {}
+            opp_id = str(item.get("id") or item.get("slug") or "")
+            permalink = item.get("permalink") or (
+                f"https://trampos.co/oportunidades/{opp_id}" if opp_id else ""
+            )
+            if not permalink or not opp_id:
+                continue
+            company_obj = item.get("company")
+            company = (
+                company_obj.get("name")
+                if isinstance(company_obj, dict)
+                else (item.get("company_name") or "Trampos Company")
+            )
+            raw_html = item.get("description") or item.get("name") or ""
+            city = item.get("city") or ""
+            state = item.get("state") or ""
+            loc = ", ".join(p for p in (city, state, "Brazil") if p)
+            if item.get("home_office") or item.get("remote"):
+                loc = f"{loc}, Remote"
+            jobs.append(
+                CollectedJob(
+                    ats_source=ATSSource.TRAMPOS,
+                    external_id=opp_id,
+                    title=(item.get("name") or item.get("title") or "").strip(),
+                    company_name=(company or "Trampos Company").strip(),
+                    apply_url=permalink,
+                    location_raw=loc,
+                    raw_html=raw_html,
+                    description_clean=html_to_clean_text(raw_html),
+                    posted_at=_parse_iso_dt(item.get("published_at") or item.get("created_at")),
+                )
+            )
+        return [j for j in jobs if j.title]
+
+    async def fetch_github_vagas(self, repo: str) -> list[CollectedJob]:
+        resp = await self.http_client.get(
+            f"https://api.github.com/repos/{repo}/issues",
+            params={"state": "open", "per_page": 60},
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "vektryn-collector",
+            },
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        jobs: list[CollectedJob] = []
+        for issue in resp.json():
+            if "pull_request" in issue:
+                continue
+            issue_num = str(issue.get("number") or issue.get("id") or "")
+            html_url = issue.get("html_url") or ""
+            title = (issue.get("title") or "").strip()
+            body = issue.get("body") or ""
+            labels = [lbl.get("name", "") for lbl in (issue.get("labels") or []) if isinstance(lbl, dict)]
+            location_raw = ", ".join(labels) if labels else "Brazil, Remote"
+            jobs.append(
+                CollectedJob(
+                    ats_source=ATSSource.GITHUB_VAGAS,
+                    external_id=f"{repo}#{issue_num}",
+                    title=title,
+                    company_name=repo,
+                    apply_url=html_url,
+                    location_raw=location_raw,
+                    raw_html=body,
+                    description_clean=html_to_clean_text(body),
+                    posted_at=_parse_iso_dt(issue.get("created_at")),
+                )
+            )
+        return [j for j in jobs if j.apply_url and j.title]
+
+    async def fetch_all(self) -> list[CollectedJob]:
+        feed_calls = (
+            ("remotive", self.fetch_remotive("software-dev")),
+            ("himalayas", self.fetch_himalayas(limit=100)),
+            ("jobicy:python", self.fetch_jobicy("python")),
+            ("jobicy:backend", self.fetch_jobicy("backend")),
+            ("gupy:python", self.fetch_gupy_portal("python")),
+            ("gupy:backend", self.fetch_gupy_portal("backend")),
+            ("trampos", self.fetch_trampos()),
+            ("github:backend-br", self.fetch_github_vagas("backend-br/vagas")),
+        )
+
+        results = await asyncio.gather(
+            *(coro for _, coro in feed_calls),
+            return_exceptions=True,
+        )
+
+        merged: list[CollectedJob] = []
+        seen_urls: set[str] = set()
+
+        for (label, _), result in zip(feed_calls, results, strict=True):
+            if isinstance(result, Exception):
+                logger.warning("Feed[%s] failed: %s", label, result)
+                continue
+            added = 0
+            for job in result:
+                if job.apply_url in seen_urls:
+                    continue
+                seen_urls.add(job.apply_url)
+                merged.append(job)
+                added += 1
+            logger.info("Feed[%s]: fetched %d new postings", label, added)
+
+        return merged

@@ -47,6 +47,18 @@ class StreamEdgeSettings(BaseSettings):
     # Two-stage matching thresholds
     cosine_similarity_threshold: float = 0.58
 
+    # ATS Job Board Tokens (comma-separated in .env, e.g. GREENHOUSE_BOARD_TOKENS=gitlab,stripe)
+    greenhouse_board_tokens: str = ""
+    ashby_board_tokens: str = ""
+
+    @property
+    def greenhouse_boards(self) -> list[str]:
+        return [b.strip() for b in self.greenhouse_board_tokens.split(",") if b.strip()]
+
+    @property
+    def ashby_boards(self) -> list[str]:
+        return [b.strip() for b in self.ashby_board_tokens.split(",") if b.strip()]
+
     @property
     def postgres_dsn(self) -> str:
         return (

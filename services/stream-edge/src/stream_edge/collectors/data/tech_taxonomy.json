@@ -1,0 +1,203 @@
+{
+    "software_role_keywords": [
+        "engineer",
+        "developer",
+        "software",
+        "platform",
+        "infrastructure",
+        "sre",
+        "devops",
+        "architect",
+        "engenheiro",
+        "engenheira",
+        "desenvolvedor",
+        "desenvolvedora",
+        "programador",
+        "programadora",
+        "arquiteto",
+        "arquiteta",
+        "sistemas"
+    ],
+    "primary_stacks": [
+        "python",
+        "django",
+        "drf",
+        "django rest framework",
+        "fastapi",
+        "flask",
+        "java",
+        "spring",
+        "spring boot",
+        "c#",
+        ".net",
+        "dotnet",
+        "kotlin",
+        "go",
+        "golang",
+        "rust",
+        "ruby",
+        "rails",
+        "ruby on rails",
+        "php",
+        "laravel",
+        "symfony",
+        "node",
+        "node.js",
+        "nodejs",
+        "react",
+        "vue",
+        "angular",
+        "next.js",
+        "nextjs",
+        "svelte",
+        "swift",
+        "flutter",
+        "react native",
+        "scala",
+        "elixir",
+        "c++",
+        "embedded"
+    ],
+    "disciplines": {
+        "backend": [
+            "backend",
+            "back-end",
+            "django",
+            "drf",
+            "fastapi",
+            "flask",
+            "spring",
+            "laravel",
+            "rails",
+            "microservices"
+        ],
+        "frontend": [
+            "frontend",
+            "front-end",
+            "react",
+            "vue",
+            "angular",
+            "next.js",
+            "nextjs",
+            "svelte",
+            "tailwind"
+        ],
+        "fullstack": [
+            "fullstack",
+            "full-stack",
+            "full stack"
+        ],
+        "mobile": [
+            "mobile",
+            "android",
+            "ios",
+            "react native",
+            "flutter",
+            "swift"
+        ],
+        "data_ml": [
+            "data engineer",
+            "machine learning",
+            "pytorch",
+            "tensorflow",
+            "spark",
+            "airflow"
+        ],
+        "qa": [
+            "qa",
+            "sdet",
+            "test engineer",
+            "testing",
+            "quality assurance",
+            "cypress",
+            "playwright"
+        ],
+        "security": [
+            "security engineer",
+            "appsec",
+            "infosec"
+        ],
+        "network": [
+            "network engineer",
+            "redes"
+        ],
+        "management": [
+            "engineering manager",
+            "gerente de engenharia",
+            "director",
+            "diretor",
+            "vp ",
+            "head of"
+        ],
+        "solutions": [
+            "sales engineer",
+            "solutions engineer",
+            "forward deployed",
+            "support engineer",
+            "developer advocate"
+        ]
+    },
+    "seniority_markers": {
+        "junior": [
+            "intern",
+            "internship",
+            "estágio",
+            "estagio",
+            "estagiário",
+            "estagiario",
+            "junior",
+            "júnior",
+            "jr",
+            "entry level",
+            "entry-level",
+            "early career",
+            "trainee"
+        ],
+        "mid": [
+            "mid",
+            "mid-level",
+            "mid level",
+            "pleno",
+            "pl",
+            "ii"
+        ],
+        "senior": [
+            "senior",
+            "sênior",
+            "sr",
+            "iii",
+            "specialist",
+            "especialista",
+            "tech lead",
+            "lead"
+        ],
+        "staff": [
+            "staff",
+            "principal",
+            "distinguished",
+            "fellow",
+            "director",
+            "diretor",
+            "vp",
+            "head of"
+        ]
+    },
+    "remote_markers": [
+        "remote",
+        "remoto",
+        "remota",
+        "home office",
+        "home-office",
+        "trabalho remoto",
+        "worldwide",
+        "global",
+        "anywhere",
+        "latam",
+        "latin america",
+        "américa latina",
+        "america latina",
+        "brazil",
+        "brasil",
+        "americas"
+    ]
+}
