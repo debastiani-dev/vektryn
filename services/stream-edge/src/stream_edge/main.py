@@ -1,6 +1,8 @@
 import asyncio
-import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import inspect
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,45 +10,60 @@ from fastapi.middleware.cors import CORSMiddleware
 from stream_edge.api.alerts_sse import router as alerts_router
 from stream_edge.api.ingest import router as ingest_router
 from stream_edge.clients.gcs import SnapshotStorageClient
-from stream_edge.clients.kafka import KafkaEventProducer, ensure_topics_exist
-from stream_edge.clients.redis import DedupRedisClient
+from stream_edge.clients.kafka import KafkaEventProducer
 from stream_edge.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+logger = logging.getLogger(__name__)
+
+
+async def _shutdown_producer(producer: KafkaEventProducer) -> None:
+    close_fn = getattr(producer, "close", None)
+    if callable(close_fn):
+        result = close_fn()
+        if inspect.isawaitable(result):
+            await result
+        return
+
+    flush_fn = getattr(producer, "flush", None)
+    if callable(flush_fn):
+        await asyncio.to_thread(flush_fn)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    await asyncio.to_thread(ensure_topics_exist)
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     producer = KafkaEventProducer()
-    redis_client = DedupRedisClient()
-    storage_client = SnapshotStorageClient()
+    storage = SnapshotStorageClient()
 
     app.state.kafka_producer = producer
-    app.state.redis_client = redis_client
-    app.state.snapshot_storage = storage_client
+    app.state.snapshot_storage = storage
+    logger.info("Stream Edge initialized (Kafka producer & snapshot storage ready)")
 
-    yield
-
-    await redis_client.close()
-    await asyncio.to_thread(producer.flush, 5.0)
+    try:
+        yield
+    finally:
+        await _shutdown_producer(producer)
+        logger.info("Stream Edge shut down cleanly")
 
 
 app = FastAPI(
     title="Vektryn Stream Edge",
-    description="Async ATS ingestion edge and real-time SSE match alert stream.",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()],
+    allow_origins=getattr(
+        settings,
+        "cors_allowed_origins_list",
+        ["http://localhost:5173", "http://127.0.0.1:5173"],
+    ),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -56,8 +73,4 @@ app.include_router(alerts_router)
 
 @app.get("/health", tags=["health"])
 async def healthcheck() -> dict[str, str]:
-    redis_ok = await app.state.redis_client.ping()
-    return {
-        "status": "ok" if redis_ok else "degraded",
-        "service": settings.service_name,
-    }
+    return {"status": "ok", "service": "stream-edge"}

@@ -30,6 +30,22 @@ _NON_AMERICAS_LOCATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+_HYBRID_OR_ONSITE_RE = re.compile(
+    r"\b(?:hybrid|híbrido|hibrido|presencial|on-?site)\b",
+    re.IGNORECASE,
+)
+
+_CONTRACT_PATTERNS: dict[str, re.Pattern[str]] = {
+    "clt": re.compile(r"\bclt\b", re.IGNORECASE),
+    "pj": re.compile(r"\bpj\b|\bpessoa\s+jur[ií]dica\b", re.IGNORECASE),
+    "b2b_contractor": re.compile(r"\bb2b\b|\bindependent\s+contractor\b|\bcontractor\b", re.IGNORECASE),
+    "eor": re.compile(r"\beor\b|\bemployer\s+of\s+record\b|\bdeel\b|\bremote\.com\b", re.IGNORECASE),
+    "w2": re.compile(r"\bw-?2\b", re.IGNORECASE),
+    "c2c": re.compile(r"\bc2c\b|\bcorp[- ]to[- ]corp\b", re.IGNORECASE),
+}
+
+_INTERNSHIP_RE = re.compile(r"\b(?:intern|internship|est[aá]gio|estagi[aá]rio|trainee)\b", re.IGNORECASE)
+
 
 def _compile_word_patterns(terms: Iterable[str]) -> tuple[re.Pattern[str], ...]:
     return tuple(
@@ -76,35 +92,31 @@ def _infer_disciplines(
     return frozenset(matched)
 
 
-def load_resume_criteria(
-    resume_id: str | None = None,
-    *,
-    dynamic_stacks: frozenset[str] = frozenset(),
-) -> ResumeFilterCriteria | None:
-    """Load target constraints, skills, and inferred disciplines from active resume(s)."""
-    query = """
-        SELECT uuid, label, raw_text, extracted_skills, target_seniority, target_contract_types, target_regions
-        FROM resumes_resumeprofile
-        WHERE is_deleted = FALSE
-          AND is_active = TRUE
-    """
-    params: list = []
-    if resume_id:
-        parsed_id = uuid.UUID(str(resume_id).strip())
-        query += " AND uuid = %s"
-        params.append(parsed_id)
+def _infer_seniorities(
+    text_blob: str,
+    taxonomy: TechTaxonomy,
+) -> set[str]:
+    inferred = {
+        tier
+        for tier, markers in taxonomy.seniority_markers.items()
+        if any(p.search(text_blob) for p in _compile_word_patterns(markers))
+    }
+    return inferred or {"mid", "senior", "staff"}
 
-    with psycopg.connect(settings.postgres_dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            rows = cur.fetchall()
 
-    if not rows:
-        if resume_id:
-            raise ValueError(f"Active ResumeProfile not found for uuid={resume_id}")
-        logger.warning("No active ResumeProfile found in DB; falling back to generic engineering filter.")
-        return None
+def _parse_str_list(raw_val: object) -> list[str]:
+    if isinstance(raw_val, list):
+        return [s.strip().lower() for s in raw_val if isinstance(s, str) and s.strip()]
+    if isinstance(raw_val, str) and raw_val.strip():
+        parsed = json.loads(raw_val)
+        if isinstance(parsed, list):
+            return [s.strip().lower() for s in parsed if isinstance(s, str) and s.strip()]
+    return []
 
+
+def _collect_profile_rows(
+    rows: list[tuple[object, ...]],
+) -> tuple[list[str], set[str], set[str], set[str], set[str], list[str]]:
     resume_ids: list[str] = []
     skills: set[str] = set()
     seniorities: set[str] = set()
@@ -114,30 +126,66 @@ def load_resume_criteria(
 
     for row_uuid, label, raw_text, raw_skills, raw_sen, raw_contract, raw_region in rows:
         resume_ids.append(str(row_uuid))
-        parsed_skills = raw_skills if isinstance(raw_skills, list) else json.loads(raw_skills or "[]")
-        clean_skills = [s.strip().lower() for s in parsed_skills if isinstance(s, str) and s.strip()]
+        clean_skills = _parse_str_list(raw_skills)
         skills.update(clean_skills)
-        seniorities.update(s.strip().lower() for s in (raw_sen or []) if s)
-        contracts.update(c.strip().lower() for c in (raw_contract or []) if c)
-        regions.update(r.strip().lower() for r in (raw_region or []) if r)
+        seniorities.update(_parse_str_list(raw_sen))
+        contracts.update(_parse_str_list(raw_contract))
+        regions.update(_parse_str_list(raw_region))
         discipline_blobs.append(f"{label or ''}\n{' '.join(clean_skills)}\n{(raw_text or '')[:1500]}")
 
-    active_disciplines = _infer_disciplines("\n".join(discipline_blobs), dynamic_stacks)
+    return resume_ids, skills, seniorities, contracts, regions, discipline_blobs
+
+
+def load_resume_criteria(
+    resume_id: str | None = None,
+    *,
+    dynamic_stacks: frozenset[str] = frozenset(),
+) -> ResumeFilterCriteria | None:
+    """Load DB target constraints first, falling back to resume text inference when empty."""
+    query = """
+        SELECT uuid, label, raw_text, extracted_skills, target_seniority, target_contract_types, target_regions
+        FROM resumes_resumeprofile
+        WHERE is_deleted = FALSE
+          AND is_active = TRUE
+    """
+    params: list[object] = []
+    if resume_id:
+        query += " AND uuid = %s"
+        params.append(uuid.UUID(str(resume_id).strip()))
+
+    with psycopg.connect(settings.postgres_dsn) as conn, conn.cursor() as cur:
+        cur.execute(query, params)
+        rows = cur.fetchall()
+
+    if not rows:
+        if resume_id:
+            raise ValueError(f"Active ResumeProfile not found for uuid={resume_id}")
+        logger.warning("No active ResumeProfile found in DB; falling back to generic engineering filter.")
+        return None
+
+    taxonomy = load_taxonomy(dynamic_stacks)
+    resume_ids, skills, db_seniorities, db_contracts, db_regions, blobs = _collect_profile_rows(rows)
+    combined_blob = "\n".join(blobs)
+
+    resolved_seniorities = db_seniorities or _infer_seniorities(combined_blob, taxonomy)
+    resolved_regions = db_regions or {"brazil", "latam", "worldwide"}
+    active_disciplines = _infer_disciplines(combined_blob, dynamic_stacks)
 
     criteria = ResumeFilterCriteria(
         resume_ids=tuple(resume_ids),
         skills=frozenset(skills),
-        target_seniority=frozenset(seniorities),
-        target_contract_types=frozenset(contracts),
-        target_regions=frozenset(regions),
+        target_seniority=frozenset(resolved_seniorities),
+        target_contract_types=frozenset(db_contracts),
+        target_regions=frozenset(resolved_regions),
         active_disciplines=active_disciplines,
     )
     logger.info(
-        "Loaded pre-filter criteria from %d resume(s): skills=%d, disciplines=%s, seniority=%s, regions=%s",
+        "Loaded pre-filter criteria from %d resume(s): skills=%d, disciplines=%s, seniority=%s, contracts=%s, regions=%s",
         len(resume_ids),
         len(criteria.skills),
         sorted(criteria.active_disciplines),
         sorted(criteria.target_seniority),
+        sorted(criteria.target_contract_types),
         sorted(criteria.target_regions),
     )
     return criteria
@@ -160,12 +208,6 @@ def _passes_discipline_gate(
     return bool(title_disciplines & active_disciplines)
 
 
-_HYBRID_OR_ONSITE_RE = re.compile(
-    r"\b(?:hybrid|híbrido|hibrido|presencial|on-?site)\b",
-    re.IGNORECASE,
-)
-
-
 def _passes_seniority_gate(
     title_lower: str,
     target_seniority: frozenset[str],
@@ -180,10 +222,33 @@ def _passes_seniority_gate(
         if any(p.search(title_lower) for p in _compile_word_patterns(markers))
     }
     if not title_tiers:
-        # Generic titles without an explicit seniority label pass to skill matching
         return True
 
     return bool(title_tiers & target_seniority)
+
+
+def _passes_contract_gate(
+    title_lower: str,
+    location_lower: str,
+    description_lower: str,
+    target_contract_types: frozenset[str],
+) -> bool:
+    if not target_contract_types:
+        return True
+
+    if "intern" not in target_contract_types and _INTERNSHIP_RE.search(title_lower):
+        return False
+
+    header_and_excerpt = f"{title_lower}\n{location_lower}\n{description_lower[:1500]}"
+    detected_contracts = {
+        ctype
+        for ctype, pat in _CONTRACT_PATTERNS.items()
+        if pat.search(header_and_excerpt)
+    }
+    if not detected_contracts:
+        return True
+
+    return bool(detected_contracts & target_contract_types)
 
 
 def _passes_location_gate(
@@ -244,6 +309,8 @@ def _score_job(job: CollectedJob, ctx: _CompiledFilterContext) -> int | None:
     if not _passes_discipline_gate(title_lower, ctx.criteria.active_disciplines, ctx.dynamic_stacks):
         return None
     if not _passes_seniority_gate(title_lower, ctx.criteria.target_seniority, ctx.taxonomy):
+        return None
+    if not _passes_contract_gate(title_lower, location_lower, desc_lower, ctx.criteria.target_contract_types):
         return None
     if not _passes_location_gate(title_lower, location_lower, desc_lower, ctx.criteria):
         return None
