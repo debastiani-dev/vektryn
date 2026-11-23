@@ -43,10 +43,7 @@ def test_job_raw_event_json_roundtrip() -> None:
 
     assert restored.event_id == event.event_id
     assert restored.ats_source == ATSSource.GREENHOUSE
-    assert (
-        job_partition_key(restored.ats_source, restored.external_id)
-        == "greenhouse:gh-987654"
-    )
+    assert job_partition_key(restored.ats_source, restored.external_id) == "greenhouse:gh-987654"
 
 
 def test_job_enriched_event_normalizes_stack_and_validates_vector() -> None:

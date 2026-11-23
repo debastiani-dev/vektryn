@@ -3,14 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    HttpUrl,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from vektryn_contracts.enums import (
     ATSSource,
