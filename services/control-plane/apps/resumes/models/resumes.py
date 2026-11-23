@@ -43,7 +43,7 @@ class ResumeProfile(BaseModel):
         blank=True,
     )
     min_alert_score = models.PositiveSmallIntegerField(
-        default=75,
+        default=70,
         validators=[MinValueValidator(0), MaxValueValidator(100)],
     )
 

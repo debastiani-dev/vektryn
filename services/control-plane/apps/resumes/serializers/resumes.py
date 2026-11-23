@@ -4,10 +4,22 @@ from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.services.resume_service import GeminiServiceError, ResumeService
 
 
+def _expand_multi_value_items(raw_items: list) -> list:
+    expanded = []
+    for item in raw_items:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            expanded.extend(part.strip() for part in item.split(",") if part.strip())
+            continue
+        expanded.append(item)
+    return expanded
+
+
 class ResumeProfileSerializer(serializers.ModelSerializer):
     file = serializers.FileField(write_only=True, required=False, allow_null=True)
     raw_text = serializers.CharField(required=False, allow_blank=True)
-    min_alert_score = serializers.IntegerField(min_value=0, max_value=100, default=75)
+    min_alert_score = serializers.IntegerField(min_value=0, max_value=100, default=70)
     has_embedding = serializers.SerializerMethodField()
 
     class Meta:
@@ -40,11 +52,29 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
         ]
 
     def to_internal_value(self, data):
-        if hasattr(data, "copy"):
-            data = data.copy()
-        if data.get("file") in (None, "", "string"):
-            data.pop("file", None)
-        return super().to_internal_value(data)
+        mutable = data.copy() if hasattr(data, "copy") else dict(data)
+        if mutable.get("file") in (None, "", "string"):
+            mutable.pop("file", None)
+
+        for field_name in (
+            "target_seniority",
+            "target_contract_types",
+            "target_regions",
+        ):
+            if field_name not in mutable:
+                continue
+            raw_items = (
+                mutable.getlist(field_name)
+                if hasattr(mutable, "getlist")
+                else _as_list(mutable[field_name])
+            )
+            expanded = _expand_multi_value_items(raw_items)
+            if hasattr(mutable, "setlist"):
+                mutable.setlist(field_name, expanded)
+            else:
+                mutable[field_name] = expanded
+
+        return super().to_internal_value(mutable)
 
     def get_has_embedding(self, obj: ResumeProfile) -> bool:
         return obj.embedding is not None
