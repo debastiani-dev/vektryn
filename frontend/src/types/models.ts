@@ -1,0 +1,118 @@
+export type SeniorityLevel =
+    | "intern"
+    | "junior"
+    | "mid"
+    | "senior"
+    | "staff"
+    | "principal"
+    | "lead"
+    | "manager"
+    | "unknown";
+
+export type ContractType =
+    | "clt"
+    | "pj"
+    | "b2b_contractor"
+    | "w2"
+    | "c2c"
+    | "eor"
+    | "unknown";
+
+export type LeadStatus =
+    | "discovered"
+    | "saved"
+    | "applied"
+    | "screening"
+    | "interviewing"
+    | "offer"
+    | "rejected"
+    | "withdrawn";
+
+export type LeadPriority = "low" | "medium" | "high";
+
+export type TechCategory =
+    | "language"
+    | "framework"
+    | "database"
+    | "broker"
+    | "cloud"
+    | "devops"
+    | "ai_ml"
+    | "other";
+
+export interface JobPostingSummary {
+    uuid: string;
+    ats_source: string;
+    title: string;
+    company_name: string;
+    apply_url: string;
+    location_raw: string;
+    seniority: SeniorityLevel;
+    contract_type: ContractType;
+    region_eligibility: string[];
+    salary_min: string | null;
+    salary_max: string | null;
+    salary_currency: string | null;
+    salary_period: string | null;
+    tech_stack: string[];
+    is_active: boolean;
+    posted_at: string | null;
+}
+
+export interface MatchScore {
+    uuid: string;
+    job_posting: JobPostingSummary;
+    resume_profile: string;
+    cosine_similarity: number;
+    fit_score: number | null;
+    matched_skills: string[];
+    missing_keywords: string[];
+    talking_points: string[];
+    gap_summary: string;
+    scoring_model: string;
+    created_at: string;
+}
+
+export interface ApplicationLead {
+    uuid: string;
+    job_posting: JobPostingSummary;
+    resume_profile: string | null;
+    status: LeadStatus;
+    priority: LeadPriority;
+    applied_at: string | null;
+    last_activity_at: string | null;
+    notes: string;
+    created_at: string;
+    modified_at: string;
+}
+
+export interface StackTrendDaily {
+    bucket_date: string;
+    tag: string;
+    category: TechCategory;
+    mention_count: number;
+    unique_companies_count: number;
+    median_annual_usd: string | null;
+}
+
+export interface LiveMatchAlert {
+    event_id: string;
+    user_id: string;
+    job_posting_uuid: string;
+    resume_profile_uuid: string;
+    match_score_uuid: string;
+    title: string;
+    company_name: string;
+    fit_score: number;
+    cosine_similarity: number;
+    matched_skills: string[];
+    missing_keywords: string[];
+    apply_url: string;
+}
+
+export interface PaginatedResponse<T> {
+    count: number;
+    next: string | null;
+    previous: string | null;
+    results: T[];
+}
