@@ -125,6 +125,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CORS_ALLOWED_ORIGINS = [
     o.strip() for o in env.cors_allowed_origins.split(",") if o.strip()
 ]
+CORS_ALLOW_CREDENTIALS = True
 
 GEMINI_API_KEY = env.gemini_api_key
 GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model

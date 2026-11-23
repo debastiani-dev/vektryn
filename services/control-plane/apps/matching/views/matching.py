@@ -11,8 +11,11 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["fit_score", "cosine_similarity", "created_at"]
     ordering = ["-fit_score", "-cosine_similarity", "-created_at"]
     lookup_field = "uuid"
+    queryset = MatchScore.objects.none()
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return MatchScore.objects.none()
         return (
             MatchScore.objects.select_related("job_posting", "resume_profile")
             .filter(resume_profile__user=self.request.user)
