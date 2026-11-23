@@ -1,0 +1,7 @@
+project_id          = "vektryn-prod"
+region              = "us-central1"
+environment         = "prod"
+domain_name         = "vektryn.debastiani.dev"
+control_plane_image = "us-central1-docker.pkg.dev/vektryn-prod/vektryn/control-plane:latest"
+stream_edge_image   = "us-central1-docker.pkg.dev/vektryn-prod/vektryn/stream-edge:latest"
+frontend_image      = "us-central1-docker.pkg.dev/vektryn-prod/vektryn/frontend:latest"
