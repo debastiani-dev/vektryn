@@ -1,0 +1,20 @@
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "vektryn-contracts"
+version = "0.1.0"
+description = "Shared Pydantic v2 Kafka event schemas and domain enums for Vektryn"
+authors = ["Rafael Debastiani <rjdebastiani@hotmail.com>"]
+packages = [{ include = "vektryn_contracts", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+pydantic = "^2.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.9"
+black = "^25.1"
+mypy = "^1.14"
