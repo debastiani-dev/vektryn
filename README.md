@@ -1,5 +1,8 @@
 # Vektryn
 
+[![CI](https://github.com/debastiani-dev/vektryn/actions/workflows/ci.yml/badge.svg)](https://github.com/debastiani-dev/vektryn/actions/workflows/ci.yml)
+[![Live](https://img.shields.io/badge/live-vektryn.debastiani.dev-7c3aed)](https://vektryn.debastiani.dev)
+
 **Vektryn** is an event-driven fullstack job intelligence platform that continuously ingests remote software engineering postings across global and Brazilian ATS platforms, tracks live tech-stack demand, and semantically scores resumes against incoming roles with structured AI gap analysis.
 
 Built with [Django](https://docs.djangoproject.com/) + [Django REST Framework](https://www.django-rest-framework.org/), [FastAPI](https://fastapi.tiangolo.com/), [Apache Kafka](https://kafka.apache.org/), [PostgreSQL + pgvector](https://github.com/pgvector/pgvector), [Gemini API](https://ai.google.dev/), and [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) + [Tailwind CSS](https://tailwindcss.com/).
@@ -9,6 +12,7 @@ Built with [Django](https://docs.djangoproject.com/) + [Django REST Framework](h
 - [Vektryn](#vektryn)
 - [Table of Contents](#table-of-contents)
 - [Architecture](#architecture)
+  - [Highlights](#highlights)
 - [Prerequisites](#prerequisites)
 - [Configuration](#configuration)
   - [Development Environment](#development-environment)
@@ -34,17 +38,41 @@ Built with [Django](https://docs.djangoproject.com/) + [Django REST Framework](h
 
 ## Architecture
 
-```text
-ATS Collectors / Feeds
-  └─► POST /ingest/jobs (X-Ingest-API-Key + GCS/local HTML snapshot)
-        └─► Kafka [jobs.raw]
-              └─► Enrichment Worker (Redis SHA-256 dedup + Gemini metadata & 768-dim embedding)
-                    └─► Kafka [jobs.enriched]
-                          └─► Matcher Worker (pgvector HNSW cosine filter + Gemini fit/gap scoring)
-                                ├─► PostgreSQL (JobPosting, MatchScore)
-                                └─► Kafka [jobs.alerts]
-                                      └─► GET /stream/alerts?token=<HMAC> (SSE) ─► React SPA
+```mermaid
+flowchart LR
+    Collectors["ATS & Feed Collectors\n(8 ATS + 6 Global/BR Feeds)"]
+    Edge["FastAPI Stream Edge\nPOST /ingest/jobs\nGET /stream/alerts (SSE)"]
+    GCS[("GCS / Local\nHTML & Resume Snapshots")]
+    KafkaRaw(("Kafka\njobs.raw"))
+    Enrich["Enrichment Worker\nRedis SHA-256 Dedup +\nGemini Extract & Embed"]
+    KafkaEnriched(("Kafka\njobs.enriched"))
+    Matcher["Matcher Worker\npgvector HNSW Cosine +\nGemini Fit/Gap Score"]
+    PG[("PostgreSQL + pgvector\nJobs, Resumes, Matches,\nLeads, Stack Trends")]
+    KafkaAlerts(("Kafka\njobs.alerts"))
+    CP["Django Control Plane\nDRF APIs + Session Auth\nSigned HMAC SSE Tokens"]
+    UI["React 19 + TS SPA\nNginx Reverse Proxy"]
+
+    Collectors -->|X-Ingest-API-Key| Edge
+    Edge --> GCS
+    Edge --> KafkaRaw
+    KafkaRaw --> Enrich
+    Enrich --> KafkaEnriched
+    KafkaEnriched --> Matcher
+    Matcher --> PG
+    Matcher -->|fit >= min_alert_score| KafkaAlerts
+    KafkaAlerts --> Edge
+    UI -->|/api/*| CP
+    CP --> PG
+    CP --> GCS
+    UI -->|/stream/alerts?token=HMAC| Edge
 ```
+
+### Highlights
+
+- **Contract-First Monorepo**: Shared `vektryn-contracts` Pydantic v2 event schemas, domain enums, partition-key helpers, and HMAC-SHA256 stream tokens keep Django, FastAPI, and Kafka workers strictly aligned.
+- **Two-Stage Semantic Funnel**: Stage 1 `pgvector` HNSW cosine similarity filters candidate roles before Stage 2 structured Gemini fit/gap analysis burns LLM tokens, with `resume_content_hash` stale-score detection.
+- **Idempotent Event Pipeline**: Redis SHA-256 content-hash locks deduplicate reposts, `MatchScore.alert_sent_at` prevents duplicate SSE alerts on replays, and failed payloads route to `jobs.dlq` with dry-run/execute replay tooling.
+- **Zero-Key Cloud Run CD**: Keyless GitHub Actions OIDC Workload Identity Federation deploys to Cloud Run Services + scheduled Cloud Run Jobs (`vektryn-migrate`, `vektryn-collect`, `vektryn-rollup`, `vektryn-lifecycle`).
 
 ## Prerequisites
 
@@ -95,6 +123,7 @@ make createsuperuser
 | `STREAM_AUTH_SECRET` | HMAC secret shared between Control Plane (`/api/v1/auth/me/`) and Stream Edge (`/stream/alerts`) |
 | `STORAGE_BACKEND` / `GCS_SNAPSHOTS_BUCKET` | `local` in dev (`.local_storage/`) or `gcs` with Cloud Storage bucket in production |
 | `GREENHOUSE_BOARD_TOKENS` / `ASHBY_BOARD_TOKENS` | Optional comma-separated pinned ATS board tokens merged into dynamic discovery |
+| `SENTRY_DSN` / `VITE_SENTRY_DSN` | Optional Sentry error tracking DSNs for Django, FastAPI/workers, and React (no-op when unset) |
 
 ### Access and Documentation
 
