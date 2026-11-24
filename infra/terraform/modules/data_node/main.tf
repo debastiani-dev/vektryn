@@ -78,13 +78,15 @@ resource "google_compute_instance" "data_node" {
     scopes = ["cloud-platform"]
   }
 
-  metadata_startup_script = templatefile("${path.module}/startup.sh.tftpl", {
-    project_id               = var.project_id
-    region                   = var.region
-    internal_ip              = var.internal_ip
-    stream_edge_latest_image = var.stream_edge_latest_image
-    snapshots_bucket_name    = var.snapshots_bucket_name
-  })
+  metadata = {
+    startup-script = templatefile("${path.module}/startup.sh.tftpl", {
+      project_id               = var.project_id
+      region                   = var.region
+      internal_ip              = var.internal_ip
+      stream_edge_latest_image = var.stream_edge_latest_image
+      snapshots_bucket_name    = var.snapshots_bucket_name
+    })
+  }
 
   lifecycle {
     ignore_changes = [boot_disk[0].initialize_params[0].image]
