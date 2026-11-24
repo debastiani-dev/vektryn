@@ -15,7 +15,7 @@ from stream_edge.api.ingest import router as ingest_router
 from stream_edge.clients.gcs import SnapshotStorageClient
 from stream_edge.clients.kafka import KafkaEventProducer
 from stream_edge.config import settings
-from stream_edge.telemetry import configure_tracing
+from stream_edge.telemetry import configure_sentry, configure_tracing
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 def _configure_telemetry(app: FastAPI) -> None:
     app.mount("/metrics", make_asgi_app())
+    configure_sentry("vektryn-stream-edge")
 
     if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
         return

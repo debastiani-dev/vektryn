@@ -69,6 +69,16 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
+        name  = "CORS_ALLOWED_ORIGINS"
+        value = "https://${var.domain_name}"
+      }
+
+      env {
+        name  = "STORAGE_BACKEND"
+        value = "gcs"
+      }
+
+      env {
         name  = "GCS_RESUMES_BUCKET"
         value = var.resumes_bucket_name
       }
@@ -173,6 +183,11 @@ resource "google_cloud_run_v2_service" "stream_edge" {
           memory = "512Mi"
         }
         cpu_idle = true
+      }
+
+      env {
+        name  = "STORAGE_BACKEND"
+        value = "gcs"
       }
 
       env {
@@ -459,8 +474,70 @@ resource "google_cloud_scheduler_job" "scheduled_worker_triggers" {
   depends_on = [google_cloud_run_v2_job_iam_member.scheduler_invokers]
 }
 
+# One-shot Cloud Run Job for Django database migrations (executed by deploy-gcp.yml)
+resource "google_cloud_run_v2_job" "migrate" {
+  name     = "vektryn-migrate"
+  location = var.region
+  project  = var.project_id
+  labels   = var.labels
+
+  template {
+    template {
+      service_account = var.control_plane_sa_email
+      timeout         = "300s"
+      max_retries     = 1
+
+      vpc_access {
+        network_interfaces {
+          network    = var.vpc_network_id
+          subnetwork = var.vpc_subnetwork_id
+        }
+        egress = "PRIVATE_RANGES_ONLY"
+      }
+
+      containers {
+        image   = var.control_plane_image
+        command = ["python", "manage.py", "migrate", "--noinput"]
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "512Mi"
+          }
+        }
+
+        env {
+          name  = "DJANGO_DEBUG"
+          value = "false"
+        }
+
+        env {
+          name = "SECRET_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-django-secret-key"]
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-database-url"]
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 output "control_plane_url" { value = google_cloud_run_v2_service.control_plane.uri }
 output "stream_edge_url" { value = google_cloud_run_v2_service.stream_edge.uri }
 output "frontend_url" { value = google_cloud_run_v2_service.frontend.uri }
 output "domain_mapping_records" { value = google_cloud_run_domain_mapping.frontend_domain.status[0].resource_records }
+output "migrate_job_name" { value = google_cloud_run_v2_job.migrate.name }
 output "scheduled_job_names" { value = { for k, v in google_cloud_run_v2_job.scheduled_workers : k => v.name } }

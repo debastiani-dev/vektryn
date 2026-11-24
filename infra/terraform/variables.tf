@@ -21,6 +21,12 @@ variable "domain_name" {
   default     = "vektryn.debastiani.dev"
 }
 
+variable "github_repo" {
+  description = "GitHub repository (owner/repo) allowed to deploy via Workload Identity Federation"
+  type        = string
+  default     = "debastiani-dev/vektryn"
+}
+
 variable "control_plane_image" {
   description = "Artifact Registry image URI for control-plane"
   type        = string

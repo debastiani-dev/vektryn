@@ -8,11 +8,11 @@ terraform {
     }
   }
 
-  # Uncomment after creating your GCS state bucket (or pass -backend-config)
-  # backend "gcs" {
-  #   bucket = "vektryn-tfstate"
-  #   prefix = "terraform/state"
-  # }
+  # Configure bucket at init time:
+  # terraform init -backend-config="bucket=<your-tfstate-bucket>"
+  backend "gcs" {
+    prefix = "terraform/state"
+  }
 }
 
 provider "google" {

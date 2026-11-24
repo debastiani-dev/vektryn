@@ -9,14 +9,15 @@ on:
       - "services/**"
       - "frontend/**"
       - "infra/terraform/**"
+      - ".github/workflows/deploy-gcp.yml"
 
 permissions:
   contents: read
   id-token: write
 
 env:
-  REGION: us-central1
-  REPO: vektryn
+  REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'vektryn' }}
 
 jobs:
   deploy:
@@ -29,8 +30,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -61,11 +62,48 @@ jobs:
         run: |
           REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
           TAG="${{ github.sha }}"
+          STATE_BUCKET="${{ vars.TF_STATE_BUCKET }}"
 
-          terraform init
+          if [ -n "$STATE_BUCKET" ]; then
+            terraform init -backend-config="bucket=$STATE_BUCKET"
+          else
+            terraform init -backend=false
+          fi
+
           terraform apply -auto-approve \
             -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
             -var="region=${{ env.REGION }}" \
             -var="control_plane_image=$REGISTRY/control-plane:$TAG" \
             -var="stream_edge_image=$REGISTRY/stream-edge:$TAG" \
             -var="frontend_image=$REGISTRY/frontend:$TAG"
+
+      - name: Run Django database migrations
+        run: |
+          gcloud run jobs execute vektryn-migrate \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --wait
+
+      - name: Smoke check Control Plane health
+        run: |
+          CP_URL=$(gcloud run services describe vektryn-control-plane \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --format="value(status.url)")
+          curl --fail --silent --show-error "${CP_URL}/api/v1/health/"
+
+
+      - name: Run Django database migrations
+        run: |
+          gcloud run jobs execute vektryn-migrate \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --wait
+
+      - name: Smoke check Control Plane health
+        run: |
+          CP_URL=$(gcloud run services describe vektryn-control-plane \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --format="value(status.url)")
+          curl --fail --silent --show-error "${CP_URL}/api/v1/health/"
