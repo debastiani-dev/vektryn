@@ -153,5 +153,8 @@ jobs:
       - name: TypeScript check
         run: npx tsc -b
 
+      - name: Run Vitest
+        run: npm test
+
       - name: Production build
         run: npm run build
