@@ -5,6 +5,8 @@ locals {
     "secretmanager.googleapis.com",
     "storage.googleapis.com",
     "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "sts.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "vpcaccess.googleapis.com",
     "cloudscheduler.googleapis.com",
@@ -44,6 +46,7 @@ module "secrets" {
 module "iam" {
   source           = "./modules/iam"
   project_id       = var.project_id
+  github_repo      = var.github_repo
   snapshots_bucket = module.storage.snapshots_bucket_name
   resumes_bucket   = module.storage.resumes_bucket_name
   secret_ids       = module.secrets.secret_ids
