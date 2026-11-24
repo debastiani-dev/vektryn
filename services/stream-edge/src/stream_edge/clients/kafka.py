@@ -17,10 +17,23 @@ from vektryn_contracts import (
 logger = logging.getLogger(__name__)
 
 
+def _kafka_base_config(bootstrap_servers: str) -> dict[str, Any]:
+    config: dict[str, Any] = {"bootstrap.servers": bootstrap_servers}
+    if settings.kafka_security_protocol.strip():
+        config["security.protocol"] = settings.kafka_security_protocol.strip()
+    if settings.kafka_sasl_mechanism.strip():
+        config["sasl.mechanism"] = settings.kafka_sasl_mechanism.strip()
+    if settings.kafka_sasl_username.strip():
+        config["sasl.username"] = settings.kafka_sasl_username.strip()
+    if settings.kafka_sasl_password.strip():
+        config["sasl.password"] = settings.kafka_sasl_password.strip()
+    return config
+
+
 def ensure_topics_exist(
     bootstrap_servers: str = settings.kafka_bootstrap_servers,
 ) -> None:
-    admin = AdminClient({"bootstrap.servers": bootstrap_servers})
+    admin = AdminClient(_kafka_base_config(bootstrap_servers))
     existing = set(admin.list_topics(timeout=5).topics.keys())
     missing = [
         NewTopic(topic.value, num_partitions=3, replication_factor=1)
@@ -45,7 +58,7 @@ class KafkaEventProducer:
     ) -> None:
         self._producer = Producer(
             {
-                "bootstrap.servers": bootstrap_servers,
+                **_kafka_base_config(bootstrap_servers),
                 "client.id": "vektryn-stream-edge-producer",
                 "acks": "all",
                 "enable.idempotence": True,
@@ -149,7 +162,7 @@ def create_kafka_consumer(
 ) -> Consumer:
     consumer = Consumer(
         {
-            "bootstrap.servers": bootstrap_servers,
+            **_kafka_base_config(bootstrap_servers),
             "group.id": group_id,
             "auto.offset.reset": auto_offset_reset,
             "enable.auto.commit": False,

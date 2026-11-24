@@ -34,8 +34,12 @@ class StreamEdgeSettings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     dedup_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
 
-    # Apache Kafka (KRaft)
+    # Apache Kafka (KRaft in dev; optional SASL_SSL for managed Redpanda/Confluent in prod)
     kafka_bootstrap_servers: str = "localhost:29092"
+    kafka_security_protocol: str = ""
+    kafka_sasl_mechanism: str = ""
+    kafka_sasl_username: str = ""
+    kafka_sasl_password: str = ""
     kafka_enrichment_group_id: str = "vektryn-enrichment-worker"
     kafka_matcher_group_id: str = "vektryn-matcher-worker"
 

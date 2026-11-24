@@ -1,7 +1,7 @@
 from enum import StrEnum
 import os
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -88,7 +88,7 @@ def _build_database_config(settings: ControlPlaneSettings) -> dict[str, object]:
             if not env_has_database_url and os.environ.get("POSTGRES_PASSWORD")
             else (unquote(parsed.password or "") or settings.postgres_password)
         )
-        return {
+        db_config: dict[str, object] = {
             "ENGINE": "django.db.backends.postgresql",
             "NAME": name,
             "USER": user,
@@ -97,6 +97,11 @@ def _build_database_config(settings: ControlPlaneSettings) -> dict[str, object]:
             "PORT": port,
             "CONN_MAX_AGE": 60,
         }
+        query_params = parse_qs(parsed.query)
+        sslmode = query_params.get("sslmode", [None])[0]
+        if sslmode:
+            db_config["OPTIONS"] = {"sslmode": sslmode}
+        return db_config
     return {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": settings.postgres_db,
@@ -117,6 +122,15 @@ ALLOWED_HOSTS = [h.strip() for h in env.django_allowed_hosts.split(",") if h.str
 CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in env.csrf_trusted_origins.split(",") if o.strip()
 ]
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SAMESITE = "Lax"
+    SECURE_CONTENT_TYPE_NOSNIFF = True
 
 INSTALLED_APPS = [
     "django.contrib.admin",
