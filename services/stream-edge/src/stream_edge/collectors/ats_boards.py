@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 import logging
 
+from bs4 import BeautifulSoup
 
 from stream_edge.collectors.base import (
     BaseATSCollector,
@@ -208,6 +209,21 @@ class RecruiteeCollector(BaseATSCollector):
 
 
 class BreezyCollector(BaseATSCollector):
+    async def _fetch_description_html(self, apply_url: str) -> str:
+        try:
+            detail_resp = await self.http_client.get(apply_url, timeout=10.0)
+            if detail_resp.status_code != 200:
+                return ""
+            soup = BeautifulSoup(detail_resp.text, "html.parser")
+            container = (
+                soup.select_one(".description")
+                or soup.select_one("section.position-details")
+                or soup.find("main")
+            )
+            return str(container) if container is not None else detail_resp.text
+        except Exception:
+            return ""
+
     async def fetch_board(
         self, board_token: str, company_name: str
     ) -> list[CollectedJob]:
@@ -227,16 +243,19 @@ class BreezyCollector(BaseATSCollector):
             loc = item.get("location") or {}
             loc_name = loc.get("name") or ("Remote" if loc.get("is_remote") else "")
             company = ((item.get("company") or {}).get("name") or company_name).strip()
+            title = (item.get("name") or "").strip()
+            detail_html = await self._fetch_description_html(apply_url)
+            fallback_text = f"{title} - {loc_name}".strip(" -")
             jobs.append(
                 CollectedJob(
                     ats_source=ATSSource.BREEZY,
                     external_id=str(item["id"]),
-                    title=(item.get("name") or "").strip(),
+                    title=title,
                     company_name=company,
                     apply_url=apply_url,
                     location_raw=loc_name,
-                    raw_html=item.get("name") or "",
-                    description_clean=f"{item.get('name', '')} - {loc_name}",
+                    raw_html=detail_html or title,
+                    description_clean=html_to_clean_text(detail_html) or fallback_text,
                     posted_at=_parse_dt(item.get("published_date")),
                 )
             )

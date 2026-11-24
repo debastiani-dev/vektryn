@@ -9,6 +9,7 @@ import pytest
 
 from stream_edge.api.alerts_sse import _resolve_stream_user_id
 from stream_edge.clients.kafka import KafkaEventProducer
+from stream_edge.collectors.ats_boards import BreezyCollector
 from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
 from stream_edge.config import StreamEdgeSettings, settings as edge_settings
 from stream_edge.main import app
@@ -248,3 +249,48 @@ def test_stream_alerts_enforces_signed_token_and_blocks_spoofing(monkeypatch):
     with pytest.raises(HTTPException) as invalid_exc:
         _resolve_stream_user_id(token="42.9999999999.bad", user_id="42")
     assert invalid_exc.value.status_code == 401
+
+
+async def test_breezy_collector_fetches_full_description_html():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/json":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "bz-42",
+                        "name": "Senior Backend Engineer",
+                        "url": "https://acme.breezy.hr/p/bz-42",
+                        "location": {"name": "Remote", "is_remote": True},
+                        "company": {"name": "Acme"},
+                        "published_date": "2026-03-01T12:00:00Z",
+                    }
+                ],
+            )
+        return httpx.Response(
+            200,
+            text="<html><body><div class='description'><p>Python, Django, Kafka, PostgreSQL.</p></div></body></html>",
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        collector = BreezyCollector(http_client=client)
+        jobs = await collector.fetch_board("acme", "Acme")
+
+    assert len(jobs) == 1
+    assert jobs[0].external_id == "bz-42"
+    assert "Django" in jobs[0].description_clean
+    assert "Kafka" in jobs[0].description_clean
+
+
+async def test_metrics_endpoint_exposes_custom_vektryn_counters():
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", follow_redirects=True
+    ) as client:
+        response = await client.get("/metrics")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "vektryn_ingest_jobs_total" in body
+    assert "vektryn_sse_active_clients" in body

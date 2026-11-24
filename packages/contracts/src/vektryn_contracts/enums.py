@@ -12,7 +12,7 @@ class ATSSource(StrEnum):
     BREEZY = "breezy"
     # Brazilian ATS platforms
     GUPY = "gupy"
-    SOLIDES = "solides"
+    SOLIDES = "solides"  # Reserved enum value (no public unauthenticated JSON feed)
     INHIRE = "inhire"
     # Multi-company feeds (Global & Brazil)
     REMOTIVE = "remotive"

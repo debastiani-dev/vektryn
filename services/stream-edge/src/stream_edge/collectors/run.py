@@ -28,6 +28,7 @@ from stream_edge.collectors.prefilter import (
 )
 from stream_edge.collectors.remote_feeds import MultiCompanyFeedCollector
 from stream_edge.collectors.taxonomy import sync_dynamic_stacks
+from stream_edge.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,6 +132,11 @@ async def run_collection(
             "inhire": InHireCollector(http_client=client),
         }
 
+        pinned_boards: dict[str, list[str]] = {
+            "greenhouse": settings.greenhouse_boards,
+            "ashby": settings.ashby_boards,
+        }
+
         sem = asyncio.Semaphore(12)
         board_tasks = [
             _collect_board(
@@ -144,7 +150,12 @@ async def run_collection(
                 sem,
             )
             for ats_name, collector in collectors.items()
-            for token in board_pools.sample(ats_name, boards_per_ats)
+            for token in dict.fromkeys(
+                [
+                    *pinned_boards.get(ats_name, []),
+                    *board_pools.sample(ats_name, boards_per_ats),
+                ]
+            )
         ]
 
         board_batches = await asyncio.gather(*board_tasks)
