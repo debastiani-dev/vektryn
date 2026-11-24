@@ -131,8 +131,11 @@ resource "google_service_account_iam_member" "deployer_wif" {
 
 locals {
   deployer_roles = toset([
+    "roles/viewer",
+    "roles/iam.securityReviewer",
+    "roles/serviceusage.serviceUsageViewer",
     "roles/run.admin",
-    "roles/artifactregistry.writer",
+    "roles/artifactregistry.repoAdmin",
     "roles/iam.serviceAccountUser",
     "roles/storage.admin",
     "roles/cloudscheduler.admin",
