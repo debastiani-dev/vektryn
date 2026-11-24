@@ -41,3 +41,21 @@ variable "frontend_image" {
   description = "Artifact Registry image URI for frontend Nginx container"
   type        = string
 }
+
+variable "data_vm_machine_type" {
+  description = "GCE machine type for private Postgres/Redis/Kafka/Workers VM (e2-micro is Always Free in us-central1)"
+  type        = string
+  default     = "e2-micro"
+}
+
+variable "data_vm_zone" {
+  description = "GCE zone for private data/worker VM"
+  type        = string
+  default     = "us-central1-a"
+}
+
+variable "data_vm_internal_ip" {
+  description = "Static internal VPC IP for private Postgres/Redis/Kafka VM inside 10.8.0.0/24"
+  type        = string
+  default     = "10.8.0.10"
+}
