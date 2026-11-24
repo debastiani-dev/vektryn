@@ -29,8 +29,8 @@ T = TypeVar("T")
 
 class GeminiServiceError(Exception):
     """Raised when the upstream Gemini API fails after retries."""
-    
-    
+
+
 class _ExtractedSkillsResponse(PydanticBaseModel):
     skills: list[str]
 
@@ -57,7 +57,7 @@ class ResumeService(BaseService):
             return None
         self._genai_client = genai.Client(api_key=api_key)
         return self._genai_client
-    
+
     @classmethod
     def _call_with_retry(cls, fn: Callable[[], T], max_attempts: int = 3) -> T:
         last_exc: genai_errors.APIError | None = None
@@ -66,7 +66,10 @@ class ResumeService(BaseService):
                 return fn()
             except genai_errors.APIError as exc:
                 last_exc = exc
-                if exc.code not in cls.RETRYABLE_STATUS_CODES or attempt == max_attempts - 1:
+                if (
+                    exc.code not in cls.RETRYABLE_STATUS_CODES
+                    or attempt == max_attempts - 1
+                ):
                     raise
                 time.sleep(1.5 * (2**attempt))
         raise last_exc  # type: ignore[misc]
@@ -94,7 +97,9 @@ class ResumeService(BaseService):
             )
 
         if not text:
-            raise ValueError("Could not extract any readable text from the uploaded file.")
+            raise ValueError(
+                "Could not extract any readable text from the uploaded file."
+            )
         return text
 
     @classmethod
@@ -113,7 +118,9 @@ class ResumeService(BaseService):
         object_path = f"resumes/{user_id}/{content_hash[:16]}_{safe_name}"
 
         bucket_name = (getattr(settings, "GCS_RESUMES_BUCKET", "") or "").strip()
-        storage_backend = (getattr(settings, "STORAGE_BACKEND", "") or "").strip().lower()
+        storage_backend = (
+            (getattr(settings, "STORAGE_BACKEND", "") or "").strip().lower()
+        )
         if bucket_name and storage_backend != "local" and gcs_storage is not None:
             client = gcs_storage.Client()
             blob = client.bucket(bucket_name).blob(object_path)
@@ -245,7 +252,9 @@ class ResumeService(BaseService):
         uploaded_file: BinaryIO | None = None,
     ) -> ResumeProfile:
         if self.user is None:
-            raise ValueError("An authenticated user is required to create a ResumeProfile.")
+            raise ValueError(
+                "An authenticated user is required to create a ResumeProfile."
+            )
         enriched_data = self._enrich_if_content_changed(
             validated_data=validated_data,
             uploaded_file=uploaded_file,

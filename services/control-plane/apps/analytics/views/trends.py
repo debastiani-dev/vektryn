@@ -19,5 +19,10 @@ class StackTrendDailyViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = StackTrendDaily.objects.all()
     serializer_class = StackTrendDailySerializer
     filterset_class = StackTrendFilter
-    ordering_fields = ["bucket_date", "mention_count", "unique_companies_count", "median_annual_usd"]
+    ordering_fields = [
+        "bucket_date",
+        "mention_count",
+        "unique_companies_count",
+        "median_annual_usd",
+    ]
     ordering = ["-bucket_date", "-mention_count"]

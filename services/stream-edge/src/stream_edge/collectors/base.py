@@ -38,7 +38,9 @@ class BaseATSCollector(ABC):
         self.http_client = http_client
 
     @abstractmethod
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         raise NotImplementedError
 
 
@@ -50,7 +52,9 @@ async def push_jobs_to_edge(
     ingest_api_key: str | None = None,
 ) -> int:
     endpoint = f"{edge_base_url.rstrip('/')}/ingest/jobs"
-    api_key = (ingest_api_key if ingest_api_key is not None else settings.ingest_api_key).strip()
+    api_key = (
+        ingest_api_key if ingest_api_key is not None else settings.ingest_api_key
+    ).strip()
     headers = {"X-Ingest-API-Key": api_key} if api_key else {}
     accepted = 0
     for job in jobs:

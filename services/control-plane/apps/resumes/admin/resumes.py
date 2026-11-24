@@ -6,7 +6,9 @@ from vektryn_contracts import ContractType, RegionEligibility, SeniorityLevel
 
 
 def _enum_choices(enum_cls) -> list[tuple[str, str]]:
-    return [(member.value, member.value.replace("_", " ").title()) for member in enum_cls]
+    return [
+        (member.value, member.value.replace("_", " ").title()) for member in enum_cls
+    ]
 
 
 class ResumeProfileAdminForm(forms.ModelForm):

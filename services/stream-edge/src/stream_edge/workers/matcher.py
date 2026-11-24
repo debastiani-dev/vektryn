@@ -380,7 +380,8 @@ def _upsert_job_and_score_sync(
                     resume_uuid,
                     cosine_val,
                     outcome.fit_score,
-                    outcome.fit_score is not None and outcome.fit_score >= min_alert_score,
+                    outcome.fit_score is not None
+                    and outcome.fit_score >= min_alert_score,
                 )
 
         conn.commit()
@@ -435,11 +436,15 @@ async def run_matcher_worker() -> None:
                         gemini=gemini,
                         producer=producer,
                     )
-                await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
+                await asyncio.to_thread(
+                    consumer.commit, message=msg, asynchronous=False
+                )
             except Exception as exc:
                 logger.exception("Failed matching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
-                await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
+                await asyncio.to_thread(
+                    consumer.commit, message=msg, asynchronous=False
+                )
     finally:
         await asyncio.to_thread(producer.flush, 5.0)
         await asyncio.to_thread(consumer.close)

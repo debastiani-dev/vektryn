@@ -16,7 +16,6 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return MatchScore.objects.none()
-        return (
-            MatchScore.objects.select_related("job_posting", "resume_profile")
-            .filter(resume_profile__user=self.request.user)
-        )
+        return MatchScore.objects.select_related(
+            "job_posting", "resume_profile"
+        ).filter(resume_profile__user=self.request.user)

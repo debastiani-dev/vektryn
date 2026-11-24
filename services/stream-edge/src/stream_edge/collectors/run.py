@@ -89,7 +89,9 @@ async def run_collection(
 ) -> None:
     async with httpx.AsyncClient(follow_redirects=True) as client:
         # 1. Sync dynamic language/framework catalog (cached in Redis) & load resume criteria
-        dynamic_stacks = await sync_dynamic_stacks(client, force_refresh=refresh_discovery)
+        dynamic_stacks = await sync_dynamic_stacks(
+            client, force_refresh=refresh_discovery
+        )
         criteria = await asyncio.to_thread(
             load_resume_criteria,
             resume_id,
@@ -171,11 +173,21 @@ async def run_collection(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Vektryn Global + Brazil ATS & feed collectors")
+    parser = argparse.ArgumentParser(
+        description="Run Vektryn Global + Brazil ATS & feed collectors"
+    )
     parser.add_argument("--resume-id", default=os.getenv("COLLECT_RESUME_ID") or None)
-    parser.add_argument("--min-skills", type=int, default=int(os.getenv("COLLECT_MIN_SKILLS", "2")))
-    parser.add_argument("--max-total", type=int, default=int(os.getenv("COLLECT_MAX_TOTAL", "30")))
-    parser.add_argument("--boards-per-ats", type=int, default=int(os.getenv("COLLECT_BOARDS_PER_ATS", "25")))
+    parser.add_argument(
+        "--min-skills", type=int, default=int(os.getenv("COLLECT_MIN_SKILLS", "2"))
+    )
+    parser.add_argument(
+        "--max-total", type=int, default=int(os.getenv("COLLECT_MAX_TOTAL", "30"))
+    )
+    parser.add_argument(
+        "--boards-per-ats",
+        type=int,
+        default=int(os.getenv("COLLECT_BOARDS_PER_ATS", "25")),
+    )
     parser.add_argument("--refresh-discovery", action="store_true")
     return parser.parse_args()
 

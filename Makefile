@@ -10,6 +10,7 @@ endif
 CONTRACTS_DIR     := packages/contracts
 CONTROL_PLANE_DIR := services/control-plane
 STREAM_EDGE_DIR   := services/stream-edge
+FRONTEND_DIR      := frontend
 PORT              ?= 8000
 EDGE_PORT         ?= 8001
 
@@ -144,9 +145,27 @@ test:
 	cd $(STREAM_EDGE_DIR) && poetry run pytest $(opts)
 
 ## Run Ruff and Black checks across all Python packages
-.PHONY: lint
-lint:
+.PHONY: lint/python
+lint/python:
 	@echo "${GREEN}Running Ruff and Black checks${RESET}"
 	cd $(CONTRACTS_DIR) && poetry run ruff check . && poetry run black --check .
 	cd $(CONTROL_PLANE_DIR) && poetry run ruff check . && poetry run black --check .
 	cd $(STREAM_EDGE_DIR) && poetry run ruff check . && poetry run black --check .
+
+## Run frontend oxlint and TypeScript typecheck
+.PHONY: lint/frontend
+lint/frontend:
+	@echo "${GREEN}Running frontend oxlint and TypeScript checks${RESET}"
+	cd $(FRONTEND_DIR) && npm run lint && npx tsc -b
+
+## Run all linters across Python and frontend
+.PHONY: lint
+lint: lint/python lint/frontend
+
+## Auto-format Python packages with Ruff and Black
+.PHONY: format
+format:
+	@echo "${GREEN}Formatting Python packages with Ruff and Black${RESET}"
+	cd $(CONTRACTS_DIR) && poetry run ruff check --fix . && poetry run black .
+	cd $(CONTROL_PLANE_DIR) && poetry run ruff check --fix . && poetry run black .
+	cd $(STREAM_EDGE_DIR) && poetry run ruff check --fix . && poetry run black .

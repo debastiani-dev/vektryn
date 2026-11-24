@@ -15,7 +15,6 @@ class ApplicationLeadViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return ApplicationLead.objects.none()
-        return (
-            ApplicationLead.objects.filter(user=self.request.user)
-            .select_related("job_posting", "resume_profile")
+        return ApplicationLead.objects.filter(user=self.request.user).select_related(
+            "job_posting", "resume_profile"
         )

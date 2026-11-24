@@ -7,7 +7,9 @@ from enum import StrEnum
 
 
 def enum_choices(enum_cls: type[StrEnum]) -> list[tuple[str, str]]:
-    return [(member.value, member.name.replace("_", " ").title()) for member in enum_cls]
+    return [
+        (member.value, member.name.replace("_", " ").title()) for member in enum_cls
+    ]
 
 
 class BaseQuerySet(models.QuerySet):

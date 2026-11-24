@@ -56,7 +56,9 @@ async def test_healthcheck_endpoint():
 
 async def test_kafka_producer_publish_raw_and_dlq_replay_execute():
     fake_confluent_producer = MagicMock()
-    with patch("stream_edge.clients.kafka.Producer", return_value=fake_confluent_producer):
+    with patch(
+        "stream_edge.clients.kafka.Producer", return_value=fake_confluent_producer
+    ):
         producer = KafkaEventProducer(bootstrap_servers="localhost:9092")
         await producer.publish_raw(
             topic=KafkaTopic.JOBS_RAW,
@@ -83,7 +85,10 @@ async def test_kafka_producer_publish_raw_and_dlq_replay_execute():
     )
     replay_producer = MagicMock()
     with (
-        patch("stream_edge.workers.dlq_replay._collect_dlq_events", return_value=[dlq_item]),
+        patch(
+            "stream_edge.workers.dlq_replay._collect_dlq_events",
+            return_value=[dlq_item],
+        ),
         patch("stream_edge.clients.kafka.Producer", return_value=replay_producer),
     ):
         replayed = await replay_dlq(max_messages=10, execute=True)
@@ -100,15 +105,28 @@ async def test_lifecycle_closed_detection_and_uuid_cast_sql():
         if "gone" in str(request.url):
             return httpx.Response(410)
         if "filled" in str(request.url):
-            return httpx.Response(200, text="<html>This position has been filled.</html>")
-        return httpx.Response(200, text="<html>Senior Python Engineer — Apply now</html>")
+            return httpx.Response(
+                200, text="<html>This position has been filled.</html>"
+            )
+        return httpx.Response(
+            200, text="<html>Senior Python Engineer — Apply now</html>"
+        )
 
     transport = httpx.MockTransport(handler)
     semaphore = asyncio.Semaphore(4)
     async with httpx.AsyncClient(transport=transport) as client:
-        assert await _is_posting_closed(client, semaphore, "u1", "https://ex.com/gone") == "u1"
-        assert await _is_posting_closed(client, semaphore, "u2", "https://ex.com/filled") == "u2"
-        assert await _is_posting_closed(client, semaphore, "u3", "https://ex.com/open") is None
+        assert (
+            await _is_posting_closed(client, semaphore, "u1", "https://ex.com/gone")
+            == "u1"
+        )
+        assert (
+            await _is_posting_closed(client, semaphore, "u2", "https://ex.com/filled")
+            == "u2"
+        )
+        assert (
+            await _is_posting_closed(client, semaphore, "u3", "https://ex.com/open")
+            is None
+        )
 
 
 def test_matcher_handles_zero_active_resumes_without_unbound_local_error():

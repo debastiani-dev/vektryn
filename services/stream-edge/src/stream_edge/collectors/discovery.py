@@ -9,7 +9,6 @@ import httpx
 import redis.asyncio as aioredis
 
 from stream_edge.collectors.base import CollectedJob
-from stream_edge.collectors.prefilter import ResumeFilterCriteria
 from stream_edge.config import settings
 
 logger = logging.getLogger(__name__)
@@ -54,28 +53,30 @@ _ATS_REGEXES: dict[str, re.Pattern[str]] = {
     ),
 }
 
-_IGNORED_SLUGS = frozenset({
-    "www",
-    "api",
-    "app",
-    "jobs",
-    "boards",
-    "job-boards",
-    "apply",
-    "careers",
-    "embed",
-    "v1",
-    "v0",
-    "public",
-    "static",
-    "assets",
-    "support",
-    "help",
-    "blog",
-    "status",
-    "mail",
-    "cdn",
-})
+_IGNORED_SLUGS = frozenset(
+    {
+        "www",
+        "api",
+        "app",
+        "jobs",
+        "boards",
+        "job-boards",
+        "apply",
+        "careers",
+        "embed",
+        "v1",
+        "v0",
+        "public",
+        "static",
+        "assets",
+        "support",
+        "help",
+        "blog",
+        "status",
+        "mail",
+        "cdn",
+    }
+)
 
 _PUBLIC_COMPANY_INDEX_URLS = (
     "https://raw.githubusercontent.com/remoteintech/remote-jobs/main/README.md",
@@ -110,12 +111,16 @@ def extract_slugs_from_text(text: str) -> dict[str, set[str]]:
     return found
 
 
-def _merge_slug_maps(target: dict[str, set[str]], incoming: dict[str, set[str]]) -> None:
+def _merge_slug_maps(
+    target: dict[str, set[str]], incoming: dict[str, set[str]]
+) -> None:
     for ats, slugs in incoming.items():
         target.setdefault(ats, set()).update(slugs)
 
 
-async def _harvest_github_company_indexes(client: httpx.AsyncClient) -> dict[str, set[str]]:
+async def _harvest_github_company_indexes(
+    client: httpx.AsyncClient,
+) -> dict[str, set[str]]:
     found: dict[str, set[str]] = {ats: set() for ats in _ATS_REGEXES}
 
     async def _fetch_one(url: str) -> str:
@@ -150,7 +155,11 @@ async def _harvest_yc_hiring_slugs(client: httpx.AsyncClient) -> dict[str, set[s
         if not isinstance(company, dict):
             continue
         slug = str(company.get("slug") or "").strip().lower()
-        if slug and slug not in _IGNORED_SLUGS and re.fullmatch(r"[a-z0-9-]{2,50}", slug):
+        if (
+            slug
+            and slug not in _IGNORED_SLUGS
+            and re.fullmatch(r"[a-z0-9-]{2,50}", slug)
+        ):
             slugs.append(slug)
 
     random.shuffle(slugs)
@@ -161,10 +170,7 @@ async def _harvest_yc_hiring_slugs(client: httpx.AsyncClient) -> dict[str, set[s
 
 
 def _harvest_from_seed_jobs(seed_jobs: list[CollectedJob]) -> dict[str, set[str]]:
-    blob = "\n".join(
-        f"{j.apply_url}\n{j.raw_html[:3000]}"
-        for j in seed_jobs
-    )
+    blob = "\n".join(f"{j.apply_url}\n{j.raw_html[:3000]}" for j in seed_jobs)
     return extract_slugs_from_text(blob)
 
 
@@ -174,7 +180,10 @@ def _probe_request_spec(ats: str, slug: str) -> tuple[str, dict[str, str]]:
         "ashby": (f"https://api.ashbyhq.com/posting-api/job-board/{slug}", {}),
         "lever": (f"https://api.lever.co/v0/postings/{slug}?limit=1", {}),
         "workable": (f"https://apply.workable.com/api/v1/widget/accounts/{slug}", {}),
-        "smartrecruiters": (f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=1", {}),
+        "smartrecruiters": (
+            f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=1",
+            {},
+        ),
         "recruitee": (f"https://{slug}.recruitee.com/api/offers/", {}),
         "breezy": (f"https://{slug}.breezy.hr/json", {}),
         "inhire": ("https://api.inhire.app/job-posts/public/pages", {"X-Tenant": slug}),

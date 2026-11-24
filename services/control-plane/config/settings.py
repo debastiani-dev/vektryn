@@ -28,7 +28,9 @@ class ControlPlaneSettings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     csrf_trusted_origins: str = Field(
         default="http://localhost:3000,http://127.0.0.1:3000",
-        validation_alias=AliasChoices("CSRF_TRUSTED_ORIGINS", "DJANGO_CSRF_TRUSTED_ORIGINS"),
+        validation_alias=AliasChoices(
+            "CSRF_TRUSTED_ORIGINS", "DJANGO_CSRF_TRUSTED_ORIGINS"
+        ),
     )
 
     database_url: str = ""
@@ -45,7 +47,9 @@ class ControlPlaneSettings(BaseSettings):
 
     stream_auth_secret: str = Field(
         default="",
-        validation_alias=AliasChoices("STREAM_AUTH_SECRET", "DJANGO_SECRET_KEY", "SECRET_KEY"),
+        validation_alias=AliasChoices(
+            "STREAM_AUTH_SECRET", "DJANGO_SECRET_KEY", "SECRET_KEY"
+        ),
     )
     storage_backend: str = ""
     local_storage_dir: Path = REPO_ROOT / ".local_storage"
@@ -173,7 +177,9 @@ DATABASES = {
 }
 
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
@@ -221,8 +227,12 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 25,
 }
 
+
 def _choices(enum_cls: type[StrEnum]) -> list[tuple[str, str]]:
-    return [(member.value, member.name.replace("_", " ").title()) for member in enum_cls]
+    return [
+        (member.value, member.name.replace("_", " ").title()) for member in enum_cls
+    ]
+
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Vektryn Control Plane API",

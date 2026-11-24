@@ -1,7 +1,11 @@
 import logging
 from datetime import datetime
 
-from stream_edge.collectors.base import BaseATSCollector, CollectedJob, html_to_clean_text
+from stream_edge.collectors.base import (
+    BaseATSCollector,
+    CollectedJob,
+    html_to_clean_text,
+)
 from vektryn_contracts import ATSSource
 
 logger = logging.getLogger(__name__)
@@ -10,7 +14,9 @@ logger = logging.getLogger(__name__)
 class AshbyCollector(BaseATSCollector):
     BASE_URL = "https://api.ashbyhq.com/posting-api/job-board"
 
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         url = f"{self.BASE_URL}/{board_token}"
         resp = await self.http_client.get(url, timeout=20.0)
         resp.raise_for_status()

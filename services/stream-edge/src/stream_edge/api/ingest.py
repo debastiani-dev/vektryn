@@ -79,7 +79,9 @@ def verify_ingest_api_key(
     expected = settings.ingest_api_key.strip()
     if not expected:
         return
-    if not x_ingest_api_key or not hmac.compare_digest(x_ingest_api_key.strip(), expected):
+    if not x_ingest_api_key or not hmac.compare_digest(
+        x_ingest_api_key.strip(), expected
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing ingest API key",

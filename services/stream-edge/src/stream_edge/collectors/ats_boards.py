@@ -1,9 +1,12 @@
 from datetime import UTC, datetime
 import logging
 
-import httpx
 
-from stream_edge.collectors.base import BaseATSCollector, CollectedJob, html_to_clean_text
+from stream_edge.collectors.base import (
+    BaseATSCollector,
+    CollectedJob,
+    html_to_clean_text,
+)
 from vektryn_contracts import ATSSource
 
 logger = logging.getLogger(__name__)
@@ -22,7 +25,9 @@ def _parse_dt(raw: str | int | float | None) -> datetime | None:
 
 
 class LeverCollector(BaseATSCollector):
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             f"https://api.lever.co/v0/postings/{board_token}",
             params={"mode": "json"},
@@ -59,7 +64,8 @@ class LeverCollector(BaseATSCollector):
                     apply_url=apply_url,
                     location_raw=location_raw,
                     raw_html=raw_html,
-                    description_clean=item.get("descriptionPlain") or html_to_clean_text(raw_html),
+                    description_clean=item.get("descriptionPlain")
+                    or html_to_clean_text(raw_html),
                     posted_at=_parse_dt(item.get("createdAt")),
                 )
             )
@@ -67,7 +73,9 @@ class LeverCollector(BaseATSCollector):
 
 
 class WorkableCollector(BaseATSCollector):
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             f"https://apply.workable.com/api/v1/widget/accounts/{board_token}",
             params={"details": "true"},
@@ -106,7 +114,9 @@ class WorkableCollector(BaseATSCollector):
 
 
 class SmartRecruitersCollector(BaseATSCollector):
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             f"https://api.smartrecruiters.com/v1/companies/{board_token}/postings",
             params={"limit": 100},
@@ -132,7 +142,7 @@ class SmartRecruitersCollector(BaseATSCollector):
                     timeout=10.0,
                 )
                 if d_resp.status_code == 200:
-                    sections = ((d_resp.json().get("jobAd") or {}).get("sections") or {})
+                    sections = (d_resp.json().get("jobAd") or {}).get("sections") or {}
                     detail_html = "\n".join(
                         sec.get("text", "")
                         for sec in sections.values()
@@ -151,7 +161,8 @@ class SmartRecruitersCollector(BaseATSCollector):
                     apply_url=apply_url,
                     location_raw=location_raw,
                     raw_html=detail_html or item.get("name", ""),
-                    description_clean=html_to_clean_text(detail_html) or item.get("name", ""),
+                    description_clean=html_to_clean_text(detail_html)
+                    or item.get("name", ""),
                     posted_at=_parse_dt(item.get("releasedDate")),
                 )
             )
@@ -159,7 +170,9 @@ class SmartRecruitersCollector(BaseATSCollector):
 
 
 class RecruiteeCollector(BaseATSCollector):
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             f"https://{board_token}.recruitee.com/api/offers/",
             timeout=15.0,
@@ -186,14 +199,18 @@ class RecruiteeCollector(BaseATSCollector):
                     location_raw=", ".join(p for p in loc_parts if p),
                     raw_html=raw_html,
                     description_clean=html_to_clean_text(raw_html),
-                    posted_at=_parse_dt(item.get("published_at") or item.get("created_at")),
+                    posted_at=_parse_dt(
+                        item.get("published_at") or item.get("created_at")
+                    ),
                 )
             )
         return jobs
 
 
 class BreezyCollector(BaseATSCollector):
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             f"https://{board_token}.breezy.hr/json",
             timeout=15.0,
@@ -229,7 +246,9 @@ class BreezyCollector(BaseATSCollector):
 class InHireCollector(BaseATSCollector):
     """Brazilian startup/scale-up ATS using public X-Tenant career endpoint."""
 
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             "https://api.inhire.app/job-posts/public/pages",
             headers={"X-Tenant": board_token, "Accept": "application/json"},
@@ -261,7 +280,9 @@ class InHireCollector(BaseATSCollector):
                     location_raw=location_raw,
                     raw_html=raw_html,
                     description_clean=html_to_clean_text(raw_html),
-                    posted_at=_parse_dt(item.get("createdAt") or item.get("publishedAt")),
+                    posted_at=_parse_dt(
+                        item.get("createdAt") or item.get("publishedAt")
+                    ),
                 )
             )
         return jobs

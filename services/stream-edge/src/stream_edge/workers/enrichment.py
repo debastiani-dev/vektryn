@@ -131,7 +131,9 @@ async def run_enrichment_worker() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _stop)
 
-    logger.info("Enrichment worker started (group=%s)", settings.kafka_enrichment_group_id)
+    logger.info(
+        "Enrichment worker started (group=%s)", settings.kafka_enrichment_group_id
+    )
     try:
         while running:
             msg = await asyncio.to_thread(consumer.poll, 1.0)
@@ -149,11 +151,15 @@ async def run_enrichment_worker() -> None:
                     redis_client=redis_client,
                     producer=producer,
                 )
-                await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
+                await asyncio.to_thread(
+                    consumer.commit, message=msg, asynchronous=False
+                )
             except Exception as exc:
                 logger.exception("Failed enriching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
-                await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
+                await asyncio.to_thread(
+                    consumer.commit, message=msg, asynchronous=False
+                )
     finally:
         await redis_client.close()
         await asyncio.to_thread(producer.flush, 5.0)

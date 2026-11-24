@@ -53,7 +53,9 @@ async def _is_posting_closed(
                 if any(marker in snippet for marker in _CLOSED_BODY_MARKERS):
                     return posting_uuid
         except httpx.HTTPError as exc:
-            logger.debug("Skipping transient lifecycle probe error for %s: %s", apply_url, exc)
+            logger.debug(
+                "Skipping transient lifecycle probe error for %s: %s", apply_url, exc
+            )
     return None
 
 
@@ -73,10 +75,7 @@ async def run_lifecycle_check(batch_size: int = 200) -> int:
         headers={"User-Agent": "VektrynLifecycleBot/0.2"},
     ) as client:
         results = await asyncio.gather(
-            *(
-                _is_posting_closed(client, semaphore, str(uid), url)
-                for uid, url in rows
-            )
+            *(_is_posting_closed(client, semaphore, str(uid), url) for uid, url in rows)
         )
 
     closed_uuids = [uid for uid in results if uid is not None]
@@ -90,10 +89,16 @@ async def run_lifecycle_check(batch_size: int = 200) -> int:
             cur.execute(_MARK_CLOSED_SQL, (now, now, closed_uuids))
         conn.commit()
 
-    logger.info("Marked %d of %d checked postings as closed upstream", len(closed_uuids), len(rows))
+    logger.info(
+        "Marked %d of %d checked postings as closed upstream",
+        len(closed_uuids),
+        len(rows),
+    )
     return len(closed_uuids)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
+    )
     asyncio.run(run_lifecycle_check())

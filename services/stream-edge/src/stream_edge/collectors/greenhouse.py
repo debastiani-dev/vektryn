@@ -1,7 +1,11 @@
 import logging
 from datetime import datetime
 
-from stream_edge.collectors.base import BaseATSCollector, CollectedJob, html_to_clean_text
+from stream_edge.collectors.base import (
+    BaseATSCollector,
+    CollectedJob,
+    html_to_clean_text,
+)
 from vektryn_contracts import ATSSource
 
 logger = logging.getLogger(__name__)
@@ -10,7 +14,9 @@ logger = logging.getLogger(__name__)
 class GreenhouseCollector(BaseATSCollector):
     BASE_URL = "https://boards-api.greenhouse.io/v1/boards"
 
-    async def fetch_board(self, board_token: str, company_name: str) -> list[CollectedJob]:
+    async def fetch_board(
+        self, board_token: str, company_name: str
+    ) -> list[CollectedJob]:
         url = f"{self.BASE_URL}/{board_token}/jobs"
         resp = await self.http_client.get(url, params={"content": "true"}, timeout=20.0)
         resp.raise_for_status()
@@ -24,7 +30,9 @@ class GreenhouseCollector(BaseATSCollector):
                 continue
 
             location_obj = item.get("location") or {}
-            location_raw = location_obj.get("name", "") if isinstance(location_obj, dict) else ""
+            location_raw = (
+                location_obj.get("name", "") if isinstance(location_obj, dict) else ""
+            )
 
             updated_at = item.get("updated_at")
             posted_at = datetime.fromisoformat(updated_at) if updated_at else None

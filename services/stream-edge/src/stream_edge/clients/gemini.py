@@ -9,7 +9,12 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from stream_edge.config import settings
-from vektryn_contracts.enums import ContractType, RegionEligibility, SalaryPeriod, SeniorityLevel
+from vektryn_contracts.enums import (
+    ContractType,
+    RegionEligibility,
+    SalaryPeriod,
+    SeniorityLevel,
+)
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS
 
 T = TypeVar("T")
@@ -41,7 +46,9 @@ class GeminiStreamClient:
     def __init__(self, api_key: str = settings.gemini_api_key) -> None:
         cleaned = (api_key or "").strip()
         if cleaned in self.PLACEHOLDER_KEYS:
-            raise ValueError("A valid GEMINI_API_KEY is required for stream-edge workers.")
+            raise ValueError(
+                "A valid GEMINI_API_KEY is required for stream-edge workers."
+            )
         self._client = genai.Client(api_key=cleaned)
 
     @classmethod
@@ -52,7 +59,10 @@ class GeminiStreamClient:
                 return fn()
             except genai_errors.APIError as exc:
                 last_exc = exc
-                if exc.code not in cls.RETRYABLE_STATUS_CODES or attempt == max_attempts - 1:
+                if (
+                    exc.code not in cls.RETRYABLE_STATUS_CODES
+                    or attempt == max_attempts - 1
+                ):
                     raise
                 time.sleep(2.0 * (2**attempt))
         raise last_exc  # type: ignore[misc]

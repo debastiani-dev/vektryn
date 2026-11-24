@@ -38,13 +38,19 @@ _HYBRID_OR_ONSITE_RE = re.compile(
 _CONTRACT_PATTERNS: dict[str, re.Pattern[str]] = {
     "clt": re.compile(r"\bclt\b", re.IGNORECASE),
     "pj": re.compile(r"\bpj\b|\bpessoa\s+jur[ií]dica\b", re.IGNORECASE),
-    "b2b_contractor": re.compile(r"\bb2b\b|\bindependent\s+contractor\b|\bcontractor\b", re.IGNORECASE),
-    "eor": re.compile(r"\beor\b|\bemployer\s+of\s+record\b|\bdeel\b|\bremote\.com\b", re.IGNORECASE),
+    "b2b_contractor": re.compile(
+        r"\bb2b\b|\bindependent\s+contractor\b|\bcontractor\b", re.IGNORECASE
+    ),
+    "eor": re.compile(
+        r"\beor\b|\bemployer\s+of\s+record\b|\bdeel\b|\bremote\.com\b", re.IGNORECASE
+    ),
     "w2": re.compile(r"\bw-?2\b", re.IGNORECASE),
     "c2c": re.compile(r"\bc2c\b|\bcorp[- ]to[- ]corp\b", re.IGNORECASE),
 }
 
-_INTERNSHIP_RE = re.compile(r"\b(?:intern|internship|est[aá]gio|estagi[aá]rio|trainee)\b", re.IGNORECASE)
+_INTERNSHIP_RE = re.compile(
+    r"\b(?:intern|internship|est[aá]gio|estagi[aá]rio|trainee)\b", re.IGNORECASE
+)
 
 
 def _compile_word_patterns(terms: Iterable[str]) -> tuple[re.Pattern[str], ...]:
@@ -110,7 +116,9 @@ def _parse_str_list(raw_val: object) -> list[str]:
     if isinstance(raw_val, str) and raw_val.strip():
         parsed = json.loads(raw_val)
         if isinstance(parsed, list):
-            return [s.strip().lower() for s in parsed if isinstance(s, str) and s.strip()]
+            return [
+                s.strip().lower() for s in parsed if isinstance(s, str) and s.strip()
+            ]
     return []
 
 
@@ -124,14 +132,24 @@ def _collect_profile_rows(
     regions: set[str] = set()
     discipline_blobs: list[str] = []
 
-    for row_uuid, label, raw_text, raw_skills, raw_sen, raw_contract, raw_region in rows:
+    for (
+        row_uuid,
+        label,
+        raw_text,
+        raw_skills,
+        raw_sen,
+        raw_contract,
+        raw_region,
+    ) in rows:
         resume_ids.append(str(row_uuid))
         clean_skills = _parse_str_list(raw_skills)
         skills.update(clean_skills)
         seniorities.update(_parse_str_list(raw_sen))
         contracts.update(_parse_str_list(raw_contract))
         regions.update(_parse_str_list(raw_region))
-        discipline_blobs.append(f"{label or ''}\n{' '.join(clean_skills)}\n{(raw_text or '')[:1500]}")
+        discipline_blobs.append(
+            f"{label or ''}\n{' '.join(clean_skills)}\n{(raw_text or '')[:1500]}"
+        )
 
     return resume_ids, skills, seniorities, contracts, regions, discipline_blobs
 
@@ -160,11 +178,15 @@ def load_resume_criteria(
     if not rows:
         if resume_id:
             raise ValueError(f"Active ResumeProfile not found for uuid={resume_id}")
-        logger.warning("No active ResumeProfile found in DB; falling back to generic engineering filter.")
+        logger.warning(
+            "No active ResumeProfile found in DB; falling back to generic engineering filter."
+        )
         return None
 
     taxonomy = load_taxonomy(dynamic_stacks)
-    resume_ids, skills, db_seniorities, db_contracts, db_regions, blobs = _collect_profile_rows(rows)
+    resume_ids, skills, db_seniorities, db_contracts, db_regions, blobs = (
+        _collect_profile_rows(rows)
+    )
     combined_blob = "\n".join(blobs)
 
     resolved_seniorities = db_seniorities or _infer_seniorities(combined_blob, taxonomy)
@@ -269,7 +291,8 @@ def _passes_location_gate(
         return False
 
     allows_explicitly = any(
-        m in location_lower for m in ("brazil", "brasil", "latam", "worldwide", "anywhere")
+        m in location_lower
+        for m in ("brazil", "brasil", "latam", "worldwide", "anywhere")
     )
     if allows_explicitly:
         return True
@@ -306,26 +329,38 @@ def _score_job(job: CollectedJob, ctx: _CompiledFilterContext) -> int | None:
     location_lower = job.location_raw.lower()
     desc_lower = job.description_clean.lower()
 
-    if not _passes_discipline_gate(title_lower, ctx.criteria.active_disciplines, ctx.dynamic_stacks):
+    if not _passes_discipline_gate(
+        title_lower, ctx.criteria.active_disciplines, ctx.dynamic_stacks
+    ):
         return None
-    if not _passes_seniority_gate(title_lower, ctx.criteria.target_seniority, ctx.taxonomy):
+    if not _passes_seniority_gate(
+        title_lower, ctx.criteria.target_seniority, ctx.taxonomy
+    ):
         return None
-    if not _passes_contract_gate(title_lower, location_lower, desc_lower, ctx.criteria.target_contract_types):
+    if not _passes_contract_gate(
+        title_lower, location_lower, desc_lower, ctx.criteria.target_contract_types
+    ):
         return None
     if not _passes_location_gate(title_lower, location_lower, desc_lower, ctx.criteria):
         return None
-    if _has_competing_title_stack(title_lower, ctx.required_core_patterns, ctx.competing_core_patterns):
+    if _has_competing_title_stack(
+        title_lower, ctx.required_core_patterns, ctx.competing_core_patterns
+    ):
         return None
 
     searchable = f"{title_lower}\n{location_lower}\n{desc_lower}"
-    if ctx.required_core_patterns and not any(p.search(searchable) for p in ctx.required_core_patterns):
+    if ctx.required_core_patterns and not any(
+        p.search(searchable) for p in ctx.required_core_patterns
+    ):
         return None
 
     overlap = sum(1 for pat in ctx.all_skill_patterns if pat.search(searchable))
     if ctx.all_skill_patterns and overlap < ctx.min_skill_matches:
         return None
 
-    remote_bonus = 1 if any(m in location_lower for m in ctx.taxonomy.remote_markers) else 0
+    remote_bonus = (
+        1 if any(m in location_lower for m in ctx.taxonomy.remote_markers) else 0
+    )
     return overlap * 10 + remote_bonus
 
 
@@ -356,9 +391,7 @@ def filter_and_rank_jobs(
     )
 
     scored = [
-        (score, job)
-        for job in role_jobs
-        if (score := _score_job(job, ctx)) is not None
+        (score, job) for job in role_jobs if (score := _score_job(job, ctx)) is not None
     ]
     scored.sort(key=lambda item: item[0], reverse=True)
     return [job for _, job in scored]

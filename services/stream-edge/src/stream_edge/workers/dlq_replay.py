@@ -52,7 +52,10 @@ async def replay_dlq(*, max_messages: int, execute: bool) -> int:
         )
 
     if not execute:
-        logger.info("Dry-run complete (%d messages inspected). Pass --execute to replay.", len(events))
+        logger.info(
+            "Dry-run complete (%d messages inspected). Pass --execute to replay.",
+            len(events),
+        )
         return len(events)
 
     producer = KafkaEventProducer()
@@ -82,11 +85,17 @@ async def replay_dlq(*, max_messages: int, execute: bool) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect or replay Vektryn DLQ events")
-    parser.add_argument("--limit", type=int, default=50, help="Max DLQ messages to read")
-    parser.add_argument("--execute", action="store_true", help="Republish messages (default is dry-run)")
+    parser.add_argument(
+        "--limit", type=int, default=50, help="Max DLQ messages to read"
+    )
+    parser.add_argument(
+        "--execute", action="store_true", help="Republish messages (default is dry-run)"
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
+    )
     asyncio.run(replay_dlq(max_messages=args.limit, execute=args.execute))
 
 

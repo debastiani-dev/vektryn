@@ -28,7 +28,9 @@ class MultiCompanyFeedCollector:
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
 
-    async def fetch_remotive(self, category: str = "software-dev") -> list[CollectedJob]:
+    async def fetch_remotive(
+        self, category: str = "software-dev"
+    ) -> list[CollectedJob]:
         resp = await self.http_client.get(
             "https://remotive.com/api/remote-jobs",
             params={"category": category, "limit": 100},
@@ -43,9 +45,13 @@ class MultiCompanyFeedCollector:
                     ats_source=ATSSource.REMOTIVE,
                     external_id=str(item["id"]),
                     title=(item.get("title") or "").strip(),
-                    company_name=(item.get("company_name") or "Remotive Company").strip(),
+                    company_name=(
+                        item.get("company_name") or "Remotive Company"
+                    ).strip(),
                     apply_url=item.get("url") or "",
-                    location_raw=(item.get("candidate_required_location") or "Worldwide").strip(),
+                    location_raw=(
+                        item.get("candidate_required_location") or "Worldwide"
+                    ).strip(),
                     raw_html=raw_html,
                     description_clean=html_to_clean_text(raw_html),
                     posted_at=_parse_iso_dt(item.get("publication_date")),
@@ -69,10 +75,16 @@ class MultiCompanyFeedCollector:
             ext_id = str(item.get("id") or item.get("guid") or apply_url[-40:])
             jobs.append(
                 CollectedJob(
-                    ats_source=ATSSource.HIMALAS if hasattr(ATSSource, "HIMALAS") else ATSSource.HIMALAYAS,
+                    ats_source=(
+                        ATSSource.HIMALAS
+                        if hasattr(ATSSource, "HIMALAS")
+                        else ATSSource.HIMALAYAS
+                    ),
                     external_id=ext_id,
                     title=(item.get("title") or "").strip(),
-                    company_name=(item.get("companyName") or "Himalayas Company").strip(),
+                    company_name=(
+                        item.get("companyName") or "Himalayas Company"
+                    ).strip(),
                     apply_url=apply_url,
                     location_raw=location_raw,
                     raw_html=raw_html,
@@ -151,7 +163,9 @@ class MultiCompanyFeedCollector:
         )
         resp.raise_for_status()
         payload = resp.json()
-        items = payload if isinstance(payload, list) else payload.get("opportunities", [])
+        items = (
+            payload if isinstance(payload, list) else payload.get("opportunities", [])
+        )
         jobs: list[CollectedJob] = []
         for entry in items:
             item = entry.get("opportunity", entry) if isinstance(entry, dict) else {}
@@ -183,7 +197,9 @@ class MultiCompanyFeedCollector:
                     location_raw=loc,
                     raw_html=raw_html,
                     description_clean=html_to_clean_text(raw_html),
-                    posted_at=_parse_iso_dt(item.get("published_at") or item.get("created_at")),
+                    posted_at=_parse_iso_dt(
+                        item.get("published_at") or item.get("created_at")
+                    ),
                 )
             )
         return [j for j in jobs if j.title]
@@ -207,7 +223,11 @@ class MultiCompanyFeedCollector:
             html_url = issue.get("html_url") or ""
             title = (issue.get("title") or "").strip()
             body = issue.get("body") or ""
-            labels = [lbl.get("name", "") for lbl in (issue.get("labels") or []) if isinstance(lbl, dict)]
+            labels = [
+                lbl.get("name", "")
+                for lbl in (issue.get("labels") or [])
+                if isinstance(lbl, dict)
+            ]
             location_raw = ", ".join(labels) if labels else "Brazil, Remote"
             jobs.append(
                 CollectedJob(

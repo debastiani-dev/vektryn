@@ -95,7 +95,7 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
                 "Provide either 'raw_text' or an uploaded 'file' (.pdf, .docx, .txt)."
             )
         return attrs
-    
+
     def validate_label(self, value: str) -> str:
         user = self.context["request"].user
         qs = ResumeProfile.objects.filter(user=user, label=value)

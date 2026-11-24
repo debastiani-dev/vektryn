@@ -6,7 +6,9 @@ from apps.matching.models.matching import MatchScore
 
 class MatchScoreFilter(django_filters.FilterSet):
     resume_profile = django_filters.UUIDFilter(field_name="resume_profile__uuid")
-    min_fit_score = django_filters.NumberFilter(field_name="fit_score", lookup_expr="gte")
+    min_fit_score = django_filters.NumberFilter(
+        field_name="fit_score", lookup_expr="gte"
+    )
     min_cosine = django_filters.NumberFilter(
         field_name="cosine_similarity", lookup_expr="gte"
     )

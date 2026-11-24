@@ -24,7 +24,9 @@ def configure_telemetry(service_name: str = "vektryn-control-plane") -> None:
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces"))
+        BatchSpanProcessor(
+            OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces")
+        )
     )
     trace.set_tracer_provider(provider)
     DjangoInstrumentor().instrument(excluded_urls="health,metrics")

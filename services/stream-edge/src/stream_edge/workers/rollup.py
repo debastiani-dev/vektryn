@@ -124,10 +124,14 @@ def run_daily_rollup(target_date: date | None = None) -> int:
                 )
         conn.commit()
 
-    logger.info("Upserted %d StackTrendDaily rows for bucket_date=%s", len(mentions), bucket)
+    logger.info(
+        "Upserted %d StackTrendDaily rows for bucket_date=%s", len(mentions), bucket
+    )
     return len(mentions)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
+    )
     run_daily_rollup()
