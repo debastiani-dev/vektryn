@@ -244,6 +244,21 @@ resource "google_cloud_run_v2_service" "frontend" {
         container_port = 80
       }
 
+      env {
+        name  = "CONTROL_PLANE_URL"
+        value = google_cloud_run_v2_service.control_plane.uri
+      }
+
+      env {
+        name  = "STREAM_EDGE_URL"
+        value = google_cloud_run_v2_service.stream_edge.uri
+      }
+
+      env {
+        name  = "NGINX_RESOLVER"
+        value = "8.8.8.8"
+      }
+
       resources {
         limits = {
           cpu    = "1"
