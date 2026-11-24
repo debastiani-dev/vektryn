@@ -1,3 +1,8 @@
+from io import BytesIO
+from pathlib import Path
+from urllib.parse import urlparse
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 import pytest
 from rest_framework.test import APIClient, APIRequestFactory
@@ -7,9 +12,11 @@ from apps.matching.models.matching import MatchScore
 from apps.matching.serializers.matching import MatchScoreSerializer
 from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.serializers.resumes import ResumeProfileSerializer
+from apps.resumes.services.resume_service import ResumeService
 from apps.tracker.serializers.leads import ApplicationLeadSerializer
 from apps.tracker.services.leads import create_lead, update_lead
 from config.settings import ControlPlaneSettings, _build_database_config
+from vektryn_contracts import verify_stream_token
 from vektryn_contracts.enums import (
     ATSSource,
     ContractType,
@@ -194,3 +201,41 @@ def test_health_and_authenticated_leads_endpoints():
     auth_resp = client.get("/api/v1/leads/")
     assert auth_resp.status_code == 200
     assert auth_resp.json()["results"] == []
+
+
+@pytest.mark.django_db
+def test_auth_me_endpoint_issues_verifiable_stream_token():
+    client = APIClient()
+    unauth = client.get("/api/v1/auth/me/")
+    assert unauth.status_code in (401, 403)
+
+    user = User.objects.create_user(username="eve", email="eve@example.com", password="pw")
+    client.force_authenticate(user=user)
+    resp = client.get("/api/v1/auth/me/")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == str(user.id)
+    assert payload["username"] == "eve"
+    assert verify_stream_token(payload["stream_token"], settings.STREAM_AUTH_SECRET) == str(user.id)
+
+
+@pytest.mark.django_db
+def test_resume_service_persists_uploaded_file_uri(tmp_path, settings):
+    settings.STORAGE_BACKEND = "local"
+    settings.LOCAL_STORAGE_DIR = tmp_path
+    settings.GEMINI_API_KEY = ""
+
+    user = User.objects.create_user(username="frank", password="pw")
+    uploaded = BytesIO(b"Senior Python Engineer with Django, FastAPI, and Kafka.")
+    uploaded.name = "frank_resume.txt"
+
+    service = ResumeService(user=user)
+    profile = service.create_profile(
+        validated_data={"label": "Uploaded Resume"},
+        uploaded_file=uploaded,
+    )
+
+    assert profile.source_file_gcs_uri.startswith("file://")
+    saved_path = Path(urlparse(profile.source_file_gcs_uri).path)
+    assert saved_path.exists()
+    assert saved_path.read_bytes() == b"Senior Python Engineer with Django, FastAPI, and Kafka."

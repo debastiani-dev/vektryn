@@ -1,6 +1,7 @@
 import hashlib
-import time
 from io import BytesIO
+from pathlib import Path
+import time
 from typing import BinaryIO, Callable, TypeVar
 
 from django.conf import settings
@@ -16,6 +17,11 @@ from pypdf import PdfReader
 from apps.base.services.base_service import BaseService
 from apps.resumes.models.resumes import ResumeProfile
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS
+
+try:
+    from google.cloud import storage as gcs_storage
+except ImportError:
+    gcs_storage = None
 
 
 T = TypeVar("T")
@@ -71,9 +77,8 @@ class ResumeService(BaseService):
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
     @classmethod
-    def extract_text_from_upload(cls, filename: str, file_obj: BinaryIO) -> str:
+    def extract_text_from_bytes(cls, filename: str, raw_bytes: bytes) -> str:
         lower_name = filename.lower()
-        raw_bytes = file_obj.read()
 
         if lower_name.endswith(".pdf"):
             reader = PdfReader(BytesIO(raw_bytes))
@@ -91,6 +96,35 @@ class ResumeService(BaseService):
         if not text:
             raise ValueError("Could not extract any readable text from the uploaded file.")
         return text
+
+    @classmethod
+    def extract_text_from_upload(cls, filename: str, file_obj: BinaryIO) -> str:
+        return cls.extract_text_from_bytes(filename, file_obj.read())
+
+    @staticmethod
+    def save_uploaded_resume(
+        *,
+        user_id: str,
+        filename: str,
+        content_hash: str,
+        raw_bytes: bytes,
+    ) -> str:
+        safe_name = Path(filename).name.replace("/", "_").replace(" ", "_") or "resume"
+        object_path = f"resumes/{user_id}/{content_hash[:16]}_{safe_name}"
+
+        bucket_name = (getattr(settings, "GCS_RESUMES_BUCKET", "") or "").strip()
+        storage_backend = (getattr(settings, "STORAGE_BACKEND", "") or "").strip().lower()
+        if bucket_name and storage_backend != "local" and gcs_storage is not None:
+            client = gcs_storage.Client()
+            blob = client.bucket(bucket_name).blob(object_path)
+            blob.upload_from_string(raw_bytes, content_type="application/octet-stream")
+            return f"gs://{bucket_name}/{object_path}"
+
+        local_dir = Path(getattr(settings, "LOCAL_STORAGE_DIR", Path(".local_storage")))
+        target_path = local_dir / object_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(raw_bytes)
+        return target_path.resolve().as_uri()
 
     def generate_embedding_and_skills(
         self,
@@ -165,15 +199,30 @@ class ResumeService(BaseService):
     ) -> dict:
         data = dict(validated_data)
         raw_text = data.get("raw_text", "")
+        uploaded_bytes: bytes | None = None
+        uploaded_name = ""
 
         if uploaded_file is not None:
-            raw_text = self.extract_text_from_upload(uploaded_file.name, uploaded_file)
+            uploaded_bytes = uploaded_file.read()
+            uploaded_name = getattr(uploaded_file, "name", "resume.txt")
+            raw_text = self.extract_text_from_bytes(uploaded_name, uploaded_bytes)
             data["raw_text"] = raw_text
 
         if not raw_text and instance is not None:
             raw_text = instance.raw_text
 
         new_hash = self.compute_text_hash(raw_text)
+        if uploaded_bytes is not None:
+            owner_id = str(
+                getattr(self.user, "id", None)
+                or (instance.user_id if instance is not None else "anonymous")
+            )
+            data["source_file_gcs_uri"] = self.save_uploaded_resume(
+                user_id=owner_id,
+                filename=uploaded_name,
+                content_hash=new_hash,
+                raw_bytes=uploaded_bytes,
+            )
         content_changed = (
             instance is None
             or instance.content_hash != new_hash
