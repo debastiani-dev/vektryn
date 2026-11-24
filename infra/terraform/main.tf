@@ -1,6 +1,7 @@
 locals {
   required_apis = [
     "run.googleapis.com",
+    "compute.googleapis.com",
     "artifactregistry.googleapis.com",
     "secretmanager.googleapis.com",
     "storage.googleapis.com",
@@ -61,6 +62,23 @@ module "networking" {
   labels      = local.common_labels
 
   depends_on = [google_project_service.apis]
+}
+
+module "data_node" {
+  source                   = "./modules/data_node"
+  project_id               = var.project_id
+  region                   = var.region
+  zone                     = var.data_vm_zone
+  machine_type             = var.data_vm_machine_type
+  internal_ip              = var.data_vm_internal_ip
+  labels                   = local.common_labels
+  vpc_network_id           = module.networking.vpc_network_id
+  vpc_subnetwork_id        = module.networking.vpc_subnetwork_id
+  stream_edge_sa_email     = module.iam.stream_edge_sa_email
+  stream_edge_latest_image = "${module.storage.artifact_registry_uri}/stream-edge:latest"
+  snapshots_bucket_name    = module.storage.snapshots_bucket_name
+
+  depends_on = [module.networking, module.iam, module.storage, module.secrets]
 }
 
 module "cloud_run" {
