@@ -91,19 +91,3 @@ jobs:
             --region="${{ env.REGION }}" \
             --format="value(status.url)")
           curl --fail --silent --show-error "${CP_URL}/api/v1/health/"
-
-
-      - name: Run Django database migrations
-        run: |
-          gcloud run jobs execute vektryn-migrate \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
-            --region="${{ env.REGION }}" \
-            --wait
-
-      - name: Smoke check Control Plane health
-        run: |
-          CP_URL=$(gcloud run services describe vektryn-control-plane \
-            --project="${{ vars.GCP_PROJECT_ID }}" \
-            --region="${{ env.REGION }}" \
-            --format="value(status.url)")
-          curl --fail --silent --show-error "${CP_URL}/api/v1/health/"

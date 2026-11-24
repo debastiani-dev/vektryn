@@ -9,6 +9,7 @@ locals {
     "iamcredentials.googleapis.com",
     "sts.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "serviceusage.googleapis.com",
     "vpcaccess.googleapis.com",
     "cloudscheduler.googleapis.com",
   ]
