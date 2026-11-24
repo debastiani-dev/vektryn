@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -15,6 +16,7 @@ from apps.resumes.serializers.resumes import ResumeProfileSerializer
 from apps.resumes.services.resume_service import ResumeService
 from apps.tracker.serializers.leads import ApplicationLeadSerializer
 from apps.tracker.services.leads import create_lead, update_lead
+from config import telemetry as cp_telemetry
 from config.settings import ControlPlaneSettings, _build_database_config
 from vektryn_contracts import verify_stream_token
 from vektryn_contracts.enums import (
@@ -282,3 +284,29 @@ def test_auth_csrf_login_and_logout_flow():
 
     me_after_logout = client.get("/api/v1/auth/me/")
     assert me_after_logout.status_code in (401, 403)
+
+
+def test_database_url_sslmode_and_proxy_settings(monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://neonuser:neonpass@ep-demo.neon.tech:5432/vektryn?sslmode=require",
+    )
+    cfg = ControlPlaneSettings(_env_file=None)
+    db_cfg = _build_database_config(cfg)
+    assert db_cfg["OPTIONS"] == {"sslmode": "require"}
+    assert settings.SECURE_PROXY_SSL_HEADER == ("HTTP_X_FORWARDED_PROTO", "https")
+    assert settings.USE_X_FORWARDED_HOST is True
+
+
+def test_control_plane_sentry_gated_by_dsn(monkeypatch):
+    monkeypatch.setattr(cp_telemetry, "_SENTRY_CONFIGURED", False)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    with patch.object(cp_telemetry.sentry_sdk, "init") as mock_init:
+        assert cp_telemetry.configure_sentry() is False
+        mock_init.assert_not_called()
+
+        monkeypatch.setenv("SENTRY_DSN", "https://public@example.ingest.sentry.io/1")
+        with patch.object(cp_telemetry.sentry_sdk, "set_tag") as mock_tag:
+            assert cp_telemetry.configure_sentry("vektryn-control-plane") is True
+            mock_init.assert_called_once()
+            mock_tag.assert_called_once_with("service", "vektryn-control-plane")

@@ -7,8 +7,9 @@ from fastapi import HTTPException
 import httpx
 import pytest
 
+from stream_edge import telemetry as edge_telemetry
 from stream_edge.api.alerts_sse import _resolve_stream_user_id
-from stream_edge.clients.kafka import KafkaEventProducer
+from stream_edge.clients.kafka import KafkaEventProducer, _kafka_base_config
 from stream_edge.collectors.ats_boards import BreezyCollector
 from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
 from stream_edge.config import StreamEdgeSettings, settings as edge_settings
@@ -294,3 +295,33 @@ async def test_metrics_endpoint_exposes_custom_vektryn_counters():
     body = response.text
     assert "vektryn_ingest_jobs_total" in body
     assert "vektryn_sse_active_clients" in body
+
+
+def test_kafka_base_config_supports_optional_sasl_ssl(monkeypatch):
+    monkeypatch.setattr(edge_settings, "kafka_security_protocol", "SASL_SSL")
+    monkeypatch.setattr(edge_settings, "kafka_sasl_mechanism", "SCRAM-SHA-256")
+    monkeypatch.setattr(edge_settings, "kafka_sasl_username", "redpanda-user")
+    monkeypatch.setattr(edge_settings, "kafka_sasl_password", "redpanda-pass")
+
+    cfg = _kafka_base_config("seed.redpanda.cloud:9092")
+    assert cfg == {
+        "bootstrap.servers": "seed.redpanda.cloud:9092",
+        "security.protocol": "SASL_SSL",
+        "sasl.mechanism": "SCRAM-SHA-256",
+        "sasl.username": "redpanda-user",
+        "sasl.password": "redpanda-pass",
+    }
+
+
+def test_stream_edge_sentry_gated_by_dsn(monkeypatch):
+    monkeypatch.setattr(edge_telemetry, "_SENTRY_CONFIGURED", False)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    with patch.object(edge_telemetry.sentry_sdk, "init") as mock_init:
+        assert edge_telemetry.configure_sentry("vektryn-stream-edge") is False
+        mock_init.assert_not_called()
+
+        monkeypatch.setenv("SENTRY_DSN", "https://public@example.ingest.sentry.io/2")
+        with patch.object(edge_telemetry.sentry_sdk, "set_tag") as mock_tag:
+            assert edge_telemetry.configure_sentry("vektryn-stream-edge") is True
+            mock_init.assert_called_once()
+            mock_tag.assert_called_once_with("service", "vektryn-stream-edge")
