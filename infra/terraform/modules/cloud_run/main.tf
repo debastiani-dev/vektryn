@@ -60,7 +60,7 @@ resource "google_cloud_run_v2_service" "control_plane" {
 
       env {
         name  = "DJANGO_ALLOWED_HOSTS"
-        value = ".run.app,${var.domain_name}"
+        value = ".run.app,${var.domain_name},localhost,127.0.0.1"
       }
 
       env {
@@ -137,6 +137,10 @@ resource "google_cloud_run_v2_service" "control_plane" {
         http_get {
           path = "/health/"
           port = 8000
+          http_headers {
+            name  = "Host"
+            value = var.domain_name
+          }
         }
         initial_delay_seconds = 5
         period_seconds        = 10
