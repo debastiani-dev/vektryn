@@ -209,14 +209,18 @@ def test_auth_me_endpoint_issues_verifiable_stream_token():
     unauth = client.get("/api/v1/auth/me/")
     assert unauth.status_code in (401, 403)
 
-    user = User.objects.create_user(username="eve", email="eve@example.com", password="pw")
+    user = User.objects.create_user(
+        username="eve", email="eve@example.com", password="pw"
+    )
     client.force_authenticate(user=user)
     resp = client.get("/api/v1/auth/me/")
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["id"] == str(user.id)
     assert payload["username"] == "eve"
-    assert verify_stream_token(payload["stream_token"], settings.STREAM_AUTH_SECRET) == str(user.id)
+    assert verify_stream_token(
+        payload["stream_token"], settings.STREAM_AUTH_SECRET
+    ) == str(user.id)
 
 
 @pytest.mark.django_db
@@ -238,4 +242,43 @@ def test_resume_service_persists_uploaded_file_uri(tmp_path, settings):
     assert profile.source_file_gcs_uri.startswith("file://")
     saved_path = Path(urlparse(profile.source_file_gcs_uri).path)
     assert saved_path.exists()
-    assert saved_path.read_bytes() == b"Senior Python Engineer with Django, FastAPI, and Kafka."
+    assert (
+        saved_path.read_bytes()
+        == b"Senior Python Engineer with Django, FastAPI, and Kafka."
+    )
+
+
+@pytest.mark.django_db
+def test_auth_csrf_login_and_logout_flow():
+    User.objects.create_user(
+        username="grace", email="grace@example.com", password="secret-password"
+    )
+    client = APIClient()
+
+    csrf_resp = client.get("/api/v1/auth/csrf/")
+    assert csrf_resp.status_code == 200
+
+    bad_login = client.post(
+        "/api/v1/auth/login/",
+        {"username": "grace", "password": "wrong"},
+        format="json",
+    )
+    assert bad_login.status_code == 401
+
+    good_login = client.post(
+        "/api/v1/auth/login/",
+        {"username": "grace", "password": "secret-password"},
+        format="json",
+    )
+    assert good_login.status_code == 200
+    assert good_login.json()["username"] == "grace"
+    assert good_login.json()["stream_token"]
+
+    me_resp = client.get("/api/v1/auth/me/")
+    assert me_resp.status_code == 200
+
+    logout_resp = client.post("/api/v1/auth/logout/")
+    assert logout_resp.status_code == 204
+
+    me_after_logout = client.get("/api/v1/auth/me/")
+    assert me_after_logout.status_code in (401, 403)
