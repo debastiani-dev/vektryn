@@ -53,8 +53,18 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
+        name  = "DJANGO_DEBUG"
+        value = "false"
+      }
+
+      env {
         name  = "DJANGO_ALLOWED_HOSTS"
         value = ".run.app,${var.domain_name}"
+      }
+
+      env {
+        name  = "CSRF_TRUSTED_ORIGINS"
+        value = "https://${var.domain_name}"
       }
 
       env {

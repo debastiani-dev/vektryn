@@ -440,7 +440,7 @@ export function JobRadarView() {
             } else {
                 const created = await vektrynApi.createLead({
                     job_posting: jobId,
-                    resume_profile: match.resume_profile,
+                    resume_profile: match.resume_profile_uuid,
                     status: "saved",
                 });
                 setSavedLeadsByJobId((prev) => ({

@@ -73,7 +73,8 @@ export interface JobPostingDetail extends JobPostingSummary {
 export interface MatchScore {
     uuid: string;
     job_posting: JobPostingSummary;
-    resume_profile: string;
+    resume_profile_uuid: string;
+    resume_profile_label?: string;
     cosine_similarity: number;
     fit_score: number | null;
     matched_skills: string[];
@@ -81,6 +82,8 @@ export interface MatchScore {
     talking_points: string[];
     gap_summary: string;
     scoring_model: string;
+    is_stale?: boolean;
+    alert_sent_at?: string | null;
     created_at: string;
 }
 

@@ -7,6 +7,7 @@ ifndef NOCOLOR
 	RESET  := $(shell tput -Txterm sgr0)
 endif
 
+CONTRACTS_DIR     := packages/contracts
 CONTROL_PLANE_DIR := services/control-plane
 STREAM_EDGE_DIR   := services/stream-edge
 PORT              ?= 8000
@@ -132,15 +133,20 @@ worker/dlq:
 	@echo "${GREEN}Running DLQ inspection/replay${RESET}"
 	cd $(STREAM_EDGE_DIR) && $(EDGE_ENV) poetry run python -m stream_edge.workers.dlq_replay $(args)
 	
-## Run pytest test suite (pass opts="..." for extra pytest flags)
+## Run pytest test suite across all Python packages (pass opts="..." for extra pytest flags)
 .PHONY: test
 test:
-	@echo "${GREEN}Running pytest${RESET}"
-	poetry run pytest $(opts)
+	@echo "${GREEN}Running pytest (contracts)${RESET}"
+	cd $(CONTRACTS_DIR) && poetry run pytest $(opts)
+	@echo "${GREEN}Running pytest (control-plane)${RESET}"
+	cd $(CONTROL_PLANE_DIR) && POSTGRES_HOST=localhost poetry run pytest $(opts)
+	@echo "${GREEN}Running pytest (stream-edge)${RESET}"
+	cd $(STREAM_EDGE_DIR) && poetry run pytest $(opts)
 
-## Run Ruff and Black checks
+## Run Ruff and Black checks across all Python packages
 .PHONY: lint
 lint:
 	@echo "${GREEN}Running Ruff and Black checks${RESET}"
-	poetry run ruff check .
-	poetry run black --check .
+	cd $(CONTRACTS_DIR) && poetry run ruff check . && poetry run black --check .
+	cd $(CONTROL_PLANE_DIR) && poetry run ruff check . && poetry run black --check .
+	cd $(STREAM_EDGE_DIR) && poetry run ruff check . && poetry run black --check .
