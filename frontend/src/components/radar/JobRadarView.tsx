@@ -14,8 +14,8 @@ import {
     X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { vektrynApi } from "../../api/client";
-import type { MatchScore } from "../../types/models";
+import { fetchAllPages, vektrynApi } from "../../api/client";
+import type { MatchScore, ResumeProfile } from "../../types/models";
 import {
     formatAtsSource,
     formatContractType,
@@ -25,6 +25,7 @@ import {
     formatSeniority,
     scoreVisualTheme,
 } from "../../utils/format";
+import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
 import { GapAnalysisDrawer } from "./GapAnalysisDrawer";
 import { JobPostingDrawer } from "./JobPostingDrawer";
@@ -358,6 +359,13 @@ function RadarMatchCard({
 
 export function JobRadarView() {
     const [matches, setMatches] = useState<MatchScore[]>([]);
+    const [totalCount, setTotalCount] = useState(0);
+    const [hasNext, setHasNext] = useState(false);
+    const [hasPrevious, setHasPrevious] = useState(false);
+    const [page, setPage] = useState(1);
+    const [resumes, setResumes] = useState<ResumeProfile[]>([]);
+    const [resumeFilter, setResumeFilter] = useState("");
+    const [evaluatedOnly, setEvaluatedOnly] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
@@ -378,9 +386,9 @@ export function JobRadarView() {
     }
 
     async function refreshSavedLeads() {
-        const leadRes = await vektrynApi.listLeads();
+        const allLeads = await fetchAllPages(vektrynApi.listLeads);
         const nextMap: Record<string, string> = {};
-        for (const lead of leadRes.results) {
+        for (const lead of allLeads) {
             const jobId = extractJobPostingId(lead.job_posting);
             if (jobId && lead.uuid) {
                 nextMap[jobId] = lead.uuid;
@@ -391,24 +399,55 @@ export function JobRadarView() {
 
     useEffect(() => {
         let cancelled = false;
-        async function load() {
-            setLoading(true);
-            setError(null);
-            try {
-                const [matchRes, leadRes] = await Promise.all([
-                    vektrynApi.listMatches(),
-                    vektrynApi.listLeads(),
-                ]);
-                if (cancelled) return;
-                setMatches(matchRes.results);
+        async function loadMeta() {
+            const [leadsResult, resumesResult] = await Promise.allSettled([
+                fetchAllPages(vektrynApi.listLeads),
+                vektrynApi.listResumes(),
+            ]);
+            if (cancelled) return;
+            if (leadsResult.status === "fulfilled") {
                 const nextMap: Record<string, string> = {};
-                for (const lead of leadRes.results) {
+                for (const lead of leadsResult.value) {
                     const jobId = extractJobPostingId(lead.job_posting);
                     if (jobId && lead.uuid) {
                         nextMap[jobId] = lead.uuid;
                     }
                 }
                 setSavedLeadsByJobId(nextMap);
+            }
+            if (resumesResult.status === "fulfilled") {
+                setResumes(resumesResult.value.results);
+            }
+        }
+        void loadMeta();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        async function loadMatches() {
+            setLoading(true);
+            setError(null);
+            try {
+                const params = new URLSearchParams();
+                params.set("page", String(page));
+                if (minScore > 0) {
+                    params.set("min_fit_score", String(minScore));
+                }
+                if (resumeFilter) {
+                    params.set("resume_profile", resumeFilter);
+                }
+                if (evaluatedOnly) {
+                    params.set("evaluated_only", "true");
+                }
+                const matchRes = await vektrynApi.listMatches(`?${params.toString()}`);
+                if (cancelled) return;
+                setMatches(matchRes.results);
+                setTotalCount(matchRes.count);
+                setHasNext(Boolean(matchRes.next));
+                setHasPrevious(Boolean(matchRes.previous));
             } catch (err) {
                 if (!cancelled) {
                     setError(err instanceof Error ? err.message : "Failed to load matches");
@@ -417,11 +456,11 @@ export function JobRadarView() {
                 if (!cancelled) setLoading(false);
             }
         }
-        void load();
+        void loadMatches();
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [page, minScore, resumeFilter, evaluatedOnly]);
 
     async function handleToggleSaveLead(match: MatchScore) {
         const jobId = match.job_posting.uuid;
@@ -475,7 +514,6 @@ export function JobRadarView() {
     }
 
     const filtered = matches.filter((m) => {
-        if (minScore > 0 && (m.fit_score ?? 0) < minScore) return false;
         if (!searchTerm.trim()) return true;
         const q = searchTerm.toLowerCase();
         return (
@@ -488,11 +526,15 @@ export function JobRadarView() {
     const strongCount = matches.filter((m) => (m.fit_score ?? 0) >= 80).length;
     const alertCount = matches.filter((m) => (m.fit_score ?? 0) >= 70).length;
     const savedCount = Object.keys(savedLeadsByJobId).length;
-    const hasActiveFilters = Boolean(searchTerm.trim()) || minScore > 0;
+    const hasActiveFilters =
+        Boolean(searchTerm.trim()) || minScore > 0 || Boolean(resumeFilter) || evaluatedOnly;
 
     function resetFilters() {
         setSearchTerm("");
         setMinScore(0);
+        setResumeFilter("");
+        setEvaluatedOnly(false);
+        setPage(1);
     }
 
     function renderResults() {
@@ -568,7 +610,7 @@ export function JobRadarView() {
                                 Scored Matches
                             </p>
                             <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-100">
-                                {loading ? "—" : matches.length}
+                                {loading ? "—" : totalCount}
                             </p>
                         </div>
                     </Tooltip>
@@ -641,24 +683,67 @@ export function JobRadarView() {
                     )}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-4 text-sm">
+                <div className="flex flex-wrap items-center gap-3 text-sm">
                     {!loading && (
                         <span className="font-mono text-xs tabular-nums text-zinc-400">
-                            {filtered.length} of {matches.length} roles
+                            {filtered.length} shown · {totalCount} total
                         </span>
                     )}
+
+                    {resumes.length > 0 && (
+                        <Tooltip content="Filter matches by target resume profile">
+                            <div className="relative">
+                                <select
+                                    aria-label="Filter by resume profile"
+                                    value={resumeFilter}
+                                    onChange={(e) => {
+                                        setResumeFilter(e.target.value);
+                                        setPage(1);
+                                    }}
+                                    className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                >
+                                    <option value="">All resumes</option>
+                                    {resumes.map((r) => (
+                                        <option key={r.uuid} value={r.uuid}>
+                                            {r.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
+                            </div>
+                        </Tooltip>
+                    )}
+
+                    <Tooltip content="Only show roles with a Stage 2 AI fit score">
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setEvaluatedOnly((prev) => !prev);
+                                setPage(1);
+                            }}
+                            className={`rounded-xl border px-3.5 py-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${evaluatedOnly
+                                    ? "border-violet-500/40 bg-violet-500/15 text-violet-200"
+                                    : "border-zinc-800 bg-zinc-950/70 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
+                                }`}
+                        >
+                            AI Scored Only
+                        </button>
+                    </Tooltip>
 
                     <div className="flex items-center gap-2.5">
                         <SlidersHorizontal className="h-4 w-4 text-zinc-400" />
                         <label htmlFor="min-fit" className="text-zinc-400">
                             Min Fit:
                         </label>
-                        <Tooltip content="Filter roles by minimum AI fit score threshold">
+                        <Tooltip content="Filter roles by minimum AI fit score threshold (server-side)">
                             <div className="relative">
                                 <select
                                     id="min-fit"
                                     value={minScore}
-                                    onChange={(e) => setMinScore(Number(e.target.value))}
+                                    onChange={(e) => {
+                                        setMinScore(Number(e.target.value));
+                                        setPage(1);
+                                    }}
                                     className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
                                 >
                                     <option value={0}>All scored roles</option>
@@ -679,6 +764,16 @@ export function JobRadarView() {
             )}
 
             {renderResults()}
+
+            <PaginationBar
+                page={page}
+                totalCount={totalCount}
+                hasPrevious={hasPrevious}
+                hasNext={hasNext}
+                loading={loading}
+                itemLabel="matches"
+                onPageChange={setPage}
+            />
 
             <JobPostingDrawer
                 jobPreview={selectedJobMatch?.job_posting ?? null}

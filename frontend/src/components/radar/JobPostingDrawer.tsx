@@ -86,11 +86,16 @@ export function JobPostingDrawer({
     onSaveLead,
     onOpenGapDetails,
 }: Readonly<JobPostingDrawerProps>) {
-    const [detail, setDetail] = useState<JobPostingDetail | null>(null);
-    const [loadingDetail, setLoadingDetail] = useState(false);
-    const [detailError, setDetailError] = useState<string | null>(null);
+    const [fetchState, setFetchState] = useState<{
+        uuid: string | null;
+        detail: JobPostingDetail | null;
+        error: string | null;
+    }>({ uuid: null, detail: null, error: null });
 
     const jobUuid = jobPreview?.uuid ?? null;
+    const detail = jobUuid && fetchState.uuid === jobUuid ? fetchState.detail : null;
+    const detailError = jobUuid && fetchState.uuid === jobUuid ? fetchState.error : null;
+    const loadingDetail = Boolean(jobUuid && fetchState.uuid !== jobUuid);
 
     useEffect(() => {
         if (!jobPreview) return;
@@ -105,36 +110,28 @@ export function JobPostingDrawer({
 
     useEffect(() => {
         if (!jobUuid) {
-            setDetail(null);
-            setDetailError(null);
-            setLoadingDetail(false);
             return;
         }
 
         let cancelled = false;
-        async function fetchDetail(uuid: string) {
-            setLoadingDetail(true);
-            setDetailError(null);
-            setDetail(null);
-            try {
-                const res = await vektrynApi.getJob(uuid);
+        vektrynApi
+            .getJob(jobUuid)
+            .then((res) => {
                 if (!cancelled) {
-                    setDetail(res);
+                    setFetchState({ uuid: jobUuid, detail: res, error: null });
                 }
-            } catch (err) {
+            })
+            .catch((err) => {
                 if (!cancelled) {
-                    setDetailError(
-                        err instanceof Error ? err.message : "Failed to load full job listing",
-                    );
+                    setFetchState({
+                        uuid: jobUuid,
+                        detail: null,
+                        error:
+                            err instanceof Error ? err.message : "Failed to load full job listing",
+                    });
                 }
-            } finally {
-                if (!cancelled) {
-                    setLoadingDetail(false);
-                }
-            }
-        }
+            });
 
-        void fetchDetail(jobUuid);
         return () => {
             cancelled = true;
         };

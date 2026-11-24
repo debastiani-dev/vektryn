@@ -1,9 +1,11 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, BarChart3 } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, BarChart3, Calendar, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
 import type { StackTrendDaily, TechCategory } from "../../types/models";
 import { categoryBadgeStyle, formatCategoryLabel, formatUsdAnnual } from "../../utils/format";
+import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
+import { StackTrendsChart } from "./StackTrendsChart";
 
 type SortColumn = "mention_count" | "unique_companies_count" | "median_annual_usd" | "bucket_date";
 type SortDirection = "asc" | "desc";
@@ -58,7 +60,13 @@ function TrendsSkeleton() {
 
 export function StackTrendsView() {
     const [trends, setTrends] = useState<StackTrendDaily[]>([]);
+    const [totalCount, setTotalCount] = useState(0);
+    const [hasNext, setHasNext] = useState(false);
+    const [hasPrevious, setHasPrevious] = useState(false);
+    const [page, setPage] = useState(1);
     const [category, setCategory] = useState<TechCategory | "all">("all");
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
     const [sortBy, setSortBy] = useState<SortColumn>("mention_count");
     const [sortDir, setSortDir] = useState<SortDirection>("desc");
     const [loading, setLoading] = useState(true);
@@ -70,9 +78,24 @@ export function StackTrendsView() {
             setLoading(true);
             setError(null);
             try {
-                const query = category === "all" ? "" : `?category=${encodeURIComponent(category)}`;
-                const res = await vektrynApi.listTrends(query);
-                if (!cancelled) setTrends(res.results);
+                const params = new URLSearchParams();
+                params.set("page", String(page));
+                if (category !== "all") {
+                    params.set("category", category);
+                }
+                if (dateFrom) {
+                    params.set("date_from", dateFrom);
+                }
+                if (dateTo) {
+                    params.set("date_to", dateTo);
+                }
+                const res = await vektrynApi.listTrends(`?${params.toString()}`);
+                if (!cancelled) {
+                    setTrends(res.results);
+                    setTotalCount(res.count);
+                    setHasNext(Boolean(res.next));
+                    setHasPrevious(Boolean(res.previous));
+                }
             } catch (err) {
                 if (!cancelled) {
                     setError(err instanceof Error ? err.message : "Failed to load stack trends");
@@ -85,7 +108,7 @@ export function StackTrendsView() {
         return () => {
             cancelled = true;
         };
-    }, [category]);
+    }, [category, dateFrom, dateTo, page]);
 
     function toggleSort(column: SortColumn) {
         if (sortBy === column) {
@@ -365,28 +388,85 @@ export function StackTrendsView() {
                 </div>
             </header>
 
-            <div className="flex flex-wrap items-center gap-2.5">
-                {CATEGORIES.map((item) => {
-                    const active = category === item.id;
-                    const categoryTooltip =
-                        item.id === "all"
-                            ? "Show demand trends across all technology categories"
-                            : `Filter demand trends to ${item.label.toLowerCase()}`;
-                    return (
-                        <Tooltip key={item.id} content={categoryTooltip}>
+            <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                    {CATEGORIES.map((item) => {
+                        const active = category === item.id;
+                        const categoryTooltip =
+                            item.id === "all"
+                                ? "Show demand trends across all technology categories"
+                                : `Filter demand trends to ${item.label.toLowerCase()}`;
+                        return (
+                            <Tooltip key={item.id} content={categoryTooltip}>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setCategory(item.id);
+                                        setPage(1);
+                                    }}
+                                    className={`rounded-xl px-3.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${active
+                                            ? "bg-violet-600 text-white shadow-sm shadow-violet-600/25"
+                                            : "border border-zinc-800 bg-zinc-950/70 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                                        }`}
+                                >
+                                    {item.label}
+                                </button>
+                            </Tooltip>
+                        );
+                    })}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <div className="flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-zinc-500" />
+                        <label htmlFor="trends-date-from" className="text-zinc-400">
+                            From
+                        </label>
+                        <input
+                            id="trends-date-from"
+                            type="date"
+                            value={dateFrom}
+                            onChange={(e) => {
+                                setDateFrom(e.target.value);
+                                setPage(1);
+                            }}
+                            className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 font-mono text-xs text-zinc-200 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                        />
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <label htmlFor="trends-date-to" className="text-zinc-400">
+                            To
+                        </label>
+                        <input
+                            id="trends-date-to"
+                            type="date"
+                            value={dateTo}
+                            onChange={(e) => {
+                                setDateTo(e.target.value);
+                                setPage(1);
+                            }}
+                            className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 font-mono text-xs text-zinc-200 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                        />
+                    </div>
+
+                    {(dateFrom || dateTo) && (
+                        <Tooltip content="Clear date range filter">
                             <button
                                 type="button"
-                                onClick={() => setCategory(item.id)}
-                                className={`rounded-xl px-4 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${active
-                                        ? "bg-violet-600 text-white shadow-sm shadow-violet-600/25"
-                                        : "border border-zinc-800 bg-zinc-900/70 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
-                                    }`}
+                                onClick={() => {
+                                    setDateFrom("");
+                                    setDateTo("");
+                                    setPage(1);
+                                }}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:text-zinc-100"
                             >
-                                {item.label}
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                Clear dates
                             </button>
                         </Tooltip>
-                    );
-                })}
+                    )}
+                </div>
             </div>
 
             {error && (
@@ -395,7 +475,19 @@ export function StackTrendsView() {
                 </div>
             )}
 
+            {!loading && trends.length > 0 && <StackTrendsChart trends={trends} />}
+
             {renderContent()}
+
+            <PaginationBar
+                page={page}
+                totalCount={totalCount}
+                hasPrevious={hasPrevious}
+                hasNext={hasNext}
+                loading={loading}
+                itemLabel="trend rows"
+                onPageChange={setPage}
+            />
         </div>
     );
 }

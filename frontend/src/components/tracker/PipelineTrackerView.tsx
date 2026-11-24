@@ -13,7 +13,7 @@ import {
     Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { vektrynApi } from "../../api/client";
+import { fetchAllPages, vektrynApi } from "../../api/client";
 import type { ApplicationLead, LeadPriority, LeadStatus, MatchScore } from "../../types/models";
 import {
     formatContractType,
@@ -587,19 +587,19 @@ export function PipelineTrackerView() {
             setError(null);
             try {
                 const [leadsResult, matchesResult] = await Promise.allSettled([
-                    vektrynApi.listLeads(),
-                    vektrynApi.listMatches(),
+                    fetchAllPages(vektrynApi.listLeads),
+                    fetchAllPages(vektrynApi.listMatches),
                 ]);
                 if (cancelled) return;
 
                 if (leadsResult.status === "rejected") {
                     throw leadsResult.reason;
                 }
-                setLeads(leadsResult.value.results);
+                setLeads(leadsResult.value);
 
                 if (matchesResult.status === "fulfilled") {
                     const nextMatchMap: Record<string, MatchScore> = {};
-                    for (const match of matchesResult.value.results) {
+                    for (const match of matchesResult.value) {
                         nextMatchMap[match.job_posting.uuid] = match;
                     }
                     setMatchesByJobId(nextMatchMap);
