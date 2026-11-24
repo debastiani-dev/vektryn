@@ -43,6 +43,17 @@ class ControlPlaneSettings(BaseSettings):
     gemini_scoring_model: str = "gemini-4-hydrogen"
     gemini_fallback_scoring_model: str = "gemini-3.5-flash-lite"
 
+    stream_auth_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("STREAM_AUTH_SECRET", "DJANGO_SECRET_KEY", "SECRET_KEY"),
+    )
+    storage_backend: str = ""
+    local_storage_dir: Path = REPO_ROOT / ".local_storage"
+    gcs_resumes_bucket: str = Field(
+        default="",
+        validation_alias=AliasChoices("GCS_RESUMES_BUCKET", "GCS_BUCKET_RESUMES"),
+    )
+
 
 def _build_database_config(settings: ControlPlaneSettings) -> dict[str, object]:
     if settings.database_url.strip():
@@ -187,6 +198,11 @@ GEMINI_API_KEY = env.gemini_api_key
 GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model
 GEMINI_SCORING_MODEL = env.gemini_scoring_model
 GEMINI_FALLBACK_SCORING_MODEL = env.gemini_fallback_scoring_model
+
+STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
+STORAGE_BACKEND = env.storage_backend.strip().lower()
+LOCAL_STORAGE_DIR = env.local_storage_dir
+GCS_RESUMES_BUCKET = env.gcs_resumes_bucket.strip()
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

@@ -1,13 +1,16 @@
 import asyncio
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from fastapi import HTTPException
 import httpx
 import pytest
 
+from stream_edge.api.alerts_sse import _resolve_stream_user_id
 from stream_edge.clients.kafka import KafkaEventProducer
-from stream_edge.config import StreamEdgeSettings
+from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
+from stream_edge.config import StreamEdgeSettings, settings as edge_settings
 from stream_edge.main import app
 from stream_edge.workers.dlq_replay import replay_dlq
 from stream_edge.workers.lifecycle import _MARK_CLOSED_SQL, _is_posting_closed
@@ -18,6 +21,7 @@ from vektryn_contracts import (
     EMBEDDING_DIMENSIONS,
     JobEnrichedEvent,
     KafkaTopic,
+    sign_stream_token,
 )
 
 
@@ -144,3 +148,85 @@ def test_matcher_handles_zero_active_resumes_without_unbound_local_error():
 
     fake_conn.commit.assert_called_once()
     fake_producer.flush.assert_called_once()
+
+
+async def test_ingest_requires_api_key_when_configured(monkeypatch):
+    monkeypatch.setattr(edge_settings, "ingest_api_key", "secret-ingest-key")
+
+    app.state.kafka_producer = MagicMock(publish=AsyncMock())
+    app.state.snapshot_storage = MagicMock(
+        save_raw_html=AsyncMock(return_value="file:///tmp/job.html")
+    )
+
+    sample_payload = {
+        "ats_source": "greenhouse",
+        "external_id": "gh-1",
+        "title": "Senior Backend Engineer",
+        "company_name": "Acme",
+        "apply_url": "https://example.com/jobs/1",
+        "raw_html": "<p>Python</p>",
+        "description_clean": "Python Django",
+    }
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing_key = await client.post("/ingest/jobs", json=sample_payload)
+        wrong_key = await client.post(
+            "/ingest/jobs",
+            json=sample_payload,
+            headers={"X-Ingest-API-Key": "wrong"},
+        )
+        valid_key = await client.post(
+            "/ingest/jobs",
+            json=sample_payload,
+            headers={"X-Ingest-API-Key": "secret-ingest-key"},
+        )
+
+    assert missing_key.status_code == 401
+    assert wrong_key.status_code == 401
+    assert valid_key.status_code == 202
+
+
+async def test_push_jobs_to_edge_attaches_ingest_api_key():
+    captured_headers: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_headers.update(dict(request.headers))
+        return httpx.Response(202, json={"status": "accepted"})
+
+    job = CollectedJob(
+        ats_source=ATSSource.GREENHOUSE,
+        external_id="gh-77",
+        title="Backend Engineer",
+        company_name="Acme",
+        apply_url="https://example.com/jobs/77",
+        raw_html="<p>Hello</p>",
+        description_clean="Hello",
+    )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        accepted = await push_jobs_to_edge(
+            http_client=client,
+            edge_base_url="http://edge",
+            jobs=[job],
+            ingest_api_key="collector-secret",
+        )
+
+    assert accepted == 1
+    assert captured_headers.get("x-ingest-api-key") == "collector-secret"
+
+
+def test_stream_alerts_enforces_signed_token_and_blocks_spoofing(monkeypatch):
+    monkeypatch.setattr(edge_settings, "stream_auth_secret", "stream-secret-xyz")
+    valid_token = sign_stream_token("42", "stream-secret-xyz", ttl_seconds=300)
+
+    assert _resolve_stream_user_id(token=valid_token, user_id="999") == "42"
+
+    with pytest.raises(HTTPException) as missing_exc:
+        _resolve_stream_user_id(token=None, user_id="42")
+    assert missing_exc.value.status_code == 401
+
+    with pytest.raises(HTTPException) as invalid_exc:
+        _resolve_stream_user_id(token="42.9999999999.bad", user_id="42")
+    assert invalid_exc.value.status_code == 401

@@ -128,6 +128,13 @@ export interface LiveMatchAlert {
     apply_url: string;
 }
 
+export interface CurrentUser {
+    id: string;
+    username: string;
+    email: string;
+    stream_token: string;
+}
+
 export interface PaginatedResponse<T> {
     count: number;
     next: string | null;

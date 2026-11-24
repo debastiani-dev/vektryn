@@ -4,6 +4,8 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.base.views.auth import current_user_view
+
 
 def healthcheck(_request):
     return JsonResponse({"status": "ok", "service": "control-plane"})
@@ -17,6 +19,7 @@ urlpatterns = [
     path("metrics", metrics_view, name="metrics-noslash"),
     path("metrics/", metrics_view, name="metrics"),
     path("api/v1/health/", healthcheck, name="api-healthcheck"),
+    path("api/v1/auth/me/", current_user_view, name="api-auth-me"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/v1/resumes/", include("apps.resumes.urls")),

@@ -19,6 +19,8 @@ class StreamEdgeSettings(BaseSettings):
     service_name: str = "stream-edge"
     debug: bool = True
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    ingest_api_key: str = ""
+    stream_auth_secret: str = ""
 
     # PostgreSQL (pgvector)
     database_url: str = ""

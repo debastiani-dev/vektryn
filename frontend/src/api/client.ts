@@ -1,5 +1,6 @@
 import type {
     ApplicationLead,
+    CurrentUser,
     JobPostingDetail,
     LeadPriority,
     LeadStatus,
@@ -36,6 +37,8 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const vektrynApi = {
+    getCurrentUser: () => apiFetch<CurrentUser>("/api/v1/auth/me/"),
+
     getJob: (uuid: string) =>
         apiFetch<JobPostingDetail>(`/api/v1/jobs/${encodeURIComponent(uuid)}/`),
 

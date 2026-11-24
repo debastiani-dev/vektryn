@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import type { LiveMatchAlert } from "../types/models";
 
-export function useAlertStream(userId?: string) {
+export function useAlertStream(streamToken: string | null) {
     const [alerts, setAlerts] = useState<LiveMatchAlert[]>([]);
     const [connected, setConnected] = useState(false);
 
     useEffect(() => {
-        const query = userId ? `?user_id=${encodeURIComponent(userId)}` : "";
+        if (!streamToken) {
+            setConnected(false);
+            return;
+        }
+
+        const query = `?token=${encodeURIComponent(streamToken)}`;
         const source = new EventSource(`/stream/alerts${query}`);
 
         source.onopen = () => setConnected(true);
@@ -25,7 +30,7 @@ export function useAlertStream(userId?: string) {
             source.close();
             setConnected(false);
         };
-    }, [userId]);
+    }, [streamToken]);
 
     const dismissAlert = (eventId: string) =>
         setAlerts((prev) => prev.filter((item) => item.event_id !== eventId));

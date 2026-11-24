@@ -1,12 +1,14 @@
 from datetime import datetime
 import hashlib
+import hmac
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field, HttpUrl
 
 from stream_edge.clients.gcs import SnapshotStorageClient
 from stream_edge.clients.kafka import KafkaEventProducer
+from stream_edge.config import settings
 from vektryn_contracts import (
     ATSSource,
     JobRawEvent,
@@ -71,10 +73,24 @@ def get_storage(request: Request) -> SnapshotStorageClient:
     return request.app.state.snapshot_storage
 
 
+def verify_ingest_api_key(
+    x_ingest_api_key: str | None = Header(default=None, alias="X-Ingest-API-Key"),
+) -> None:
+    expected = settings.ingest_api_key.strip()
+    if not expected:
+        return
+    if not x_ingest_api_key or not hmac.compare_digest(x_ingest_api_key.strip(), expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing ingest API key",
+        )
+
+
 @router.post(
     "/jobs",
     response_model=IngestJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(verify_ingest_api_key)],
 )
 async def ingest_job(
     payload: IngestJobRequest,

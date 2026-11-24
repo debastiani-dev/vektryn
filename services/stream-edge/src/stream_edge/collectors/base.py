@@ -7,6 +7,7 @@ import httpx
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, HttpUrl
 
+from stream_edge.config import settings
 from vektryn_contracts import ATSSource
 
 logger = logging.getLogger(__name__)
@@ -46,14 +47,18 @@ async def push_jobs_to_edge(
     http_client: httpx.AsyncClient,
     edge_base_url: str,
     jobs: list[CollectedJob],
+    ingest_api_key: str | None = None,
 ) -> int:
     endpoint = f"{edge_base_url.rstrip('/')}/ingest/jobs"
+    api_key = (ingest_api_key if ingest_api_key is not None else settings.ingest_api_key).strip()
+    headers = {"X-Ingest-API-Key": api_key} if api_key else {}
     accepted = 0
     for job in jobs:
         try:
             resp = await http_client.post(
                 endpoint,
                 json=job.model_dump(mode="json"),
+                headers=headers,
                 timeout=15.0,
             )
             resp.raise_for_status()

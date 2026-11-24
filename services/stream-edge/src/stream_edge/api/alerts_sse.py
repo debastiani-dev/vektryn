@@ -4,11 +4,12 @@ import logging
 import uuid
 
 from confluent_kafka import KafkaError, Message
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from stream_edge.clients.kafka import create_kafka_consumer
-from vektryn_contracts import JobMatchAlertEvent, KafkaTopic
+from stream_edge.config import settings
+from vektryn_contracts import JobMatchAlertEvent, KafkaTopic, verify_stream_token
 
 logger = logging.getLogger(__name__)
 
@@ -80,16 +81,34 @@ async def _alert_event_generator(
         await asyncio.to_thread(consumer.close)
 
 
+def _resolve_stream_user_id(token: str | None, user_id: str | None) -> str | None:
+    secret = settings.stream_auth_secret.strip()
+    if secret:
+        verified_user = verify_stream_token(token or "", secret)
+        if verified_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Valid stream authentication token is required",
+            )
+        return verified_user
+    return user_id
+
+
 @router.get("/alerts")
 async def stream_match_alerts(
     request: Request,
+    token: str | None = Query(
+        default=None,
+        description="Signed HMAC stream token issued by /api/v1/auth/me/",
+    ),
     user_id: str | None = Query(
         default=None,
-        description="Optional user ID filter for match alerts",
+        description="Optional user ID filter (only honored when STREAM_AUTH_SECRET is unset)",
     ),
 ) -> StreamingResponse:
+    scoped_user_id = _resolve_stream_user_id(token=token, user_id=user_id)
     return StreamingResponse(
-        _alert_event_generator(request=request, user_id=user_id),
+        _alert_event_generator(request=request, user_id=scoped_user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

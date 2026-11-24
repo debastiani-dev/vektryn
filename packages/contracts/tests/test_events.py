@@ -19,6 +19,8 @@ from vektryn_contracts import (
     alert_partition_key,
     dlq_partition_key,
     job_partition_key,
+    sign_stream_token,
+    verify_stream_token,
 )
 
 
@@ -108,3 +110,11 @@ def test_job_match_alert_and_dlq_contracts() -> None:
         raw_payload={"external_id": "gh-987654"},
     )
     assert dlq_partition_key(dlq.original_topic) == "jobs.raw"
+
+
+def test_stream_token_sign_and_verify() -> None:
+    token = sign_stream_token("42", "super-secret", ttl_seconds=60, now=1_000_000)
+    assert verify_stream_token(token, "super-secret", now=1_000_030) == "42"
+    assert verify_stream_token(token, "wrong-secret", now=1_000_030) is None
+    assert verify_stream_token(token, "super-secret", now=1_000_060) is None
+    assert verify_stream_token(f"{token}tampered", "super-secret", now=1_000_030) is None
