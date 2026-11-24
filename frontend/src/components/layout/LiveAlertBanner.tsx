@@ -1,54 +1,87 @@
 import { BellRing, ExternalLink, X } from "lucide-react";
 import type { LiveMatchAlert } from "../../types/models";
+import { scoreBadgeStyle } from "../../utils/format";
+import { Tooltip } from "../ui/Tooltip";
 
 interface LiveAlertBannerProps {
     alerts: LiveMatchAlert[];
     onDismiss: (eventId: string) => void;
 }
 
-export function LiveAlertBanner({ alerts, onDismiss }: LiveAlertBannerProps) {
+export function LiveAlertBanner({ alerts, onDismiss }: Readonly<LiveAlertBannerProps>) {
     if (alerts.length === 0) {
         return null;
     }
 
     return (
-        <div className="border-b border-violet-500/30 bg-violet-950/30 px-4 py-2.5">
-            <div className="mx-auto flex max-w-7xl flex-col gap-2">
-                {alerts.slice(0, 3).map((alert) => (
+        <aside
+            aria-label="Live match alerts"
+            aria-live="polite"
+            className="pointer-events-none fixed top-20 right-4 z-40 flex w-[calc(100%-2rem)] max-w-md flex-col gap-3 sm:right-8"
+        >
+            {alerts.slice(0, 3).map((alert) => {
+                const simPct = (alert.cosine_similarity * 100).toFixed(0);
+                return (
                     <div
                         key={alert.event_id}
-                        className="flex items-center justify-between gap-4 rounded-lg border border-violet-500/30 bg-zinc-900/90 px-3.5 py-2 text-sm"
+                        className="animate-toast-in pointer-events-auto rounded-2xl border border-violet-500/35 bg-zinc-900/95 p-4 shadow-2xl shadow-black/60 ring-1 ring-inset ring-white/[0.05] backdrop-blur-md"
                     >
-                        <div className="flex min-w-0 items-center gap-3">
-                            <BellRing className="h-4 w-4 shrink-0 text-violet-400" />
-                            <span className="rounded bg-emerald-500/15 px-2 py-0.5 font-mono text-xs font-semibold text-emerald-300">
-                                {alert.fit_score}% fit
-                            </span>
-                            <span className="truncate font-medium text-zinc-100">{alert.title}</span>
-                            <span className="shrink-0 text-zinc-400">at {alert.company_name}</span>
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1 space-y-1.5">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-violet-300">
+                                        <BellRing className="h-3.5 w-3.5" />
+                                        Live Match
+                                    </span>
+                                    <Tooltip
+                                        content={`AI fit score: ${alert.fit_score}% · Vector similarity: ${simPct}%`}
+                                        side="bottom"
+                                    >
+                                        <span
+                                            className={`rounded-md px-2 py-0.5 font-mono text-xs font-semibold tabular-nums ${scoreBadgeStyle(
+                                                alert.fit_score,
+                                            )}`}
+                                        >
+                                            {alert.fit_score}% Fit
+                                        </span>
+                                    </Tooltip>
+                                </div>
+
+                                <p className="truncate text-sm font-semibold text-zinc-100">
+                                    {alert.title}
+                                </p>
+                                <p className="truncate text-xs text-zinc-400">
+                                    {alert.company_name}
+                                </p>
+                            </div>
+
+                            <Tooltip content="Dismiss live alert" side="bottom">
+                                <button
+                                    type="button"
+                                    onClick={() => onDismiss(alert.event_id)}
+                                    aria-label="Dismiss alert"
+                                    className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </Tooltip>
                         </div>
 
-                        <div className="flex shrink-0 items-center gap-2">
-                            <a
-                                href={alert.apply_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-violet-500"
-                            >
-                                Apply <ExternalLink className="h-3 w-3" />
-                            </a>
-                            <button
-                                type="button"
-                                onClick={() => onDismiss(alert.event_id)}
-                                aria-label="Dismiss alert"
-                                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                            >
-                                <X className="h-4 w-4" />
-                            </button>
+                        <div className="mt-3 flex items-center justify-end gap-2 border-t border-zinc-800/80 pt-3">
+                            <Tooltip content="Open original job posting in a new tab">
+                                <a
+                                    href={alert.apply_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                >
+                                    Apply Now <ExternalLink className="h-3.5 w-3.5" />
+                                </a>
+                            </Tooltip>
                         </div>
                     </div>
-                ))}
-            </div>
-        </div>
+                );
+            })}
+        </aside>
     );
 }
