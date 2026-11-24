@@ -1,6 +1,8 @@
+import os
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # services/stream-edge/src/stream_edge/config.py -> repo root is 4 parents up
@@ -19,6 +21,7 @@ class StreamEdgeSettings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # PostgreSQL (pgvector)
+    database_url: str = ""
     postgres_db: str = "vektryn"
     postgres_user: str = "vektryn"
     postgres_password: str = "vektryn_dev_password"
@@ -34,9 +37,16 @@ class StreamEdgeSettings(BaseSettings):
     kafka_enrichment_group_id: str = "vektryn-enrichment-worker"
     kafka_matcher_group_id: str = "vektryn-matcher-worker"
 
-    # Storage: local directory in dev; set GCS_BUCKET_NAME in GCP prod
+    # Storage: local directory in dev; set GCS_BUCKET_NAME / GCS_SNAPSHOTS_BUCKET in GCP prod
+    storage_backend: str = ""
     local_storage_dir: Path = REPO_ROOT / ".local_storage"
-    gcs_bucket_name: str = ""
+    gcs_bucket_name: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GCS_BUCKET_NAME",
+            "GCS_SNAPSHOTS_BUCKET",
+        ),
+    )
 
     # Gemini API
     gemini_api_key: str = ""
@@ -52,6 +62,10 @@ class StreamEdgeSettings(BaseSettings):
     ashby_board_tokens: str = ""
 
     @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
+    @property
     def greenhouse_boards(self) -> list[str]:
         return [b.strip() for b in self.greenhouse_board_tokens.split(",") if b.strip()]
 
@@ -61,6 +75,16 @@ class StreamEdgeSettings(BaseSettings):
 
     @property
     def postgres_dsn(self) -> str:
+        if self.database_url.strip():
+            env_has_database_url = bool(os.environ.get("DATABASE_URL", "").strip())
+            if env_has_database_url or not os.environ.get("POSTGRES_HOST"):
+                return self.database_url.strip()
+            parsed = urlparse(self.database_url.strip())
+            user = unquote(parsed.username or "") or self.postgres_user
+            password = unquote(parsed.password or "") or self.postgres_password
+            port = parsed.port or self.postgres_port
+            db = parsed.path.lstrip("/") or self.postgres_db
+            return f"postgresql://{user}:{password}@{self.postgres_host}:{port}/{db}"
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"

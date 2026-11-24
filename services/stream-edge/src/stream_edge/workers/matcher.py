@@ -370,7 +370,7 @@ def _upsert_job_and_score_sync(
                         key=alert_partition_key(user_id),
                         event=alert_event,
                     )
-            logger.info(
+                logger.info(
                     "Evaluated %s @ %s against resume=%s | cosine=%.4f | fit_score=%s | alert=%s",
                     enriched.title,
                     enriched.company_name,

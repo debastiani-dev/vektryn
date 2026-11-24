@@ -3,9 +3,8 @@ import json
 import logging
 from typing import Any
 
-from confluent_kafka import Consumer, KafkaException, Message, Producer
+from confluent_kafka import Consumer, Message, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
-from pydantic import BaseModel
 
 from stream_edge.config import settings
 from vektryn_contracts import (
@@ -80,6 +79,30 @@ class KafkaEventProducer:
     ) -> None:
         await asyncio.to_thread(self._publish_sync, topic, key, event)
 
+    def _publish_raw_sync(
+        self,
+        topic: KafkaTopic | str,
+        key: str,
+        payload: dict[str, Any] | str,
+    ) -> None:
+        topic_name = topic.value if isinstance(topic, KafkaTopic) else topic
+        raw_json = payload if isinstance(payload, str) else json.dumps(payload)
+        self._producer.produce(
+            topic=topic_name,
+            key=key.encode("utf-8"),
+            value=raw_json.encode("utf-8"),
+        )
+        self._producer.poll(0)
+
+    async def publish_raw(
+        self,
+        *,
+        topic: KafkaTopic | str,
+        key: str,
+        payload: dict[str, Any] | str,
+    ) -> None:
+        await asyncio.to_thread(self._publish_raw_sync, topic, key, payload)
+
     async def publish_dlq(
         self,
         *,
@@ -112,6 +135,9 @@ class KafkaEventProducer:
 
     def flush(self, timeout: float = 5.0) -> None:
         self._producer.flush(timeout)
+
+    def close(self, timeout: float = 5.0) -> None:
+        self.flush(timeout)
 
 
 def create_kafka_consumer(

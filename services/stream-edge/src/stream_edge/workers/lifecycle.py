@@ -33,7 +33,7 @@ _MARK_CLOSED_SQL = """
     SET is_active = FALSE,
         closed_at = %s,
         modified_at = %s
-    WHERE uuid = ANY(%s)
+    WHERE uuid = ANY(%s::uuid[])
 """
 
 

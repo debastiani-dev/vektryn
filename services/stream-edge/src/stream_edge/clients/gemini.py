@@ -1,5 +1,6 @@
 import asyncio
 from decimal import Decimal
+import time
 from typing import Callable, TypeVar
 
 from google import genai
@@ -45,8 +46,6 @@ class GeminiStreamClient:
 
     @classmethod
     def _call_with_retry(cls, fn: Callable[[], T], max_attempts: int = 4) -> T:
-        import time
-
         last_exc: genai_errors.APIError | None = None
         for attempt in range(max_attempts):
             try:
@@ -63,7 +62,7 @@ class GeminiStreamClient:
         *,
         prompt: str,
         schema: type[BaseModel],
-    ) -> str:
+    ) -> tuple[str, str]:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=schema,
@@ -77,7 +76,7 @@ class GeminiStreamClient:
                     config=config,
                 )
             )
-            return res.text
+            return res.text, settings.gemini_scoring_model
         except genai_errors.APIError as exc:
             if (
                 exc.code in self.RETRYABLE_STATUS_CODES
@@ -90,7 +89,7 @@ class GeminiStreamClient:
                         config=config,
                     )
                 )
-                return res.text
+                return res.text, settings.gemini_fallback_scoring_model
             raise
 
     async def extract_job_metadata(
@@ -112,7 +111,7 @@ class GeminiStreamClient:
             f"Location: {location_raw}\n\n"
             f"Description:\n{description_clean[:12000]}"
         )
-        raw_json = await asyncio.to_thread(
+        raw_json, _ = await asyncio.to_thread(
             self._generate_structured_sync,
             prompt=prompt,
             schema=ExtractedJobMetadata,
@@ -171,9 +170,9 @@ class GeminiStreamClient:
             f"TARGET STACK: {', '.join(job_stack)}\n"
             f"JOB DESCRIPTION:\n{job_description[:10000]}"
         )
-        raw_json = await asyncio.to_thread(
+        raw_json, used_model = await asyncio.to_thread(
             self._generate_structured_sync,
             prompt=prompt,
             schema=ResumeGapEvaluation,
         )
-        return ResumeGapEvaluation.model_validate_json(raw_json), settings.gemini_scoring_model
+        return ResumeGapEvaluation.model_validate_json(raw_json), used_model
