@@ -4,6 +4,14 @@ from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.services.resume_service import GeminiServiceError, ResumeService
 
 
+def _as_list(value: object) -> list:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
+
+
 def _expand_multi_value_items(raw_items: list) -> list:
     expanded = []
     for item in raw_items:

@@ -36,6 +36,12 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "modified_at",
         ]
 
+    def validate_resume_profile(self, value):
+        request = self.context.get("request")
+        if value is not None and request is not None and value.user_id != request.user.id:
+            raise serializers.ValidationError("You can only link your own resume profiles.")
+        return value
+
     def create(self, validated_data: dict) -> ApplicationLead:
         return create_lead(user=self.context["request"].user, validated_data=validated_data)
 

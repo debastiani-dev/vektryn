@@ -1,7 +1,9 @@
-from pathlib import Path
 from enum import StrEnum
+import os
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from vektryn_contracts.enums import ContractType, RegionEligibility, SeniorityLevel
@@ -17,11 +19,19 @@ class ControlPlaneSettings(BaseSettings):
         extra="ignore",
     )
 
-    django_secret_key: str = "change-me-in-production-use-long-random-string"
+    django_secret_key: str = Field(
+        default="change-me-in-production-use-long-random-string",
+        validation_alias=AliasChoices("DJANGO_SECRET_KEY", "SECRET_KEY"),
+    )
     django_debug: bool = True
     django_allowed_hosts: str = "localhost,127.0.0.1,control-plane"
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    csrf_trusted_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000",
+        validation_alias=AliasChoices("CSRF_TRUSTED_ORIGINS", "DJANGO_CSRF_TRUSTED_ORIGINS"),
+    )
 
+    database_url: str = ""
     postgres_db: str = "vektryn"
     postgres_user: str = "vektryn"
     postgres_password: str = "vektryn_dev_password"
@@ -34,6 +44,55 @@ class ControlPlaneSettings(BaseSettings):
     gemini_fallback_scoring_model: str = "gemini-3.5-flash-lite"
 
 
+def _build_database_config(settings: ControlPlaneSettings) -> dict[str, object]:
+    if settings.database_url.strip():
+        parsed = urlparse(settings.database_url.strip())
+        env_has_database_url = bool(os.environ.get("DATABASE_URL", "").strip())
+        host = (
+            settings.postgres_host
+            if not env_has_database_url and os.environ.get("POSTGRES_HOST")
+            else (parsed.hostname or settings.postgres_host)
+        )
+        port = (
+            settings.postgres_port
+            if not env_has_database_url and os.environ.get("POSTGRES_PORT")
+            else (parsed.port or settings.postgres_port)
+        )
+        name = (
+            settings.postgres_db
+            if not env_has_database_url and os.environ.get("POSTGRES_DB")
+            else (parsed.path.lstrip("/") or settings.postgres_db)
+        )
+        user = (
+            settings.postgres_user
+            if not env_has_database_url and os.environ.get("POSTGRES_USER")
+            else (unquote(parsed.username or "") or settings.postgres_user)
+        )
+        password = (
+            settings.postgres_password
+            if not env_has_database_url and os.environ.get("POSTGRES_PASSWORD")
+            else (unquote(parsed.password or "") or settings.postgres_password)
+        )
+        return {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": name,
+            "USER": user,
+            "PASSWORD": password,
+            "HOST": host,
+            "PORT": port,
+            "CONN_MAX_AGE": 60,
+        }
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": settings.postgres_db,
+        "USER": settings.postgres_user,
+        "PASSWORD": settings.postgres_password,
+        "HOST": settings.postgres_host,
+        "PORT": settings.postgres_port,
+        "CONN_MAX_AGE": 60,
+    }
+
+
 env = ControlPlaneSettings()
 
 SECRET_KEY = env.django_secret_key
@@ -41,8 +100,7 @@ DEBUG = env.django_debug
 ALLOWED_HOSTS = [h.strip() for h in env.django_allowed_hosts.split(",") if h.strip()]
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    o.strip() for o in env.csrf_trusted_origins.split(",") if o.strip()
 ]
 
 INSTALLED_APPS = [
@@ -100,15 +158,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": env.postgres_db,
-        "USER": env.postgres_user,
-        "PASSWORD": env.postgres_password,
-        "HOST": env.postgres_host,
-        "PORT": env.postgres_port,
-        "CONN_MAX_AGE": 60,
-    }
+    "default": _build_database_config(env),
 }
 
 AUTH_PASSWORD_VALIDATORS = [

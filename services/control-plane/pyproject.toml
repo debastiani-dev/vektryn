@@ -36,3 +36,8 @@ pytest-django = "^4.9"
 ruff = "^0.9"
 black = "^25.1"
 mypy = "^1.14"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["tests.py", "test_*.py"]
+testpaths = ["tests"]
