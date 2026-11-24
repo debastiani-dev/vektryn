@@ -30,7 +30,7 @@ _FETCH_POSTINGS_SQL = """
     SELECT company_name, tech_stack, salary_min, salary_max, salary_currency, salary_period
     FROM jobs_jobposting
     WHERE is_deleted = FALSE
-      AND DATE(COALESCE(posted_at, created_at) AT TIME ZONE 'UTC') = %s
+      AND DATE(created_at AT TIME ZONE 'UTC') = %s
 """
 
 _UPSERT_TREND_SQL = """
