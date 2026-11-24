@@ -7,6 +7,7 @@ variable "frontend_image" { type = string }
 variable "control_plane_sa_email" { type = string }
 variable "stream_edge_sa_email" { type = string }
 variable "frontend_sa_email" { type = string }
+variable "scheduler_sa_email" { type = string }
 variable "snapshots_bucket_name" { type = string }
 variable "resumes_bucket_name" { type = string }
 variable "secret_ids" { type = map(string) }
@@ -112,6 +113,16 @@ resource "google_cloud_run_v2_service" "control_plane" {
         }
       }
 
+      env {
+        name = "STREAM_AUTH_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-stream-auth-secret"]
+            version = "latest"
+          }
+        }
+      }
+
       startup_probe {
         http_get {
           path = "/health/"
@@ -209,6 +220,26 @@ resource "google_cloud_run_v2_service" "stream_edge" {
         }
       }
 
+      env {
+        name = "INGEST_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-ingest-api-key"]
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "STREAM_AUTH_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-stream-auth-secret"]
+            version = "latest"
+          }
+        }
+      }
+
       startup_probe {
         http_get {
           path = "/health"
@@ -300,7 +331,136 @@ resource "google_cloud_run_domain_mapping" "frontend_domain" {
   }
 }
 
+# Scheduled Cloud Run Jobs (collectors, daily stack rollup, upstream lifecycle check)
+locals {
+  scheduled_jobs = {
+    collect = {
+      name     = "vektryn-collect"
+      command  = ["python", "-m", "stream_edge.collectors.run"]
+      schedule = "0 */4 * * *"
+      timeout  = "900s"
+    }
+    rollup = {
+      name     = "vektryn-rollup"
+      command  = ["python", "-m", "stream_edge.workers.rollup"]
+      schedule = "0 1 * * *"
+      timeout  = "300s"
+    }
+    lifecycle = {
+      name     = "vektryn-lifecycle"
+      command  = ["python", "-m", "stream_edge.workers.lifecycle"]
+      schedule = "0 3 * * *"
+      timeout  = "600s"
+    }
+  }
+}
+
+resource "google_cloud_run_v2_job" "scheduled_workers" {
+  for_each = local.scheduled_jobs
+
+  name     = each.value.name
+  location = var.region
+  project  = var.project_id
+  labels   = var.labels
+
+  template {
+    template {
+      service_account = var.stream_edge_sa_email
+      timeout         = each.value.timeout
+      max_retries     = 1
+
+      vpc_access {
+        network_interfaces {
+          network    = var.vpc_network_id
+          subnetwork = var.vpc_subnetwork_id
+        }
+        egress = "PRIVATE_RANGES_ONLY"
+      }
+
+      containers {
+        image   = var.stream_edge_image
+        command = each.value.command
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "512Mi"
+          }
+        }
+
+        env {
+          name  = "STREAM_EDGE_URL"
+          value = google_cloud_run_v2_service.stream_edge.uri
+        }
+
+        env {
+          name = "INGEST_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-ingest-api-key"]
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-database-url"]
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "REDIS_URL"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-redis-url"]
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "google_cloud_run_v2_job_iam_member" "scheduler_invokers" {
+  for_each = google_cloud_run_v2_job.scheduled_workers
+
+  project  = var.project_id
+  location = var.region
+  name     = each.value.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.scheduler_sa_email}"
+}
+
+resource "google_cloud_scheduler_job" "scheduled_worker_triggers" {
+  for_each = local.scheduled_jobs
+
+  name        = "${each.value.name}-schedule"
+  description = "Triggers Cloud Run Job ${each.value.name}"
+  region      = var.region
+  project     = var.project_id
+  schedule    = each.value.schedule
+  time_zone   = "UTC"
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.scheduled_workers[each.key].name}:run"
+
+    oauth_token {
+      service_account_email = var.scheduler_sa_email
+    }
+  }
+
+  depends_on = [google_cloud_run_v2_job_iam_member.scheduler_invokers]
+}
+
 output "control_plane_url" { value = google_cloud_run_v2_service.control_plane.uri }
 output "stream_edge_url" { value = google_cloud_run_v2_service.stream_edge.uri }
 output "frontend_url" { value = google_cloud_run_v2_service.frontend.uri }
 output "domain_mapping_records" { value = google_cloud_run_domain_mapping.frontend_domain.status[0].resource_records }
+output "scheduled_job_names" { value = { for k, v in google_cloud_run_v2_job.scheduled_workers : k => v.name } }

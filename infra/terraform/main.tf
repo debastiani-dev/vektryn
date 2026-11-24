@@ -7,6 +7,7 @@ locals {
     "iam.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "vpcaccess.googleapis.com",
+    "cloudscheduler.googleapis.com",
   ]
 
   common_labels = {
@@ -70,6 +71,7 @@ module "cloud_run" {
   control_plane_sa_email = module.iam.control_plane_sa_email
   stream_edge_sa_email   = module.iam.stream_edge_sa_email
   frontend_sa_email      = module.iam.frontend_sa_email
+  scheduler_sa_email     = module.iam.scheduler_sa_email
   snapshots_bucket_name  = module.storage.snapshots_bucket_name
   resumes_bucket_name    = module.storage.resumes_bucket_name
   secret_ids             = module.secrets.secret_ids

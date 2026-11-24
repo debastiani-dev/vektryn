@@ -21,6 +21,12 @@ resource "google_service_account" "frontend" {
   project      = var.project_id
 }
 
+resource "google_service_account" "scheduler" {
+  account_id   = "vektryn-scheduler"
+  display_name = "Vektryn Cloud Scheduler Invoker Service Account"
+  project      = var.project_id
+}
+
 # GCS Permissions
 resource "google_storage_bucket_iam_member" "control_plane_resumes" {
   bucket = var.resumes_bucket
@@ -42,8 +48,22 @@ resource "google_storage_bucket_iam_member" "stream_edge_resumes_read" {
 
 # Secret Manager Permissions
 locals {
-  control_plane_secrets = ["vektryn-django-secret-key", "vektryn-database-url", "vektryn-redis-url", "vektryn-kafka-bootstrap", "vektryn-gemini-api-key"]
-  stream_edge_secrets   = ["vektryn-database-url", "vektryn-redis-url", "vektryn-kafka-bootstrap", "vektryn-gemini-api-key"]
+  control_plane_secrets = [
+    "vektryn-django-secret-key",
+    "vektryn-database-url",
+    "vektryn-redis-url",
+    "vektryn-kafka-bootstrap",
+    "vektryn-gemini-api-key",
+    "vektryn-stream-auth-secret",
+  ]
+  stream_edge_secrets = [
+    "vektryn-database-url",
+    "vektryn-redis-url",
+    "vektryn-kafka-bootstrap",
+    "vektryn-gemini-api-key",
+    "vektryn-ingest-api-key",
+    "vektryn-stream-auth-secret",
+  ]
 }
 
 resource "google_secret_manager_secret_iam_member" "control_plane_secrets" {
@@ -65,3 +85,4 @@ resource "google_secret_manager_secret_iam_member" "stream_edge_secrets" {
 output "control_plane_sa_email" { value = google_service_account.control_plane.email }
 output "stream_edge_sa_email" { value = google_service_account.stream_edge.email }
 output "frontend_sa_email" { value = google_service_account.frontend.email }
+output "scheduler_sa_email" { value = google_service_account.scheduler.email }
