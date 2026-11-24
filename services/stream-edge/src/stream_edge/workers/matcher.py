@@ -7,6 +7,7 @@ import signal
 import uuid
 
 from confluent_kafka import KafkaError
+from opentelemetry import trace
 from pgvector.psycopg import register_vector
 import psycopg
 
@@ -17,6 +18,7 @@ from stream_edge.clients.kafka import (
     ensure_topics_exist,
 )
 from stream_edge.config import settings
+from stream_edge.telemetry import configure_tracing
 from vektryn_contracts import (
     JobEnrichedEvent,
     JobMatchAlertEvent,
@@ -29,6 +31,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("vektryn-matcher-worker")
 
 
 @dataclass
@@ -385,6 +388,7 @@ def _upsert_job_and_score_sync(
 
 
 async def run_matcher_worker() -> None:
+    configure_tracing("vektryn-matcher-worker")
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     producer = KafkaEventProducer()
@@ -417,12 +421,20 @@ async def run_matcher_worker() -> None:
             try:
                 raw_value = (msg.value() or b"").decode("utf-8")
                 enriched = JobEnrichedEvent.model_validate_json(raw_value)
-                await asyncio.to_thread(
-                    _upsert_job_and_score_sync,
-                    enriched=enriched,
-                    gemini=gemini,
-                    producer=producer,
-                )
+                with tracer.start_as_current_span(
+                    "matcher.upsert_and_score",
+                    attributes={
+                        "vektryn.ats_source": enriched.ats_source.value,
+                        "vektryn.external_id": enriched.external_id,
+                        "vektryn.trace_id": enriched.trace_id,
+                    },
+                ):
+                    await asyncio.to_thread(
+                        _upsert_job_and_score_sync,
+                        enriched=enriched,
+                        gemini=gemini,
+                        producer=producer,
+                    )
                 await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
             except Exception as exc:
                 logger.exception("Failed matching message; routing to DLQ: %s", exc)

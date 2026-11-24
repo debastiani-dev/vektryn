@@ -3,6 +3,7 @@ import logging
 import signal
 
 from confluent_kafka import KafkaError
+from opentelemetry import trace
 
 from stream_edge.clients.gemini import GeminiStreamClient
 from stream_edge.clients.kafka import (
@@ -12,6 +13,7 @@ from stream_edge.clients.kafka import (
 )
 from stream_edge.clients.redis import DedupRedisClient
 from stream_edge.config import settings
+from stream_edge.telemetry import configure_tracing
 from vektryn_contracts import (
     JobEnrichedEvent,
     JobRawEvent,
@@ -24,6 +26,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer("vektryn-enrichment-worker")
 
 
 async def process_raw_message(
@@ -35,71 +38,80 @@ async def process_raw_message(
 ) -> None:
     raw_event = JobRawEvent.model_validate_json(raw_bytes.decode("utf-8"))
 
-    claimed = await redis_client.acquire_content_hash(raw_event.content_hash)
-    if not claimed:
-        logger.info(
-            "Duplicate content_hash skipped: %s (%s:%s)",
-            raw_event.content_hash[:12],
-            raw_event.ats_source.value,
-            raw_event.external_id,
-        )
-        return
+    with tracer.start_as_current_span(
+        "enrichment.process_raw_message",
+        attributes={
+            "vektryn.ats_source": raw_event.ats_source.value,
+            "vektryn.external_id": raw_event.external_id,
+            "vektryn.trace_id": raw_event.trace_id,
+        },
+    ):
+        claimed = await redis_client.acquire_content_hash(raw_event.content_hash)
+        if not claimed:
+            logger.info(
+                "Duplicate content_hash skipped: %s (%s:%s)",
+                raw_event.content_hash[:12],
+                raw_event.ats_source.value,
+                raw_event.external_id,
+            )
+            return
 
-    try:
-        metadata = await gemini.extract_job_metadata(
+        try:
+            metadata = await gemini.extract_job_metadata(
+                title=raw_event.title,
+                company_name=raw_event.company_name,
+                location_raw=raw_event.location_raw,
+                description_clean=raw_event.description_clean,
+            )
+            embedding = await gemini.embed_job_text(
+                title=raw_event.title,
+                company_name=raw_event.company_name,
+                tech_stack=metadata.tech_stack,
+                description_clean=raw_event.description_clean,
+            )
+        except Exception:
+            # Release lock so transient failures can be retried/replayed cleanly
+            await redis_client.release_content_hash(raw_event.content_hash)
+            raise
+
+        enriched = JobEnrichedEvent(
+            trace_id=raw_event.trace_id,
+            ats_source=raw_event.ats_source,
+            external_id=raw_event.external_id,
+            content_hash=raw_event.content_hash,
             title=raw_event.title,
             company_name=raw_event.company_name,
+            apply_url=raw_event.apply_url,
+            raw_html_gcs_uri=raw_event.raw_html_gcs_uri,
             location_raw=raw_event.location_raw,
             description_clean=raw_event.description_clean,
-        )
-        embedding = await gemini.embed_job_text(
-            title=raw_event.title,
-            company_name=raw_event.company_name,
+            posted_at=raw_event.posted_at,
+            seniority=metadata.seniority,
+            contract_type=metadata.contract_type,
+            region_eligibility=metadata.region_eligibility,
+            salary_min=metadata.salary_min,
+            salary_max=metadata.salary_max,
+            salary_currency=metadata.salary_currency,
+            salary_period=metadata.salary_period,
             tech_stack=metadata.tech_stack,
-            description_clean=raw_event.description_clean,
+            embedding=embedding,
         )
-    except Exception:
-        # Release lock so transient failures can be retried/replayed cleanly
-        await redis_client.release_content_hash(raw_event.content_hash)
-        raise
 
-    enriched = JobEnrichedEvent(
-        trace_id=raw_event.trace_id,
-        ats_source=raw_event.ats_source,
-        external_id=raw_event.external_id,
-        content_hash=raw_event.content_hash,
-        title=raw_event.title,
-        company_name=raw_event.company_name,
-        apply_url=raw_event.apply_url,
-        raw_html_gcs_uri=raw_event.raw_html_gcs_uri,
-        location_raw=raw_event.location_raw,
-        description_clean=raw_event.description_clean,
-        posted_at=raw_event.posted_at,
-        seniority=metadata.seniority,
-        contract_type=metadata.contract_type,
-        region_eligibility=metadata.region_eligibility,
-        salary_min=metadata.salary_min,
-        salary_max=metadata.salary_max,
-        salary_currency=metadata.salary_currency,
-        salary_period=metadata.salary_period,
-        tech_stack=metadata.tech_stack,
-        embedding=embedding,
-    )
-
-    await producer.publish(
-        topic=KafkaTopic.JOBS_ENRICHED,
-        key=job_partition_key(enriched.ats_source, enriched.external_id),
-        event=enriched,
-    )
-    logger.info(
-        "Enriched %s:%s -> stack=%s",
-        enriched.ats_source.value,
-        enriched.external_id,
-        enriched.tech_stack,
-    )
+        await producer.publish(
+            topic=KafkaTopic.JOBS_ENRICHED,
+            key=job_partition_key(enriched.ats_source, enriched.external_id),
+            event=enriched,
+        )
+        logger.info(
+            "Enriched %s:%s -> stack=%s",
+            enriched.ats_source.value,
+            enriched.external_id,
+            enriched.tech_stack,
+        )
 
 
 async def run_enrichment_worker() -> None:
+    configure_tracing("vektryn-enrichment-worker")
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     redis_client = DedupRedisClient()

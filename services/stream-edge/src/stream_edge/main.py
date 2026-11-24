@@ -7,12 +7,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import make_asgi_app
 
 from stream_edge.api.alerts_sse import router as alerts_router
@@ -20,6 +15,7 @@ from stream_edge.api.ingest import router as ingest_router
 from stream_edge.clients.gcs import SnapshotStorageClient
 from stream_edge.clients.kafka import KafkaEventProducer
 from stream_edge.config import settings
+from stream_edge.telemetry import configure_tracing
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,18 +27,11 @@ logger = logging.getLogger(__name__)
 def _configure_telemetry(app: FastAPI) -> None:
     app.mount("/metrics", make_asgi_app())
 
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
-    if not endpoint:
+    if not os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
         return
 
-    resource = Resource.create({"service.name": "vektryn-stream-edge"})
-    provider = TracerProvider(resource=resource)
-    provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces"))
-    )
-    trace.set_tracer_provider(provider)
+    configure_tracing("vektryn-stream-edge")
     FastAPIInstrumentor.instrument_app(app, excluded_urls="/health,/metrics")
-    logger.info("OpenTelemetry tracing enabled -> %s", endpoint)
 
 
 async def _shutdown_producer(producer: KafkaEventProducer) -> None:
