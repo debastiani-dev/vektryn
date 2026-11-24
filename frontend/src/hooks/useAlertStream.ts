@@ -3,19 +3,18 @@ import type { LiveMatchAlert } from "../types/models";
 
 export function useAlertStream(streamToken: string | null) {
     const [alerts, setAlerts] = useState<LiveMatchAlert[]>([]);
-    const [connected, setConnected] = useState(false);
+    const [streamConnected, setStreamConnected] = useState(false);
 
     useEffect(() => {
         if (!streamToken) {
-            setConnected(false);
             return;
         }
 
         const query = `?token=${encodeURIComponent(streamToken)}`;
         const source = new EventSource(`/stream/alerts${query}`);
 
-        source.onopen = () => setConnected(true);
-        source.onerror = () => setConnected(false);
+        source.onopen = () => setStreamConnected(true);
+        source.onerror = () => setStreamConnected(false);
 
         source.addEventListener("match_alert", (event: MessageEvent) => {
             try {
@@ -28,12 +27,12 @@ export function useAlertStream(streamToken: string | null) {
 
         return () => {
             source.close();
-            setConnected(false);
+            setStreamConnected(false);
         };
     }, [streamToken]);
 
     const dismissAlert = (eventId: string) =>
         setAlerts((prev) => prev.filter((item) => item.event_id !== eventId));
 
-    return { alerts, connected, dismissAlert };
+    return { alerts, connected: Boolean(streamToken) && streamConnected, dismissAlert };
 }

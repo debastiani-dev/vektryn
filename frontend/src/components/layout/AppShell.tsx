@@ -1,14 +1,16 @@
-import { BarChart3, Kanban, Radar } from "lucide-react";
+import { BarChart3, FileText, Kanban, LogOut, Radar, User } from "lucide-react";
 import type { ReactNode } from "react";
-import type { LiveMatchAlert } from "../../types/models";
+import type { CurrentUser, LiveMatchAlert } from "../../types/models";
 import { Tooltip } from "../ui/Tooltip";
 import { LiveAlertBanner } from "./LiveAlertBanner";
 
-export type ActiveTab = "radar" | "tracker" | "analytics";
+export type ActiveTab = "radar" | "tracker" | "analytics" | "resumes";
 
 interface AppShellProps {
     activeTab: ActiveTab;
     onSelectTab: (tab: ActiveTab) => void;
+    user: CurrentUser | null;
+    onLogout: () => void;
     sseConnected: boolean;
     alerts: LiveMatchAlert[];
     onDismissAlert: (eventId: string) => void;
@@ -39,18 +41,26 @@ const NAV_ITEMS: Array<{
         tooltip: "Explore daily technology demand and median compensation",
         icon: BarChart3,
     },
+    {
+        id: "resumes",
+        label: "Resumes",
+        tooltip: "Upload resumes and configure target seniority, contract, and region filters",
+        icon: FileText,
+    },
 ];
 
 export function AppShell({
     activeTab,
     onSelectTab,
+    user,
+    onLogout,
     sseConnected,
     alerts,
     onDismissAlert,
     children,
 }: Readonly<AppShellProps>) {
     const streamTooltip = sseConnected
-        ? "Connected to real-time SSE match alert stream"
+        ? "Connected to real-time signed SSE match alert stream"
         : "Real-time SSE alert stream disconnected — retrying automatically";
 
     return (
@@ -72,7 +82,7 @@ export function AppShell({
                             </div>
                         </Tooltip>
 
-                        <nav aria-label="Primary" className="flex items-center gap-2">
+                        <nav aria-label="Primary" className="flex flex-wrap items-center gap-2">
                             {NAV_ITEMS.map(({ id, label, tooltip, icon: Icon }) => {
                                 const active = activeTab === id;
                                 return (
@@ -97,25 +107,46 @@ export function AppShell({
                         </nav>
                     </div>
 
-                    <Tooltip content={streamTooltip} side="bottom">
-                        <div
-                            className={`inline-flex items-center gap-2.5 rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset ${sseConnected
-                                    ? "bg-emerald-950/35 text-emerald-300 ring-emerald-500/30"
-                                    : "bg-zinc-900/80 text-zinc-400 ring-zinc-800"
-                                }`}
-                        >
-                            <span className="relative flex h-2 w-2">
-                                {sseConnected && (
-                                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                                )}
-                                <span
-                                    className={`relative inline-flex h-2 w-2 rounded-full ${sseConnected ? "bg-emerald-400" : "bg-zinc-600"
-                                        }`}
-                                />
-                            </span>
-                            <span>{sseConnected ? "Live Stream" : "Stream Offline"}</span>
-                        </div>
-                    </Tooltip>
+                    <div className="flex items-center gap-3">
+                        <Tooltip content={streamTooltip} side="bottom">
+                            <div
+                                className={`inline-flex items-center gap-2.5 rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset ${sseConnected
+                                        ? "bg-emerald-950/35 text-emerald-300 ring-emerald-500/30"
+                                        : "bg-zinc-900/80 text-zinc-400 ring-zinc-800"
+                                    }`}
+                            >
+                                <span className="relative flex h-2 w-2">
+                                    {sseConnected && (
+                                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                                    )}
+                                    <span
+                                        className={`relative inline-flex h-2 w-2 rounded-full ${sseConnected ? "bg-emerald-400" : "bg-zinc-600"
+                                            }`}
+                                    />
+                                </span>
+                                <span>{sseConnected ? "Live Stream" : "Stream Offline"}</span>
+                            </div>
+                        </Tooltip>
+
+                        {user && (
+                            <div className="flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/70 py-1 pr-1.5 pl-3 text-xs text-zinc-300">
+                                <User className="h-3.5 w-3.5 text-zinc-500" />
+                                <span className="max-w-28 truncate font-medium">
+                                    {user.username}
+                                </span>
+                                <Tooltip content="Sign out of Vektryn" side="bottom">
+                                    <button
+                                        type="button"
+                                        onClick={onLogout}
+                                        aria-label="Sign out"
+                                        className="rounded-full p-1 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                    >
+                                        <LogOut className="h-3.5 w-3.5" />
+                                    </button>
+                                </Tooltip>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </header>
 

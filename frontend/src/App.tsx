@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import { vektrynApi } from "./api/client";
 import { StackTrendsView } from "./components/analytics/StackTrendsView";
+import { LoginView } from "./components/auth/LoginView";
 import { type ActiveTab, AppShell } from "./components/layout/AppShell";
 import { JobRadarView } from "./components/radar/JobRadarView";
+import { ResumesView } from "./components/resumes/ResumesView";
 import { PipelineTrackerView } from "./components/tracker/PipelineTrackerView";
 import { useAlertStream } from "./hooks/useAlertStream";
+import type { CurrentUser } from "./types/models";
 
 export function App() {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
-    const [streamToken, setStreamToken] = useState<string | null>(null);
-    const { alerts, connected, dismissAlert } = useAlertStream(streamToken);
+    const [user, setUser] = useState<CurrentUser | null>(null);
+    const [checkingSession, setCheckingSession] = useState(true);
+    const { alerts, connected, dismissAlert } = useAlertStream(user?.stream_token ?? null);
 
     useEffect(() => {
         let cancelled = false;
@@ -17,11 +21,15 @@ export function App() {
             try {
                 const me = await vektrynApi.getCurrentUser();
                 if (!cancelled) {
-                    setStreamToken(me.stream_token);
+                    setUser(me);
                 }
             } catch {
                 if (!cancelled) {
-                    setStreamToken(null);
+                    setUser(null);
+                }
+            } finally {
+                if (!cancelled) {
+                    setCheckingSession(false);
                 }
             }
         }
@@ -31,10 +39,35 @@ export function App() {
         };
     }, []);
 
+    async function handleLogout() {
+        try {
+            await vektrynApi.logout();
+        } catch {
+            // Clear local session regardless of server response
+        } finally {
+            setUser(null);
+            setActiveTab("radar");
+        }
+    }
+
+    if (checkingSession) {
+        return (
+            <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
+                Checking session...
+            </div>
+        );
+    }
+
+    if (!user) {
+        return <LoginView onAuthenticated={setUser} />;
+    }
+
     return (
         <AppShell
             activeTab={activeTab}
             onSelectTab={setActiveTab}
+            user={user}
+            onLogout={() => void handleLogout()}
             sseConnected={connected}
             alerts={alerts}
             onDismissAlert={dismissAlert}
@@ -42,6 +75,7 @@ export function App() {
             {activeTab === "radar" && <JobRadarView />}
             {activeTab === "tracker" && <PipelineTrackerView />}
             {activeTab === "analytics" && <StackTrendsView />}
+            {activeTab === "resumes" && <ResumesView />}
         </AppShell>
     );
 }

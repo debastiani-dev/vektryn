@@ -135,6 +135,23 @@ export interface CurrentUser {
     stream_token: string;
 }
 
+export interface ResumeProfile {
+    uuid: string;
+    label: string;
+    target_seniority: SeniorityLevel[];
+    target_contract_types: ContractType[];
+    target_regions: string[];
+    min_alert_score: number;
+    raw_text: string;
+    source_file_gcs_uri: string;
+    content_hash: string;
+    extracted_skills: string[];
+    has_embedding: boolean;
+    is_active: boolean;
+    created_at: string;
+    modified_at: string;
+}
+
 export interface PaginatedResponse<T> {
     count: number;
     next: string | null;
