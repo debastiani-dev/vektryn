@@ -20,3 +20,23 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["control-plane:8000"]
+
+  - job_name: enrichment-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["enrichment-worker:9101"]
+
+  - job_name: matcher-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["matcher-worker:9102"]
+
+  - job_name: enrichment-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["enrichment-worker:9101"]
+
+  - job_name: matcher-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["matcher-worker:9102"]

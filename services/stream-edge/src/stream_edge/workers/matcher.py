@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import json
 import logging
 import signal
+import time
 import uuid
 
 from confluent_kafka import KafkaError
@@ -18,6 +19,12 @@ from stream_edge.clients.kafka import (
     ensure_topics_exist,
 )
 from stream_edge.config import settings
+from stream_edge.metrics import (
+    MATCH_ALERTS_EMITTED_TOTAL,
+    WORKER_MESSAGES_TOTAL,
+    WORKER_PROCESSING_SECONDS,
+    start_worker_metrics_server,
+)
 from stream_edge.telemetry import configure_tracing
 from vektryn_contracts import (
     JobEnrichedEvent,
@@ -373,6 +380,7 @@ def _upsert_job_and_score_sync(
                         key=alert_partition_key(user_id),
                         event=alert_event,
                     )
+                    MATCH_ALERTS_EMITTED_TOTAL.inc()
                 logger.info(
                     "Evaluated %s @ %s against resume=%s | cosine=%.4f | fit_score=%s | alert=%s",
                     enriched.title,
@@ -390,6 +398,7 @@ def _upsert_job_and_score_sync(
 
 async def run_matcher_worker() -> None:
     configure_tracing("vektryn-matcher-worker")
+    start_worker_metrics_server(9102)
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     producer = KafkaEventProducer()
@@ -419,6 +428,7 @@ async def run_matcher_worker() -> None:
                     logger.error("Kafka consumer error: %s", msg.error())
                 continue
 
+            started = time.perf_counter()
             try:
                 raw_value = (msg.value() or b"").decode("utf-8")
                 enriched = JobEnrichedEvent.model_validate_json(raw_value)
@@ -436,14 +446,25 @@ async def run_matcher_worker() -> None:
                         gemini=gemini,
                         producer=producer,
                     )
+                WORKER_MESSAGES_TOTAL.labels(
+                    worker="matcher", outcome="processed"
+                ).inc()
+                WORKER_MESSAGES_TOTAL.labels(
+                    worker="matcher", outcome="processed"
+                ).inc()
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
                 )
             except Exception as exc:
+                WORKER_MESSAGES_TOTAL.labels(worker="matcher", outcome="dlq").inc()
                 logger.exception("Failed matching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
+                )
+            finally:
+                WORKER_PROCESSING_SECONDS.labels(worker="matcher").observe(
+                    time.perf_counter() - started
                 )
     finally:
         await asyncio.to_thread(producer.flush, 5.0)

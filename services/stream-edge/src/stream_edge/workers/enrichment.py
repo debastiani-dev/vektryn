@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+import time
 
 from confluent_kafka import KafkaError
 from opentelemetry import trace
@@ -13,6 +14,11 @@ from stream_edge.clients.kafka import (
 )
 from stream_edge.clients.redis import DedupRedisClient
 from stream_edge.config import settings
+from stream_edge.metrics import (
+    WORKER_MESSAGES_TOTAL,
+    WORKER_PROCESSING_SECONDS,
+    start_worker_metrics_server,
+)
 from stream_edge.telemetry import configure_tracing
 from vektryn_contracts import (
     JobEnrichedEvent,
@@ -48,6 +54,7 @@ async def process_raw_message(
     ):
         claimed = await redis_client.acquire_content_hash(raw_event.content_hash)
         if not claimed:
+            WORKER_MESSAGES_TOTAL.labels(worker="enrichment", outcome="duplicate").inc()
             logger.info(
                 "Duplicate content_hash skipped: %s (%s:%s)",
                 raw_event.content_hash[:12],
@@ -102,6 +109,7 @@ async def process_raw_message(
             key=job_partition_key(enriched.ats_source, enriched.external_id),
             event=enriched,
         )
+        WORKER_MESSAGES_TOTAL.labels(worker="enrichment", outcome="processed").inc()
         logger.info(
             "Enriched %s:%s -> stack=%s",
             enriched.ats_source.value,
@@ -112,6 +120,7 @@ async def process_raw_message(
 
 async def run_enrichment_worker() -> None:
     configure_tracing("vektryn-enrichment-worker")
+    start_worker_metrics_server(9101)
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     redis_client = DedupRedisClient()
@@ -144,6 +153,7 @@ async def run_enrichment_worker() -> None:
                     logger.error("Kafka consumer error: %s", msg.error())
                 continue
 
+            started = time.perf_counter()
             try:
                 await process_raw_message(
                     raw_bytes=msg.value() or b"",
@@ -155,10 +165,15 @@ async def run_enrichment_worker() -> None:
                     consumer.commit, message=msg, asynchronous=False
                 )
             except Exception as exc:
+                WORKER_MESSAGES_TOTAL.labels(worker="enrichment", outcome="dlq").inc()
                 logger.exception("Failed enriching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
+                )
+            finally:
+                WORKER_PROCESSING_SECONDS.labels(worker="enrichment").observe(
+                    time.perf_counter() - started
                 )
     finally:
         await redis_client.close()

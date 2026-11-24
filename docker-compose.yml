@@ -158,6 +158,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      METRICS_PORT: "9101"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       control-plane:
@@ -183,6 +184,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      METRICS_PORT: "9102"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     depends_on:
       control-plane:
@@ -235,6 +237,8 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/docker/observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./infra/docker/observability/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./infra/docker/observability/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3001:3000"
     depends_on:

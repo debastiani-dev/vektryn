@@ -9,6 +9,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from stream_edge.config import settings
+from stream_edge.metrics import GEMINI_CALLS_TOTAL, GEMINI_LATENCY_SECONDS
 from vektryn_contracts.enums import (
     ContractType,
     RegionEligibility,
@@ -72,34 +73,57 @@ class GeminiStreamClient:
         *,
         prompt: str,
         schema: type[BaseModel],
+        operation: str,
     ) -> tuple[str, str]:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=schema,
             temperature=0.0,
         )
+        primary_model = settings.gemini_scoring_model
+        started = time.perf_counter()
         try:
             res = self._call_with_retry(
                 lambda: self._client.models.generate_content(
-                    model=settings.gemini_scoring_model,
+                    model=primary_model,
                     contents=prompt,
                     config=config,
                 )
             )
-            return res.text, settings.gemini_scoring_model
+            GEMINI_LATENCY_SECONDS.labels(
+                operation=operation, model=primary_model
+            ).observe(time.perf_counter() - started)
+            GEMINI_CALLS_TOTAL.labels(
+                operation=operation, model=primary_model, status="ok"
+            ).inc()
+            return res.text, primary_model
         except genai_errors.APIError as exc:
-            if (
-                exc.code in self.RETRYABLE_STATUS_CODES
-                and settings.gemini_fallback_scoring_model
-            ):
-                res = self._call_with_retry(
-                    lambda: self._client.models.generate_content(
-                        model=settings.gemini_fallback_scoring_model,
-                        contents=prompt,
-                        config=config,
+            GEMINI_CALLS_TOTAL.labels(
+                operation=operation, model=primary_model, status="error"
+            ).inc()
+            fallback_model = settings.gemini_fallback_scoring_model
+            if exc.code in self.RETRYABLE_STATUS_CODES and fallback_model:
+                fb_started = time.perf_counter()
+                try:
+                    res = self._call_with_retry(
+                        lambda: self._client.models.generate_content(
+                            model=fallback_model,
+                            contents=prompt,
+                            config=config,
+                        )
                     )
-                )
-                return res.text, settings.gemini_fallback_scoring_model
+                except Exception:
+                    GEMINI_CALLS_TOTAL.labels(
+                        operation=operation, model=fallback_model, status="error"
+                    ).inc()
+                    raise
+                GEMINI_LATENCY_SECONDS.labels(
+                    operation=operation, model=fallback_model
+                ).observe(time.perf_counter() - fb_started)
+                GEMINI_CALLS_TOTAL.labels(
+                    operation=operation, model=fallback_model, status="ok"
+                ).inc()
+                return res.text, fallback_model
             raise
 
     async def extract_job_metadata(
@@ -125,20 +149,33 @@ class GeminiStreamClient:
             self._generate_structured_sync,
             prompt=prompt,
             schema=ExtractedJobMetadata,
+            operation="extract_metadata",
         )
         return ExtractedJobMetadata.model_validate_json(raw_json)
 
     def _embed_sync(self, text: str) -> list[float]:
-        res = self._call_with_retry(
-            lambda: self._client.models.embed_content(
-                model=settings.gemini_embedding_model,
-                contents=text[:12000],
-                config=types.EmbedContentConfig(
-                    task_type="RETRIEVAL_DOCUMENT",
-                    output_dimensionality=EMBEDDING_DIMENSIONS,
-                ),
+        model = settings.gemini_embedding_model
+        started = time.perf_counter()
+        try:
+            res = self._call_with_retry(
+                lambda: self._client.models.embed_content(
+                    model=model,
+                    contents=text[:12000],
+                    config=types.EmbedContentConfig(
+                        task_type="RETRIEVAL_DOCUMENT",
+                        output_dimensionality=EMBEDDING_DIMENSIONS,
+                    ),
+                )
             )
+        except Exception:
+            GEMINI_CALLS_TOTAL.labels(
+                operation="embed_job", model=model, status="error"
+            ).inc()
+            raise
+        GEMINI_LATENCY_SECONDS.labels(operation="embed_job", model=model).observe(
+            time.perf_counter() - started
         )
+        GEMINI_CALLS_TOTAL.labels(operation="embed_job", model=model, status="ok").inc()
         return list(res.embeddings[0].values)
 
     async def embed_job_text(
@@ -184,5 +221,6 @@ class GeminiStreamClient:
             self._generate_structured_sync,
             prompt=prompt,
             schema=ResumeGapEvaluation,
+            operation="evaluate_fit",
         )
         return ResumeGapEvaluation.model_validate_json(raw_json), used_model
