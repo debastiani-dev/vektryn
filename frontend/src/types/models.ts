@@ -43,6 +43,7 @@ export type TechCategory =
 export interface JobPostingSummary {
     uuid: string;
     ats_source: string;
+    external_id?: string;
     title: string;
     company_name: string;
     apply_url: string;
@@ -57,6 +58,16 @@ export interface JobPostingSummary {
     tech_stack: string[];
     is_active: boolean;
     posted_at: string | null;
+    created_at?: string;
+}
+
+export interface JobPostingDetail extends JobPostingSummary {
+    external_id: string;
+    raw_html_gcs_uri: string;
+    description_clean: string;
+    closed_at: string | null;
+    created_at: string;
+    modified_at: string;
 }
 
 export interface MatchScore {
@@ -75,8 +86,12 @@ export interface MatchScore {
 
 export interface ApplicationLead {
     uuid: string;
-    job_posting: JobPostingSummary;
+    job_posting: JobPostingSummary | string;
     resume_profile: string | null;
+    job_title?: string;
+    company_name?: string;
+    apply_url?: string;
+    ats_source?: string;
     status: LeadStatus;
     priority: LeadPriority;
     applied_at: string | null;

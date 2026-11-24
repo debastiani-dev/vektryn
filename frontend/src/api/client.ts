@@ -1,5 +1,6 @@
 import type {
     ApplicationLead,
+    JobPostingDetail,
     LeadPriority,
     LeadStatus,
     MatchScore,
@@ -35,6 +36,9 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const vektrynApi = {
+    getJob: (uuid: string) =>
+        apiFetch<JobPostingDetail>(`/api/v1/jobs/${encodeURIComponent(uuid)}/`),
+
     listMatches: (params = "") =>
         apiFetch<PaginatedResponse<MatchScore>>(`/api/v1/matches/${params}`),
 

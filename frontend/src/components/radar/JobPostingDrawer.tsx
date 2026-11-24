@@ -1,0 +1,487 @@
+import {
+    Banknote,
+    BookmarkCheck,
+    BookmarkPlus,
+    Building2,
+    Calendar,
+    ExternalLink,
+    FileText,
+    Globe2,
+    Hash,
+    Layers,
+    MapPin,
+    Sparkles,
+    X,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { vektrynApi } from "../../api/client";
+import type {
+    ContractType,
+    JobPostingDetail,
+    MatchScore,
+    SeniorityLevel,
+} from "../../types/models";
+import {
+    formatAtsSource,
+    formatContractType,
+    formatExactDate,
+    formatRegionEligibility,
+    formatRelativeTime,
+    formatSalaryRange,
+    formatSeniority,
+} from "../../utils/format";
+import { Tooltip } from "../ui/Tooltip";
+
+export interface JobListingPreview {
+    uuid: string;
+    title: string;
+    company_name: string;
+    apply_url: string;
+    ats_source?: string;
+    external_id?: string;
+    location_raw?: string;
+    seniority?: SeniorityLevel;
+    contract_type?: ContractType;
+    region_eligibility?: string[];
+    salary_min?: string | null;
+    salary_max?: string | null;
+    salary_currency?: string | null;
+    salary_period?: string | null;
+    tech_stack?: string[];
+    is_active?: boolean;
+    posted_at?: string | null;
+    created_at?: string;
+}
+
+interface JobPostingDrawerProps {
+    jobPreview: JobListingPreview | null;
+    match?: MatchScore | null;
+    saving?: boolean;
+    saved?: boolean;
+    onClose: () => void;
+    onSaveLead?: () => void;
+    onOpenGapDetails?: () => void;
+}
+
+function DescriptionSkeleton() {
+    return (
+        <div className="space-y-3 animate-pulse" aria-label="Loading job description">
+            <div className="h-4 w-11/12 rounded bg-zinc-800/80" />
+            <div className="h-4 w-full rounded bg-zinc-800/70" />
+            <div className="h-4 w-5/6 rounded bg-zinc-800/70" />
+            <div className="h-4 w-3/4 rounded bg-zinc-800/60" />
+            <div className="pt-2 h-4 w-full rounded bg-zinc-800/70" />
+            <div className="h-4 w-10/12 rounded bg-zinc-800/70" />
+            <div className="h-4 w-4/5 rounded bg-zinc-800/60" />
+        </div>
+    );
+}
+
+export function JobPostingDrawer({
+    jobPreview,
+    match = null,
+    saving = false,
+    saved = false,
+    onClose,
+    onSaveLead,
+    onOpenGapDetails,
+}: Readonly<JobPostingDrawerProps>) {
+    const [detail, setDetail] = useState<JobPostingDetail | null>(null);
+    const [loadingDetail, setLoadingDetail] = useState(false);
+    const [detailError, setDetailError] = useState<string | null>(null);
+
+    const jobUuid = jobPreview?.uuid ?? null;
+
+    useEffect(() => {
+        if (!jobPreview) return;
+        function handleKeyDown(event: KeyboardEvent) {
+            if (event.key === "Escape") {
+                onClose();
+            }
+        }
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [jobPreview, onClose]);
+
+    useEffect(() => {
+        if (!jobUuid) {
+            setDetail(null);
+            setDetailError(null);
+            setLoadingDetail(false);
+            return;
+        }
+
+        let cancelled = false;
+        async function fetchDetail(uuid: string) {
+            setLoadingDetail(true);
+            setDetailError(null);
+            setDetail(null);
+            try {
+                const res = await vektrynApi.getJob(uuid);
+                if (!cancelled) {
+                    setDetail(res);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setDetailError(
+                        err instanceof Error ? err.message : "Failed to load full job listing",
+                    );
+                }
+            } finally {
+                if (!cancelled) {
+                    setLoadingDetail(false);
+                }
+            }
+        }
+
+        void fetchDetail(jobUuid);
+        return () => {
+            cancelled = true;
+        };
+    }, [jobUuid]);
+
+    if (!jobPreview) {
+        return null;
+    }
+
+    const job = detail ?? jobPreview;
+    const isActive = job.is_active ?? true;
+    const seniorityLabel = job.seniority ? formatSeniority(job.seniority) : "";
+    const contractLabel = job.contract_type ? formatContractType(job.contract_type) : "";
+    const atsSource = job.ats_source ?? "";
+    const regionList = job.region_eligibility ?? [];
+    const techStack = job.tech_stack ?? [];
+    const salaryLabel = formatSalaryRange(
+        job.salary_min ?? null,
+        job.salary_max ?? null,
+        job.salary_currency ?? null,
+        job.salary_period ?? null,
+    );
+    const postedAge = formatRelativeTime(job.posted_at ?? null);
+    const postedExact = formatExactDate(job.posted_at ?? null);
+    let postedDisplay = "Unknown";
+    if (postedExact && postedAge) {
+        postedDisplay = `${postedExact} (${postedAge})`;
+    } else if (postedExact) {
+        postedDisplay = postedExact;
+    }
+    const ingestedExact = formatExactDate(detail?.created_at ?? job.created_at ?? null);
+    const closedExact = formatExactDate(detail?.closed_at ?? null);
+    const externalId = detail?.external_id ?? job.external_id ?? null;
+    const matchedSet = new Set(
+        (match?.matched_skills ?? []).map((skill) => skill.toLowerCase()),
+    );
+
+    let saveButtonLabel = "Save to Tracker";
+    if (saved) {
+        saveButtonLabel = "Saved in Pipeline";
+    } else if (saving) {
+        saveButtonLabel = "Saving...";
+    }
+    const saveTooltip = saved
+        ? "This role is already saved in your Pipeline Tracker"
+        : "Save this role to your Pipeline Tracker";
+
+    function renderDescriptionBody() {
+        if (loadingDetail) {
+            return <DescriptionSkeleton />;
+        }
+        if (detailError) {
+            return (
+                <div className="rounded-xl border border-red-500/30 bg-red-950/20 px-4 py-3 text-sm text-red-300">
+                    {detailError}
+                </div>
+            );
+        }
+        const cleanedText = detail?.description_clean.trim() ?? "";
+        if (!cleanedText) {
+            return (
+                <p className="text-sm text-zinc-500">
+                    No full job description text is stored for this posting. Use &ldquo;Open Original Posting&rdquo; below to read the source listing.
+                </p>
+            );
+        }
+        return (
+            <div className="whitespace-pre-wrap break-words text-sm leading-7 text-zinc-300">
+                {cleanedText}
+            </div>
+        );
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 flex justify-end">
+            <button
+                type="button"
+                aria-label="Close job listing drawer"
+                onClick={onClose}
+                className="fixed inset-0 cursor-default bg-black/70 backdrop-blur-xs"
+            />
+            <dialog
+                open
+                aria-modal="true"
+                aria-labelledby="job-drawer-title"
+                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-full max-h-none w-full max-w-3xl flex-col border-0 border-l border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl"
+            >
+                <div className="flex items-start justify-between gap-4 border-b border-zinc-800/90 bg-zinc-950/90 px-6 py-5 sm:px-8 sm:py-6">
+                    <div className="min-w-0 space-y-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Tooltip
+                                content={
+                                    isActive
+                                        ? "Job listing is currently active upstream"
+                                        : "Job listing has been marked closed"
+                                }
+                                side="bottom"
+                            >
+                                <span
+                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${isActive
+                                            ? "bg-emerald-500/12 text-emerald-300 ring-emerald-500/30"
+                                            : "bg-rose-500/12 text-rose-300 ring-rose-500/30"
+                                        }`}
+                                >
+                                    <span
+                                        className={`h-1.5 w-1.5 rounded-full ${isActive ? "bg-emerald-400" : "bg-rose-400"
+                                            }`}
+                                    />
+                                    {isActive ? "Active Listing" : "Closed"}
+                                </span>
+                            </Tooltip>
+
+                            {seniorityLabel && (
+                                <Tooltip content="Detected seniority level" side="bottom">
+                                    <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-300">
+                                        {seniorityLabel}
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {contractLabel && (
+                                <Tooltip content="Employment / contract type" side="bottom">
+                                    <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-300">
+                                        {contractLabel}
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {atsSource && (
+                                <Tooltip
+                                    content={`Collected from ${formatAtsSource(atsSource)} ATS`}
+                                    side="bottom"
+                                >
+                                    <span className="text-xs font-medium text-zinc-500">
+                                        {formatAtsSource(atsSource)}
+                                    </span>
+                                </Tooltip>
+                            )}
+                        </div>
+
+                        <h2
+                            id="job-drawer-title"
+                            className="text-xl font-semibold leading-snug text-zinc-100"
+                        >
+                            {job.title}
+                        </h2>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-zinc-400">
+                            <span className="inline-flex items-center gap-1.5 font-medium text-zinc-200">
+                                <Building2 className="h-4 w-4 text-zinc-500" />
+                                {job.company_name}
+                            </span>
+                            <span className="inline-flex items-center gap-1.5">
+                                <MapPin className="h-4 w-4 text-zinc-500" />
+                                {job.location_raw || "Remote"}
+                            </span>
+                        </div>
+                    </div>
+
+                    <Tooltip content="Close job listing (Esc)" side="bottom">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            aria-label="Close job listing drawer"
+                            className="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                        >
+                            <X className="h-5 w-5" />
+                        </button>
+                    </Tooltip>
+                </div>
+
+                <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-7">
+                    <section className="grid gap-4 sm:grid-cols-2">
+                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                                <Banknote className="h-4 w-4 text-emerald-400" />
+                                Compensation
+                            </div>
+                            <p className="mt-2 font-mono text-sm font-medium tabular-nums text-zinc-100">
+                                {salaryLabel ?? "Not disclosed"}
+                            </p>
+                            {job.salary_currency && salaryLabel && (
+                                <p className="mt-1 text-xs text-zinc-500">
+                                    Currency: {job.salary_currency.toUpperCase()}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                                <Globe2 className="h-4 w-4 text-sky-400" />
+                                Region Eligibility
+                            </div>
+                            {regionList.length > 0 ? (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                    {regionList.map((region) => (
+                                        <span
+                                            key={region}
+                                            className="rounded-md bg-sky-500/12 px-2.5 py-0.5 text-xs font-medium text-sky-300 ring-1 ring-sky-500/25"
+                                        >
+                                            {formatRegionEligibility(region)}
+                                        </span>
+                                    ))}
+                                </div>
+                            ) : (
+                                <p className="mt-2 text-sm text-zinc-400">Not specified</p>
+                            )}
+                        </div>
+
+                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                                <Calendar className="h-4 w-4 text-violet-400" />
+                                Listing Timeline
+                            </div>
+                            <div className="mt-2 space-y-1 text-xs text-zinc-300">
+                                <p>
+                                    <span className="text-zinc-500">Posted: </span>
+                                    <span className="font-mono tabular-nums">{postedDisplay}</span>
+                                </p>
+                                {ingestedExact && (
+                                    <p>
+                                        <span className="text-zinc-500">Collected: </span>
+                                        <span className="font-mono tabular-nums">
+                                            {ingestedExact}
+                                        </span>
+                                    </p>
+                                )}
+                                {closedExact && (
+                                    <p className="text-rose-300">
+                                        <span className="text-rose-400/80">Closed: </span>
+                                        <span className="font-mono tabular-nums">
+                                            {closedExact}
+                                        </span>
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                                <Hash className="h-4 w-4 text-zinc-400" />
+                                Source Metadata
+                            </div>
+                            <div className="mt-2 space-y-1 text-xs text-zinc-300">
+                                <p>
+                                    <span className="text-zinc-500">ATS: </span>
+                                    {formatAtsSource(atsSource) || "Unknown"}
+                                </p>
+                                {externalId && (
+                                    <p className="truncate">
+                                        <span className="text-zinc-500">External ID: </span>
+                                        <span className="font-mono text-zinc-400">
+                                            {externalId}
+                                        </span>
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </section>
+
+                    {techStack.length > 0 && (
+                        <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                            <h3 className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
+                                <Layers className="h-4 w-4 text-violet-400" />
+                                Tech Stack ({techStack.length})
+                            </h3>
+                            <div className="flex flex-wrap gap-2">
+                                {techStack.map((tag) => {
+                                    const isMatched = matchedSet.has(tag.toLowerCase());
+                                    const tagTooltip = isMatched
+                                        ? `${tag} — matches your resume profile`
+                                        : `${tag} — listed in job requirements`;
+                                    return (
+                                        <Tooltip key={tag} content={tagTooltip}>
+                                            <span
+                                                className={`rounded-lg border px-3 py-1 font-mono text-xs ${isMatched
+                                                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                                        : "border-zinc-800 bg-zinc-800/75 text-zinc-300"
+                                                    }`}
+                                            >
+                                                {tag}
+                                            </span>
+                                        </Tooltip>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    )}
+
+                    <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                        <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
+                            <FileText className="h-4 w-4 text-violet-400" />
+                            Full Job Description
+                        </h3>
+                        {renderDescriptionBody()}
+                    </section>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
+                    <div className="flex flex-wrap items-center gap-3">
+                        {onSaveLead && (
+                            <Tooltip content={saveTooltip}>
+                                <button
+                                    type="button"
+                                    disabled={saving || saved}
+                                    onClick={onSaveLead}
+                                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${saved
+                                            ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
+                                            : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
+                                        }`}
+                                >
+                                    {saved ? (
+                                        <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+                                    ) : (
+                                        <BookmarkPlus className="h-4 w-4 text-violet-400" />
+                                    )}
+                                    {saveButtonLabel}
+                                </button>
+                            </Tooltip>
+                        )}
+
+                        {onOpenGapDetails && (
+                            <Tooltip content="Switch to AI skill gap analysis and talking points">
+                                <button
+                                    type="button"
+                                    onClick={onOpenGapDetails}
+                                    className="inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                >
+                                    <Sparkles className="h-4 w-4 text-violet-400" />
+                                    Gap Details
+                                </button>
+                            </Tooltip>
+                        )}
+                    </div>
+
+                    <Tooltip content="Open the job application page in a new tab">
+                        <a
+                            href={job.apply_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
+                        >
+                            Open Original Posting <ExternalLink className="h-4 w-4" />
+                        </a>
+                    </Tooltip>
+                </div>
+            </dialog>
+        </div>
+    );
+}
