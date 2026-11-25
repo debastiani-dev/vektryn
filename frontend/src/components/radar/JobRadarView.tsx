@@ -382,6 +382,7 @@ function RadarMatchCard({
 export function JobRadarView() {
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [totalCount, setTotalCount] = useState(0);
+    const [aiScoredCount, setAiScoredCount] = useState(0);
     const [strongFitCount, setStrongFitCount] = useState(0);
     const [alertThresholdCount, setAlertThresholdCount] = useState(0);
     const [hasNext, setHasNext] = useState(false);
@@ -475,6 +476,12 @@ export function JobRadarView() {
                 if (cancelled) return;
                 setMatches(matchRes.results);
                 setTotalCount(matchRes.count);
+                setAiScoredCount(
+                    matchRes.summary?.ai_scored_count ??
+                        matchRes.results.filter(
+                            (m) => m.fit_score !== null && m.fit_score !== undefined,
+                        ).length,
+                );
                 setStrongFitCount(
                     matchRes.summary?.strong_fit_count ??
                         matchRes.results.filter((m) => (m.fit_score ?? 0) >= 80).length,
@@ -655,16 +662,23 @@ export function JobRadarView() {
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <Tooltip
-                        content="Total active job postings matched against your resume profile"
+                        content="Active job matches evaluated by Stage 2 Gemini AI scoring (out of all active vector matches)"
                         className="block"
                     >
                         <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
                             <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-                                Scored Matches
+                                AI Scored
                             </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-100">
-                                {loading ? "—" : totalCount}
-                            </p>
+                            <div className="mt-2 flex items-baseline gap-2">
+                                <p className="font-mono text-2xl font-semibold tabular-nums text-zinc-100">
+                                    {loading ? "—" : aiScoredCount}
+                                </p>
+                                {!loading && (
+                                    <span className="font-mono text-xs tabular-nums text-zinc-500">
+                                        of {totalCount} active
+                                    </span>
+                                )}
+                            </div>
                         </div>
                     </Tooltip>
 

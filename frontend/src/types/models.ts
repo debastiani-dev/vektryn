@@ -160,6 +160,7 @@ export interface PaginatedResponse<T> {
 }
 
 export interface MatchScoreSummary {
+    ai_scored_count: number;
     strong_fit_count: number;
     alert_threshold_count: number;
 }

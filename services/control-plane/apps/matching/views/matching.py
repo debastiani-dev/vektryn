@@ -18,13 +18,22 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return MatchScore.objects.none()
-        return MatchScore.objects.select_related(
-            "job_posting", "resume_profile"
-        ).filter(resume_profile__user=self.request.user)
+        qs = MatchScore.objects.select_related("job_posting", "resume_profile").filter(
+            resume_profile__user=self.request.user,
+            job_posting__is_deleted=False,
+        )
+        if self.action == "list":
+            include_inactive = self.request.query_params.get(
+                "include_inactive", ""
+            ).lower() in {"1", "true", "yes"}
+            if not include_inactive:
+                qs = qs.filter(job_posting__is_active=True)
+        return qs
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
         summary = queryset.aggregate(
+            ai_scored_count=Count("uuid", filter=Q(fit_score__isnull=False)),
             strong_fit_count=Count("uuid", filter=Q(fit_score__gte=80)),
             alert_threshold_count=Count("uuid", filter=Q(fit_score__gte=70)),
         )
