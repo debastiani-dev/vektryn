@@ -354,7 +354,7 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
 
                             <div className="grid grid-cols-2 gap-2 text-xs">
                                 <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2">
-                                    <div className="text-[11px] text-zinc-400">Active / AI Scored</div>
+                                    <div className="text-[11px] text-zinc-400">AI Scored / Active</div>
                                     <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-zinc-100">
                                         {data.jobs.ai_scored_count} / {data.jobs.active_count}
                                     </div>
