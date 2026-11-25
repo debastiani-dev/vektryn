@@ -31,6 +31,7 @@ class IngestJobRequest(BaseModel):
     raw_html: str = Field(min_length=1)
     description_clean: str = Field(min_length=1)
     posted_at: datetime | None = None
+    submitted_by_user_id: int | uuid.UUID | None = None
 
 
 class IngestJobResponse(BaseModel):
@@ -126,6 +127,7 @@ async def ingest_job(
         location_raw=payload.location_raw,
         description_clean=payload.description_clean,
         posted_at=payload.posted_at,
+        submitted_by_user_id=payload.submitted_by_user_id,
     )
 
     await producer.publish(

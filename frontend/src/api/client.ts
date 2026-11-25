@@ -8,9 +8,13 @@ import type {
     LeadStatus,
     ManualJobImportInput,
     ManualJobImportResponse,
+    MatchScore,
     MatchScoreListResponse,
+    NotificationActionResponse,
+    NotificationListResponse,
     PaginatedResponse,
     PipelineStatusResponse,
+    ReadAllNotificationsResponse,
     RescoreResponse,
     ResumeProfile,
     SeniorityLevel,
@@ -177,6 +181,9 @@ export const vektrynApi = {
     listMatches: (params = "") =>
         apiFetch<MatchScoreListResponse>(`/api/v1/matches/${params}`),
 
+    getMatch: (uuid: string) =>
+        apiFetch<MatchScore>(`/api/v1/matches/${encodeURIComponent(uuid)}/`),
+
     listLeads: (params = "") =>
         apiFetch<PaginatedResponse<ApplicationLead>>(`/api/v1/leads/${params}`),
 
@@ -213,6 +220,26 @@ export const vektrynApi = {
 
     triggerCollectorSync: () =>
         apiFetch<TriggerCollectResponse>("/api/v1/system/collect/", {
+            method: "POST",
+        }),
+
+    listNotifications: (params = "") =>
+        apiFetch<NotificationListResponse>(`/api/v1/notifications/${params}`),
+
+    markNotificationRead: (uuid: string) =>
+        apiFetch<NotificationActionResponse>(
+            `/api/v1/notifications/${encodeURIComponent(uuid)}/read/`,
+            { method: "PATCH" },
+        ),
+
+    dismissNotification: (uuid: string) =>
+        apiFetch<NotificationActionResponse>(
+            `/api/v1/notifications/${encodeURIComponent(uuid)}/dismiss/`,
+            { method: "PATCH" },
+        ),
+
+    markAllNotificationsRead: () =>
+        apiFetch<ReadAllNotificationsResponse>("/api/v1/notifications/read-all/", {
             method: "POST",
         }),
 };

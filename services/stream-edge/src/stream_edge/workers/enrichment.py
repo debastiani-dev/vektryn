@@ -12,6 +12,7 @@ from stream_edge.clients.kafka import (
     create_kafka_consumer,
     ensure_topics_exist,
 )
+from stream_edge.clients.notifications import persist_pipeline_error_notifications
 from stream_edge.clients.redis import DedupRedisClient
 from stream_edge.config import settings
 from stream_edge.metrics import (
@@ -93,6 +94,7 @@ async def process_raw_message(
             location_raw=raw_event.location_raw,
             description_clean=raw_event.description_clean,
             posted_at=raw_event.posted_at,
+            submitted_by_user_id=raw_event.submitted_by_user_id,
             seniority=metadata.seniority,
             contract_type=metadata.contract_type,
             region_eligibility=metadata.region_eligibility,
@@ -168,6 +170,13 @@ async def run_enrichment_worker() -> None:
                 WORKER_MESSAGES_TOTAL.labels(worker="enrichment", outcome="dlq").inc()
                 logger.exception("Failed enriching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
+                await asyncio.to_thread(
+                    persist_pipeline_error_notifications,
+                    source="enrichment-worker",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    extra_payload={"topic": msg.topic()},
+                )
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
                 )

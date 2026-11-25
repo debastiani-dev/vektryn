@@ -18,6 +18,10 @@ from stream_edge.clients.kafka import (
     create_kafka_consumer,
     ensure_topics_exist,
 )
+from stream_edge.clients.notifications import (
+    insert_notification_with_cursor,
+    persist_pipeline_error_notifications,
+)
 from stream_edge.config import settings
 from stream_edge.metrics import (
     MATCH_ALERTS_EMITTED_TOTAL,
@@ -32,6 +36,7 @@ from vektryn_contracts import (
     JobMatchAlertEvent,
     JobRescoreEvent,
     KafkaTopic,
+    NotificationKind,
     alert_partition_key,
 )
 
@@ -67,6 +72,13 @@ class _JobCandidate:
     region_eligibility: list[str]
     tech_stack: list[str]
     ats_source: str = ""
+    submitted_by_user_id: int | uuid.UUID | None = None
+
+
+@dataclass
+class _PairScoreResult:
+    alert: JobMatchAlertEvent | None = None
+    scored: bool = False
 
 
 def _parse_json_list(raw: list[str] | str | None) -> list[str]:
@@ -310,6 +322,170 @@ def _upsert_match_score(
     return cur.fetchone()
 
 
+def _claim_and_persist_match_alert(
+    cur: psycopg.Cursor,
+    *,
+    now: datetime,
+    trace_id: str,
+    job: _JobCandidate,
+    resume_uuid: uuid.UUID,
+    user_id: int | uuid.UUID,
+    match_score_uuid: uuid.UUID,
+    cosine_val: float,
+    outcome: _EvaluationOutcome,
+) -> JobMatchAlertEvent | None:
+    cur.execute(
+        """
+        UPDATE matching_matchscore
+        SET alert_sent_at = %s, modified_at = %s
+        WHERE uuid = %s AND alert_sent_at IS NULL
+        RETURNING uuid
+        """,
+        (now, now, match_score_uuid),
+    )
+    if cur.fetchone() is None:
+        return None
+
+    notification_uuid = uuid.uuid4()
+    fit_score = int(outcome.fit_score or 0)
+    sim_pct = round(cosine_val * 100)
+    matched_skills = outcome.matched_skills or []
+    missing_keywords = outcome.missing_keywords or []
+
+    insert_notification_with_cursor(
+        cur,
+        notification_uuid=notification_uuid,
+        user_id=user_id,
+        kind=NotificationKind.MATCH_ALERT,
+        title=f"{fit_score}% Fit: {job.title}"[:255],
+        body=(
+            f"{job.company_name} matched your resume "
+            f"({sim_pct}% vector similarity)."
+        ),
+        payload={
+            "job_posting_uuid": str(job.uuid),
+            "resume_profile_uuid": str(resume_uuid),
+            "match_score_uuid": str(match_score_uuid),
+            "title": job.title,
+            "company_name": job.company_name,
+            "fit_score": fit_score,
+            "cosine_similarity": cosine_val,
+            "matched_skills": matched_skills,
+            "missing_keywords": missing_keywords,
+            "apply_url": job.apply_url,
+        },
+        now=now,
+    )
+    return JobMatchAlertEvent(
+        trace_id=trace_id,
+        notification_uuid=notification_uuid,
+        user_id=user_id,
+        job_posting_uuid=job.uuid,
+        resume_profile_uuid=resume_uuid,
+        match_score_uuid=match_score_uuid,
+        title=job.title,
+        company_name=job.company_name,
+        fit_score=fit_score,
+        cosine_similarity=cosine_val,
+        matched_skills=matched_skills,
+        missing_keywords=missing_keywords,
+        apply_url=job.apply_url,
+    )
+
+
+def _publish_match_alerts(
+    producer: KafkaEventProducer,
+    alerts: list[JobMatchAlertEvent],
+) -> None:
+    for alert_event in alerts:
+        producer._publish_sync(
+            topic=KafkaTopic.JOBS_ALERTS,
+            key=alert_partition_key(alert_event.user_id),
+            event=alert_event,
+        )
+        MATCH_ALERTS_EMITTED_TOTAL.inc()
+
+
+def _persist_manual_import_ready(
+    cur: psycopg.Cursor,
+    *,
+    now: datetime,
+    job: _JobCandidate,
+    resume_uuid: uuid.UUID,
+    user_id: int | uuid.UUID,
+    match_score_uuid: uuid.UUID,
+    cosine_val: float,
+    outcome: _EvaluationOutcome,
+) -> None:
+    if job.submitted_by_user_id is not None and str(user_id) != str(
+        job.submitted_by_user_id
+    ):
+        return
+
+    fit_score = int(outcome.fit_score or 0)
+    sim_pct = round(cosine_val * 100)
+    insert_notification_with_cursor(
+        cur,
+        notification_uuid=uuid.uuid4(),
+        user_id=user_id,
+        kind=NotificationKind.MANUAL_IMPORT_READY,
+        title=f"Import scored ({fit_score}% Fit): {job.title}"[:255],
+        body=(
+            f"{job.company_name} is ready for gap analysis "
+            f"({sim_pct}% vector similarity)."
+        ),
+        payload={
+            "job_posting_uuid": str(job.uuid),
+            "resume_profile_uuid": str(resume_uuid),
+            "match_score_uuid": str(match_score_uuid),
+            "title": job.title,
+            "company_name": job.company_name,
+            "fit_score": fit_score,
+            "cosine_similarity": cosine_val,
+            "matched_skills": outcome.matched_skills or [],
+            "missing_keywords": outcome.missing_keywords or [],
+            "apply_url": job.apply_url,
+        },
+        now=now,
+    )
+
+
+def _persist_rescore_completed(
+    cur: psycopg.Cursor,
+    *,
+    now: datetime,
+    user_id: int | uuid.UUID,
+    resume_uuid: uuid.UUID,
+    resume_label: str,
+    processed_count: int,
+    scored_count: int,
+    alerts_count: int,
+    force: bool,
+) -> None:
+    role_word = "role" if processed_count == 1 else "roles"
+    alert_word = "alert" if alerts_count == 1 else "alerts"
+    insert_notification_with_cursor(
+        cur,
+        notification_uuid=uuid.uuid4(),
+        user_id=user_id,
+        kind=NotificationKind.RESCORE_COMPLETED,
+        title=f"Rescore complete: {resume_label}"[:255],
+        body=(
+            f"Evaluated {processed_count} active {role_word} "
+            f"({scored_count} AI-scored, {alerts_count} high-fit {alert_word})."
+        ),
+        payload={
+            "resume_profile_uuid": str(resume_uuid),
+            "resume_label": resume_label,
+            "processed_count": processed_count,
+            "scored_count": scored_count,
+            "alerts_count": alerts_count,
+            "force": force,
+        },
+        now=now,
+    )
+
+
 def _score_and_persist_pair(
     cur: psycopg.Cursor,
     *,
@@ -327,9 +503,9 @@ def _score_and_persist_pair(
     min_alert_score: int,
     cosine_val: float,
     gemini: GeminiStreamClient,
-    producer: KafkaEventProducer,
     replace_evaluation: bool = False,
-) -> None:
+    notify_manual_import: bool = False,
+) -> _PairScoreResult:
     is_manual = job.ats_source == ATSSource.MANUAL.value
     should_score = is_manual or (
         cosine_val >= settings.cosine_similarity_threshold
@@ -355,7 +531,7 @@ def _score_and_persist_pair(
         else _EvaluationOutcome()
     )
 
-    match_score_uuid, alert_sent_at = _upsert_match_score(
+    match_score_uuid, _alert_sent_at = _upsert_match_score(
         cur,
         now=now,
         job_posting_uuid=job.uuid,
@@ -366,35 +542,30 @@ def _score_and_persist_pair(
         replace_evaluation=replace_evaluation,
     )
 
-    if (
-        outcome.fit_score is not None
-        and outcome.fit_score >= min_alert_score
-        and alert_sent_at is None
-    ):
-        cur.execute(
-            "UPDATE matching_matchscore SET alert_sent_at = %s, modified_at = %s WHERE uuid = %s",
-            (now, now, match_score_uuid),
-        )
-        alert_event = JobMatchAlertEvent(
+    pending_alert: JobMatchAlertEvent | None = None
+    if outcome.fit_score is not None and outcome.fit_score >= min_alert_score:
+        pending_alert = _claim_and_persist_match_alert(
+            cur,
+            now=now,
             trace_id=trace_id,
+            job=job,
+            resume_uuid=resume_uuid,
             user_id=user_id,
-            job_posting_uuid=job.uuid,
-            resume_profile_uuid=resume_uuid,
             match_score_uuid=match_score_uuid,
-            title=job.title,
-            company_name=job.company_name,
-            fit_score=outcome.fit_score,
-            cosine_similarity=cosine_val,
-            matched_skills=outcome.matched_skills or [],
-            missing_keywords=outcome.missing_keywords or [],
-            apply_url=job.apply_url,
+            cosine_val=cosine_val,
+            outcome=outcome,
         )
-        producer._publish_sync(
-            topic=KafkaTopic.JOBS_ALERTS,
-            key=alert_partition_key(user_id),
-            event=alert_event,
+    elif is_manual and notify_manual_import and outcome.fit_score is not None:
+        _persist_manual_import_ready(
+            cur,
+            now=now,
+            job=job,
+            resume_uuid=resume_uuid,
+            user_id=user_id,
+            match_score_uuid=match_score_uuid,
+            cosine_val=cosine_val,
+            outcome=outcome,
         )
-        MATCH_ALERTS_EMITTED_TOTAL.inc()
     logger.info(
         "Evaluated %s @ %s against resume=%s | cosine=%.4f | fit_score=%s | alert=%s",
         job.title,
@@ -402,7 +573,11 @@ def _score_and_persist_pair(
         resume_uuid,
         cosine_val,
         outcome.fit_score,
-        outcome.fit_score is not None and outcome.fit_score >= min_alert_score,
+        pending_alert is not None,
+    )
+    return _PairScoreResult(
+        alert=pending_alert,
+        scored=outcome.fit_score is not None,
     )
 
 
@@ -429,6 +604,7 @@ def _upsert_job_and_score_sync(
                 region_eligibility=[r.value for r in enriched.region_eligibility],
                 tech_stack=enriched.tech_stack,
                 ats_source=enriched.ats_source.value,
+                submitted_by_user_id=enriched.submitted_by_user_id,
             )
 
             cur.execute(
@@ -454,6 +630,7 @@ def _upsert_job_and_score_sync(
             )
             profiles = cur.fetchall()
 
+            pending_alerts: list[JobMatchAlertEvent] = []
             for (
                 resume_uuid,
                 user_id,
@@ -467,7 +644,7 @@ def _upsert_job_and_score_sync(
                 min_alert_score,
                 cosine_sim,
             ) in profiles:
-                _score_and_persist_pair(
+                pair_result = _score_and_persist_pair(
                     cur,
                     now=now,
                     trace_id=enriched.trace_id,
@@ -483,11 +660,15 @@ def _upsert_job_and_score_sync(
                     min_alert_score=min_alert_score,
                     cosine_val=float(cosine_sim),
                     gemini=gemini,
-                    producer=producer,
                     replace_evaluation=False,
+                    notify_manual_import=True,
                 )
+                if pair_result.alert is not None:
+                    pending_alerts.append(pair_result.alert)
 
         conn.commit()
+        if pending_alerts:
+            _publish_match_alerts(producer, pending_alerts)
         producer.flush(5.0)
 
 
@@ -622,7 +803,8 @@ def _rescore_resume_sync(
                     target_contract_types,
                     target_regions,
                     min_alert_score,
-                    embedding
+                    embedding,
+                    label
                 FROM resumes_resumeprofile
                 WHERE uuid = %s
                   AND is_deleted = FALSE
@@ -650,7 +832,13 @@ def _rescore_resume_sync(
                 target_regions,
                 min_alert_score,
                 resume_embedding,
+                *extra_profile,
             ) = profile_row
+            resume_label = (
+                str(extra_profile[0]).strip()
+                if extra_profile and extra_profile[0]
+                else "Active Resume"
+            )
 
             candidates = _select_rescore_candidates(
                 cur,
@@ -663,6 +851,8 @@ def _rescore_resume_sync(
             )
 
             processed = 0
+            scored_count = 0
+            alerts_count = 0
             for row in candidates:
                 (
                     job_uuid,
@@ -690,7 +880,7 @@ def _rescore_resume_sync(
                     tech_stack=_parse_json_list(tech_stack),
                     ats_source=ats_source,
                 )
-                _score_and_persist_pair(
+                pair_result = _score_and_persist_pair(
                     cur,
                     now=datetime.now(UTC),
                     trace_id=event.trace_id,
@@ -706,12 +896,30 @@ def _rescore_resume_sync(
                     min_alert_score=min_alert_score,
                     cosine_val=float(cosine_sim),
                     gemini=gemini,
-                    producer=producer,
                     replace_evaluation=True,
                 )
                 # Commit per job so partial progress survives restarts and retries stay idempotent
                 conn.commit()
+                if pair_result.scored:
+                    scored_count += 1
+                if pair_result.alert is not None:
+                    alerts_count += 1
+                    _publish_match_alerts(producer, [pair_result.alert])
                 processed += 1
+
+            if processed > 0:
+                _persist_rescore_completed(
+                    cur,
+                    now=datetime.now(UTC),
+                    user_id=user_id,
+                    resume_uuid=resume_uuid,
+                    resume_label=resume_label,
+                    processed_count=processed,
+                    scored_count=scored_count,
+                    alerts_count=alerts_count,
+                    force=event.force,
+                )
+                conn.commit()
 
         producer.flush(5.0)
         logger.info(
@@ -811,6 +1019,13 @@ async def run_matcher_worker() -> None:
                 WORKER_MESSAGES_TOTAL.labels(worker="matcher", outcome="dlq").inc()
                 logger.exception("Failed matching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
+                await asyncio.to_thread(
+                    persist_pipeline_error_notifications,
+                    source="matcher-worker",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    extra_payload={"topic": msg.topic()},
+                )
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
                 )

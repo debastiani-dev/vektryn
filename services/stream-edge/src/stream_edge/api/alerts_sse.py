@@ -42,8 +42,9 @@ def _format_alert_sse(msg: Message, user_id: str | None) -> str | None:
     if user_id is not None and str(alert.user_id) != user_id:
         return None
 
+    frame_id = alert.notification_uuid or alert.event_id
     return (
-        f"id: {alert.event_id}\n"
+        f"id: {frame_id}\n"
         f"event: match_alert\n"
         f"data: {alert.model_dump_json()}\n\n"
     )

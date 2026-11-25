@@ -241,4 +241,93 @@ describe("vektrynApi", () => {
         expect(triggerInit.method).toBe("POST");
         expect((triggerInit.headers as Headers).get("X-CSRFToken")).toBe("sys-csrf");
     });
+
+    it("calls notification center endpoints and match detail lookup with CSRF tokens", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=notif-csrf" });
+        const sampleNotification = {
+            uuid: "notif-1",
+            kind: "match_alert",
+            title: "90% Fit: Staff Python",
+            body: "Acme matched",
+            payload: { match_score_uuid: "match-1", job_posting_uuid: "job-1" },
+            read_at: null,
+            dismissed_at: null,
+            is_read: false,
+            created_at: "2026-11-25T10:00:00Z",
+            modified_at: "2026-11-25T10:00:00Z",
+        };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        count: 1,
+                        next: null,
+                        previous: null,
+                        results: [sampleNotification],
+                        unread_count: 1,
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        notification: { ...sampleNotification, is_read: true, read_at: "2026-11-25T10:05:00Z" },
+                        unread_count: 0,
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        notification: { ...sampleNotification, dismissed_at: "2026-11-25T10:06:00Z" },
+                        unread_count: 0,
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({ updated_count: 2, unread_count: 0 }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({ uuid: "match-1", fit_score: 90 }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const listRes = await vektrynApi.listNotifications("?unread=true");
+        expect(listRes.unread_count).toBe(1);
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/notifications/?unread=true");
+
+        const readRes = await vektrynApi.markNotificationRead("notif-1");
+        expect(readRes.unread_count).toBe(0);
+        expect((fetchMock.mock.calls[1] as [string, RequestInit])[0]).toBe(
+            "/api/v1/notifications/notif-1/read/",
+        );
+        expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe("PATCH");
+
+        const dismissRes = await vektrynApi.dismissNotification("notif-1");
+        expect(dismissRes.unread_count).toBe(0);
+        expect((fetchMock.mock.calls[2] as [string, RequestInit])[0]).toBe(
+            "/api/v1/notifications/notif-1/dismiss/",
+        );
+
+        const readAllRes = await vektrynApi.markAllNotificationsRead();
+        expect(readAllRes.updated_count).toBe(2);
+        expect((fetchMock.mock.calls[3] as [string, RequestInit])[0]).toBe(
+            "/api/v1/notifications/read-all/",
+        );
+        expect((fetchMock.mock.calls[3] as [string, RequestInit])[1].method).toBe("POST");
+
+        const matchRes = await vektrynApi.getMatch("match-1");
+        expect(matchRes.uuid).toBe("match-1");
+        expect((fetchMock.mock.calls[4] as [string])[0]).toBe("/api/v1/matches/match-1/");
+    });
 });
