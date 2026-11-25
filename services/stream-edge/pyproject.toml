@@ -24,10 +24,6 @@ google-cloud-storage = "^2.19"
 pydantic = "^2.10"
 pydantic-settings = "^2.7"
 vektryn-contracts = { path = "../../packages/contracts", develop = true }
-prometheus-client = "^0.26.0"
-opentelemetry-sdk = "^1.45.2"
-opentelemetry-exporter-otlp-proto-http = "^1.45.2"
-opentelemetry-instrumentation-fastapi = "^0.66b2"
 sentry-sdk = {extras = ["fastapi"], version = "^3.0.0"}
 
 [tool.poetry.group.dev.dependencies]

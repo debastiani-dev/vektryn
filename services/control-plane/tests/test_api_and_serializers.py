@@ -1817,3 +1817,17 @@ def test_system_collect_trigger_staff_gate_atomic_cooldown_and_rollback(settings
         err_resp = client.post(collect_url)
     assert err_resp.status_code == 503
     assert collector_trigger.COLLECT_COOLDOWN_KEY not in lock_state
+
+
+@pytest.mark.django_db
+def test_health_endpoints_ok_and_prometheus_metrics_removed():
+    client = APIClient()
+    health_root = client.get("/health/")
+    health_api = client.get("/api/v1/health/")
+    assert health_root.status_code == 200
+    assert health_root.json() == {"status": "ok", "service": "control-plane"}
+    assert health_api.status_code == 200
+    assert health_api.json() == {"status": "ok", "service": "control-plane"}
+
+    assert client.get("/metrics").status_code == 404
+    assert client.get("/metrics/").status_code == 404

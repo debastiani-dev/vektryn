@@ -9,7 +9,6 @@ from fastapi.responses import StreamingResponse
 
 from stream_edge.clients.kafka import create_kafka_consumer
 from stream_edge.config import settings
-from stream_edge.metrics import SSE_ACTIVE_CLIENTS, SSE_ALERTS_SENT_TOTAL
 from vektryn_contracts import JobMatchAlertEvent, KafkaTopic, verify_stream_token
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,6 @@ async def _alert_event_generator(
     )
     idle_seconds = 0.0
 
-    SSE_ACTIVE_CLIENTS.inc()
     try:
         yield ": connected\n\n"
         while not await request.is_disconnected():
@@ -79,10 +77,8 @@ async def _alert_event_generator(
             idle_seconds = 0.0
             sse_frame = _format_alert_sse(msg, user_id)
             if sse_frame is not None:
-                SSE_ALERTS_SENT_TOTAL.inc()
                 yield sse_frame
     finally:
-        SSE_ACTIVE_CLIENTS.dec()
         await asyncio.to_thread(consumer.close)
 
 

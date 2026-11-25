@@ -33,7 +33,7 @@ help:
 	} \
 	{ lastLine = $$0 }' $(MAKEFILE_LIST)
 
-## Start Docker Compose stack (infrastructure, backend, frontend, observability)
+## Start Docker Compose stack (infrastructure, backend, frontend)
 .PHONY: up
 up:
 	@echo "${GREEN}Starting Docker Compose stack${RESET}"
