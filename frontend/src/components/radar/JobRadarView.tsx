@@ -1,4 +1,5 @@
 import {
+    Ban,
     Banknote,
     Bell,
     BookmarkCheck,
@@ -7,6 +8,7 @@ import {
     CheckCircle2,
     Clock,
     ExternalLink,
+    EyeOff,
     Loader2,
     Mail,
     MapPin,
@@ -17,7 +19,7 @@ import {
     Sparkles,
     X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAllPagesWithCount, vektrynApi } from "../../api/client";
 import type {
     HybridSearchMode,
@@ -58,6 +60,7 @@ import {
 } from "../../utils/radarFilters";
 import {
     hydrateRadarStateFromPreset,
+    normalizeCompanyName,
     serializeRadarStateToPreset,
 } from "../../utils/savedFilters";
 import { PaginationBar } from "../ui/PaginationBar";
@@ -67,6 +70,7 @@ import { ImportJobModal } from "./ImportJobModal";
 import { JobPostingDrawer } from "./JobPostingDrawer";
 import { RadarSearchToolbar } from "./RadarSearchToolbar";
 import { SavedFilterPresetsBar } from "./SavedFilterPresetsBar";
+import { TriageManagementModal } from "./TriageManagementModal";
 
 function extractJobPostingId(jobPosting: unknown): string | null {
     if (typeof jobPosting === "string" && jobPosting.length > 0) {
@@ -129,9 +133,12 @@ interface RadarMatchCardProps {
     minAlertScore: number;
     isSaved: boolean;
     isBusy: boolean;
+    isTriaging: boolean;
     onOpenJob: (match: MatchScore) => void;
     onOpenGapDetails: (match: MatchScore) => void;
     onToggleSave: (match: MatchScore) => void;
+    onDismissRole: (match: MatchScore) => void;
+    onMuteCompany: (match: MatchScore) => void;
 }
 
 function RadarMatchCard({
@@ -139,9 +146,12 @@ function RadarMatchCard({
     minAlertScore,
     isSaved,
     isBusy,
+    isTriaging,
     onOpenJob,
     onOpenGapDetails,
     onToggleSave,
+    onDismissRole,
+    onMuteCompany,
 }: Readonly<RadarMatchCardProps>) {
     const job = match.job_posting;
     const actionLabel = getSaveActionLabel(isSaved, isBusy);
@@ -360,7 +370,32 @@ function RadarMatchCard({
                     </div>
                 </div>
 
-                <div className="pointer-events-auto relative z-20 flex flex-wrap shrink-0 items-center gap-3 xl:justify-end">
+                <div className="pointer-events-auto relative z-20 flex flex-wrap shrink-0 items-center gap-2.5 xl:justify-end">
+                    <div className="flex items-center gap-1.5">
+                        <Tooltip content="Hide this role from Job Radar">
+                            <button
+                                type="button"
+                                disabled={isTriaging}
+                                aria-label={`Hide role ${job.title}`}
+                                onClick={() => onDismissRole(match)}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
+                            >
+                                <EyeOff className="h-4 w-4" />
+                            </button>
+                        </Tooltip>
+                        <Tooltip content={`Mute all roles from ${job.company_name}`}>
+                            <button
+                                type="button"
+                                disabled={isTriaging}
+                                aria-label={`Mute company ${job.company_name}`}
+                                onClick={() => onMuteCompany(match)}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition hover:border-red-500/40 hover:bg-red-950/30 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
+                            >
+                                <Ban className="h-4 w-4" />
+                            </button>
+                        </Tooltip>
+                    </div>
+
                     <Tooltip content="Inspect matched skills, missing keywords, and talking points">
                         <button
                             type="button"
@@ -565,7 +600,7 @@ async function fetchImportedJobByExternalId(
 ): Promise<JobPostingSummary | null> {
     try {
         const res = await vektrynApi.listJobs(
-            `?ats_source=manual&external_id=${encodeURIComponent(externalId)}`,
+            `?ats_source=manual&external_id=${encodeURIComponent(externalId)}&hide_dismissed=false&hide_muted=false`,
         );
         return res.results[0] ?? null;
     } catch {
@@ -577,7 +612,7 @@ async function fetchImportedJobByExternalId(
 async function fetchImportedMatchByExternalId(externalId: string): Promise<MatchScore | null> {
     try {
         const res = await vektrynApi.listMatches(
-            `?external_id=${encodeURIComponent(externalId)}`,
+            `?external_id=${encodeURIComponent(externalId)}&hide_dismissed=false&hide_muted=false`,
         );
         return res.results[0] ?? null;
     } catch {
@@ -805,13 +840,71 @@ function RadarKpiGrid({
     );
 }
 
+interface TriageUndoState {
+    kind: "dismissed" | "muted";
+    recordUuid: string;
+    message: string;
+}
+
+function TriageUndoBanner({
+    banner,
+    undoing,
+    onUndo,
+    onDismiss,
+}: Readonly<{
+    banner: TriageUndoState;
+    undoing: boolean;
+    onUndo: () => void;
+    onDismiss: () => void;
+}>) {
+    return (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-700/80 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200 shadow-lg shadow-black/25">
+            <div className="flex items-center gap-2.5 min-w-0">
+                {banner.kind === "dismissed" ? (
+                    <EyeOff className="h-4 w-4 shrink-0 text-zinc-400" />
+                ) : (
+                    <Ban className="h-4 w-4 shrink-0 text-amber-400" />
+                )}
+                <span className="truncate">{banner.message}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+                <button
+                    type="button"
+                    disabled={undoing}
+                    onClick={onUndo}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/15 px-3 py-1 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/25 disabled:opacity-50"
+                >
+                    {undoing ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                        <RotateCcw className="h-3.5 w-3.5" />
+                    )}
+                    Undo
+                </button>
+                <button
+                    type="button"
+                    onClick={onDismiss}
+                    aria-label="Dismiss notification"
+                    className="rounded-lg p-1 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+            </div>
+        </div>
+    );
+}
+
 const SEARCH_DEBOUNCE_MS = 350;
+const TRIAGE_UNDO_MS = 8000;
 
 function buildMatchesQueryParams(opts: {
     page: number;
     minScore: number;
     resumeFilter: string;
     evaluatedOnly: boolean;
+    untrackedOnly: boolean;
+    hideDismissed: boolean;
+    hideMuted: boolean;
     sortBy: RadarSortOption;
     search: string;
     metadataFilters: RadarMetadataFilters;
@@ -821,6 +914,9 @@ function buildMatchesQueryParams(opts: {
     if (opts.minScore > 0) params.set("min_fit_score", String(opts.minScore));
     if (opts.resumeFilter) params.set("resume_profile", opts.resumeFilter);
     if (opts.evaluatedOnly) params.set("evaluated_only", "true");
+    if (opts.untrackedOnly) params.set("untracked_only", "true");
+    if (!opts.hideDismissed) params.set("hide_dismissed", "false");
+    if (!opts.hideMuted) params.set("hide_muted", "false");
     if (opts.search) params.set("search", opts.search);
     if (opts.metadataFilters.seniority) params.set("seniority", opts.metadataFilters.seniority);
     if (opts.metadataFilters.contractType) {
@@ -845,6 +941,9 @@ export function JobRadarView() {
     const [resumes, setResumes] = useState<ResumeProfile[]>([]);
     const [resumeFilter, setResumeFilter] = useState("");
     const [evaluatedOnly, setEvaluatedOnly] = useState(false);
+    const [untrackedOnly, setUntrackedOnly] = useState(false);
+    const [hideDismissed, setHideDismissed] = useState(true);
+    const [hideMuted, setHideMuted] = useState(true);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
@@ -860,6 +959,13 @@ export function JobRadarView() {
     const [selectedImportedJob, setSelectedImportedJob] = useState<JobPostingSummary | null>(null);
     const [selectedGapMatch, setSelectedGapMatch] = useState<MatchScore | null>(null);
     const [importModalOpen, setImportModalOpen] = useState(false);
+    const [triageModalOpen, setTriageModalOpen] = useState(false);
+    const [dismissedTotalCount, setDismissedTotalCount] = useState(0);
+    const [mutedTotalCount, setMutedTotalCount] = useState(0);
+    const [triageBusyJobId, setTriageBusyJobId] = useState<string | null>(null);
+    const [triageUndoBanner, setTriageUndoBanner] = useState<TriageUndoState | null>(null);
+    const [undoingTriage, setUndoingTriage] = useState(false);
+    const undoTimerRef = useRef<number | undefined>(undefined);
     const [reloadTick, setReloadTick] = useState(0);
     const [importBanner, setImportBanner] = useState<ImportBannerState | null>(() =>
         restorePendingImportBanner(),
@@ -913,11 +1019,14 @@ export function JobRadarView() {
     useEffect(() => {
         let cancelled = false;
         async function loadMeta() {
-            const [leadsResult, resumesResult, presetsResult] = await Promise.allSettled([
-                fetchAllPagesWithCount(vektrynApi.listLeads),
-                vektrynApi.listResumes(),
-                vektrynApi.listSavedFilters(),
-            ]);
+            const [leadsResult, resumesResult, presetsResult, dismissedResult, mutedResult] =
+                await Promise.allSettled([
+                    fetchAllPagesWithCount(vektrynApi.listLeads),
+                    vektrynApi.listResumes(),
+                    vektrynApi.listSavedFilters(),
+                    vektrynApi.listDismissedJobs(1),
+                    vektrynApi.listMutedCompanies(1),
+                ]);
             if (cancelled) return;
             if (leadsResult.status === "fulfilled") {
                 const nextMap: Record<string, string> = {};
@@ -936,10 +1045,17 @@ export function JobRadarView() {
             if (presetsResult.status === "fulfilled") {
                 setSavedPresets(presetsResult.value.results);
             }
+            if (dismissedResult.status === "fulfilled") {
+                setDismissedTotalCount(dismissedResult.value.count);
+            }
+            if (mutedResult.status === "fulfilled") {
+                setMutedTotalCount(mutedResult.value.count);
+            }
         }
         void loadMeta();
         return () => {
             cancelled = true;
+            window.clearTimeout(undoTimerRef.current);
         };
     }, []);
 
@@ -966,6 +1082,9 @@ export function JobRadarView() {
                     minScore,
                     resumeFilter,
                     evaluatedOnly,
+                    untrackedOnly,
+                    hideDismissed,
+                    hideMuted,
                     sortBy,
                     search: debouncedSearch,
                     metadataFilters,
@@ -1012,6 +1131,9 @@ export function JobRadarView() {
         minScore,
         resumeFilter,
         evaluatedOnly,
+        untrackedOnly,
+        hideDismissed,
+        hideMuted,
         sortBy,
         debouncedSearch,
         metadataFilters,
@@ -1156,6 +1278,16 @@ export function JobRadarView() {
                     [jobId]: created.uuid,
                 }));
                 setSavedTotalCount((prev) => prev + 1);
+                if (untrackedOnly) {
+                    const remaining = matches.filter((m) => m.job_posting.uuid !== jobId);
+                    setMatches(remaining);
+                    setTotalCount((prev) => Math.max(0, prev - 1));
+                    if (remaining.length === 0 && page > 1) {
+                        setPage((prev) => Math.max(1, prev - 1));
+                    } else if (remaining.length === 0 && hasNext) {
+                        setReloadTick((prev) => prev + 1);
+                    }
+                }
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -1212,6 +1344,149 @@ export function JobRadarView() {
         alertThresholdDisplay = DEFAULT_MIN_ALERT_SCORE;
     }
 
+    function showTriageUndo(next: TriageUndoState) {
+        window.clearTimeout(undoTimerRef.current);
+        setTriageUndoBanner(next);
+        undoTimerRef.current = window.setTimeout(() => {
+            setTriageUndoBanner(null);
+        }, TRIAGE_UNDO_MS);
+    }
+
+    function reconcileEmptyPageAfterRemoval(remainingCount: number) {
+        if (remainingCount > 0) {
+            return;
+        }
+        if (page > 1) {
+            setPage((prev) => Math.max(1, prev - 1));
+        } else if (hasNext) {
+            setReloadTick((prev) => prev + 1);
+        }
+    }
+
+    async function handleDismissRole(match: MatchScore) {
+        const job = match.job_posting;
+        const previousMatches = matches;
+        const previousTotal = totalCount;
+        setTriageBusyJobId(job.uuid);
+        setError(null);
+
+        const removedMatches = hideDismissed
+            ? matches.filter((m) => m.job_posting.uuid !== job.uuid)
+            : matches;
+        const removedCount = matches.length - removedMatches.length;
+
+        if (hideDismissed && removedCount > 0) {
+            setMatches(removedMatches);
+            setTotalCount((prev) => Math.max(0, prev - removedCount));
+        }
+
+        try {
+            const created = await vektrynApi.dismissJob(job.uuid);
+            setDismissedTotalCount((prev) => prev + 1);
+            showTriageUndo({
+                kind: "dismissed",
+                recordUuid: created.uuid,
+                message: `Hid "${job.title}" at ${job.company_name}`,
+            });
+            if (hideDismissed) {
+                reconcileEmptyPageAfterRemoval(removedMatches.length);
+            }
+        } catch (err) {
+            if (hideDismissed) {
+                setMatches(previousMatches);
+                setTotalCount(previousTotal);
+            }
+            setError(err instanceof Error ? err.message : "Failed to hide role");
+        } finally {
+            setTriageBusyJobId(null);
+        }
+    }
+
+    async function handleMuteCompany(match: MatchScore) {
+        const job = match.job_posting;
+        const normalizedTarget = normalizeCompanyName(job.company_name);
+        const previousMatches = matches;
+        const previousTotal = totalCount;
+        setTriageBusyJobId(job.uuid);
+        setError(null);
+
+        const removedMatches = hideMuted
+            ? matches.filter(
+                  (m) => normalizeCompanyName(m.job_posting.company_name) !== normalizedTarget,
+              )
+            : matches;
+        const removedCount = matches.length - removedMatches.length;
+
+        if (hideMuted && removedCount > 0) {
+            setMatches(removedMatches);
+            setTotalCount((prev) => Math.max(0, prev - removedCount));
+        }
+
+        try {
+            const created = await vektrynApi.muteCompany(job.company_name);
+            setMutedTotalCount((prev) => prev + 1);
+            showTriageUndo({
+                kind: "muted",
+                recordUuid: created.uuid,
+                message: `Muted "${created.company_name_display}" across current and future syncs`,
+            });
+            if (hideMuted) {
+                reconcileEmptyPageAfterRemoval(removedMatches.length);
+            }
+        } catch (err) {
+            if (hideMuted) {
+                setMatches(previousMatches);
+                setTotalCount(previousTotal);
+            }
+            setError(err instanceof Error ? err.message : "Failed to mute company");
+        } finally {
+            setTriageBusyJobId(null);
+        }
+    }
+
+    async function handleUndoTriage() {
+        if (!triageUndoBanner) return;
+        setUndoingTriage(true);
+        setError(null);
+        try {
+            if (triageUndoBanner.kind === "dismissed") {
+                await vektrynApi.restoreDismissedJob(triageUndoBanner.recordUuid);
+                setDismissedTotalCount((prev) => Math.max(0, prev - 1));
+            } else {
+                await vektrynApi.unmuteCompany(triageUndoBanner.recordUuid);
+                setMutedTotalCount((prev) => Math.max(0, prev - 1));
+            }
+            window.clearTimeout(undoTimerRef.current);
+            setTriageUndoBanner(null);
+            setReloadTick((prev) => prev + 1);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to undo triage action");
+        } finally {
+            setUndoingTriage(false);
+        }
+    }
+
+    const handleSyncTriageCounts = useCallback(
+        (counts: { dismissedCount: number; mutedCount: number }) => {
+            setDismissedTotalCount(counts.dismissedCount);
+            setMutedTotalCount(counts.mutedCount);
+        },
+        [],
+    );
+
+    const handleTriageModalMutated = useCallback(
+        (counts: { dismissedCount?: number; mutedCount?: number }) => {
+            if (typeof counts.dismissedCount === "number") {
+                setDismissedTotalCount(counts.dismissedCount);
+            }
+            if (typeof counts.mutedCount === "number") {
+                setMutedTotalCount(counts.mutedCount);
+            }
+            setReloadTick((prev) => prev + 1);
+        },
+        [],
+    );
+
     const strongCount = strongFitCount;
     const alertCount = alertThresholdCount;
     const savedCount = savedTotalCount;
@@ -1224,6 +1499,9 @@ export function JobRadarView() {
         Boolean(searchTerm.trim()) ||
         Boolean(debouncedSearch) ||
         evaluatedOnly ||
+        untrackedOnly ||
+        !hideDismissed ||
+        !hideMuted ||
         activePanelCount > 0;
 
     function updateMetadataFilters(patch: Partial<RadarMetadataFilters>) {
@@ -1248,6 +1526,9 @@ export function JobRadarView() {
         setMinScore(0);
         setResumeFilter("");
         setEvaluatedOnly(false);
+        setUntrackedOnly(false);
+        setHideDismissed(true);
+        setHideMuted(true);
         setMetadataFilters(EMPTY_METADATA_FILTERS);
         setSortBy("best_match");
         setPage(1);
@@ -1258,6 +1539,9 @@ export function JobRadarView() {
         resumeFilter,
         minScore,
         evaluatedOnly,
+        untrackedOnly,
+        hideDismissed,
+        hideMuted,
         metadataFilters,
         sortBy,
     };
@@ -1269,6 +1553,9 @@ export function JobRadarView() {
         setResumeFilter(next.resumeFilter);
         setMinScore(next.minScore);
         setEvaluatedOnly(next.evaluatedOnly);
+        setUntrackedOnly(next.untrackedOnly);
+        setHideDismissed(next.hideDismissed);
+        setHideMuted(next.hideMuted);
         setMetadataFilters(next.metadataFilters);
         setSortBy(next.sortBy);
         setPage(1);
@@ -1353,9 +1640,12 @@ export function JobRadarView() {
                         minAlertScore={resolveMinAlertScore(match)}
                         isSaved={Boolean(savedLeadsByJobId[match.job_posting.uuid])}
                         isBusy={savingJobId === match.job_posting.uuid}
+                        isTriaging={triageBusyJobId === match.job_posting.uuid}
                         onOpenJob={openJobListing}
                         onOpenGapDetails={openGapDetails}
                         onToggleSave={(m) => void handleToggleSaveLead(m)}
+                        onDismissRole={(m) => void handleDismissRole(m)}
+                        onMuteCompany={(m) => void handleMuteCompany(m)}
                     />
                 ))}
             </div>
@@ -1436,6 +1726,10 @@ export function JobRadarView() {
                 resumeFilter={resumeFilter}
                 minScore={minScore}
                 evaluatedOnly={evaluatedOnly}
+                untrackedOnly={untrackedOnly}
+                hideDismissed={hideDismissed}
+                hideMuted={hideMuted}
+                hiddenMutedCount={dismissedTotalCount + mutedTotalCount}
                 sortBy={sortBy}
                 metadataFilters={metadataFilters}
                 filtersOpen={filtersOpen}
@@ -1454,6 +1748,11 @@ export function JobRadarView() {
                     setEvaluatedOnly((prev) => !prev);
                     setPage(1);
                 }}
+                onToggleUntrackedOnly={() => {
+                    setUntrackedOnly((prev) => !prev);
+                    setPage(1);
+                }}
+                onOpenTriageModal={() => setTriageModalOpen(true)}
                 onToggleFiltersOpen={() => setFiltersOpen((prev) => !prev)}
                 onSortChange={(nextSort) => {
                     setSortBy(nextSort);
@@ -1472,6 +1771,18 @@ export function JobRadarView() {
                 onResetAll={resetFilters}
             />
             </div>
+
+            {triageUndoBanner && (
+                <TriageUndoBanner
+                    banner={triageUndoBanner}
+                    undoing={undoingTriage}
+                    onUndo={() => void handleUndoTriage()}
+                    onDismiss={() => {
+                        window.clearTimeout(undoTimerRef.current);
+                        setTriageUndoBanner(null);
+                    }}
+                />
+            )}
 
             {error && (
                 <div className="rounded-2xl border border-red-500/30 bg-red-950/20 px-5 py-4 text-sm text-red-300">
@@ -1531,6 +1842,23 @@ export function JobRadarView() {
                 open={importModalOpen}
                 onClose={() => setImportModalOpen(false)}
                 onImported={(res) => void handleJobImported(res)}
+            />
+
+            <TriageManagementModal
+                open={triageModalOpen}
+                hideDismissed={hideDismissed}
+                hideMuted={hideMuted}
+                onClose={() => setTriageModalOpen(false)}
+                onToggleHideDismissed={() => {
+                    setHideDismissed((prev) => !prev);
+                    setPage(1);
+                }}
+                onToggleHideMuted={() => {
+                    setHideMuted((prev) => !prev);
+                    setPage(1);
+                }}
+                onSyncCounts={handleSyncTriageCounts}
+                onTriageMutated={handleTriageModalMutated}
             />
         </div>
     );

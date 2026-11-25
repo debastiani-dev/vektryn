@@ -11,11 +11,18 @@ export interface RadarFilterState {
     resumeFilter: string;
     minScore: number;
     evaluatedOnly: boolean;
+    untrackedOnly: boolean;
+    hideDismissed: boolean;
+    hideMuted: boolean;
     metadataFilters: RadarMetadataFilters;
     sortBy: RadarSortOption;
 }
 
 const VALID_SORT_VALUES = new Set<string>(RADAR_SORT_OPTIONS.map((opt) => opt.value));
+
+export function normalizeCompanyName(raw: string): string {
+    return raw.trim().toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+}
 
 export function serializeRadarStateToPreset(state: RadarFilterState): SavedFilterQueryParams {
     const params: SavedFilterQueryParams = {};
@@ -24,6 +31,9 @@ export function serializeRadarStateToPreset(state: RadarFilterState): SavedFilte
     if (state.resumeFilter) params.resume_profile = state.resumeFilter;
     if (state.minScore > 0) params.min_score = state.minScore;
     if (state.evaluatedOnly) params.evaluated_only = true;
+    if (state.untrackedOnly) params.untracked_only = true;
+    if (!state.hideDismissed) params.hide_dismissed = false;
+    if (!state.hideMuted) params.hide_muted = false;
     if (state.metadataFilters.seniority) params.seniority = state.metadataFilters.seniority;
     if (state.metadataFilters.contractType) {
         params.contract_type = state.metadataFilters.contractType;
@@ -51,6 +61,9 @@ export function hydrateRadarStateFromPreset(
         resumeFilter: resumeExists ? rawResume : "",
         minScore: typeof params.min_score === "number" && params.min_score > 0 ? params.min_score : 0,
         evaluatedOnly: Boolean(params.evaluated_only),
+        untrackedOnly: Boolean(params.untracked_only),
+        hideDismissed: typeof params.hide_dismissed === "boolean" ? params.hide_dismissed : true,
+        hideMuted: typeof params.hide_muted === "boolean" ? params.hide_muted : true,
         metadataFilters: {
             ...EMPTY_METADATA_FILTERS,
             seniority: typeof params.seniority === "string" ? params.seniority : "",
@@ -76,6 +89,9 @@ export function isPresetActive(
         (normalizedCurrent.resume_profile ?? "") === (normalizedPreset.resume_profile ?? "") &&
         (normalizedCurrent.min_score ?? 0) === (normalizedPreset.min_score ?? 0) &&
         Boolean(normalizedCurrent.evaluated_only) === Boolean(normalizedPreset.evaluated_only) &&
+        Boolean(normalizedCurrent.untracked_only) === Boolean(normalizedPreset.untracked_only) &&
+        (normalizedCurrent.hide_dismissed ?? true) === (normalizedPreset.hide_dismissed ?? true) &&
+        (normalizedCurrent.hide_muted ?? true) === (normalizedPreset.hide_muted ?? true) &&
         (normalizedCurrent.seniority ?? "") === (normalizedPreset.seniority ?? "") &&
         (normalizedCurrent.contract_type ?? "") === (normalizedPreset.contract_type ?? "") &&
         (normalizedCurrent.region ?? "") === (normalizedPreset.region ?? "") &&

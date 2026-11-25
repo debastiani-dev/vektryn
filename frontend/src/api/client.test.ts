@@ -390,4 +390,87 @@ describe("vektrynApi", () => {
         expect(await exported.blob.text()).toContain("lead-1,Engineer");
         expect((fetchMock.mock.calls[3] as [string])[0]).toBe("/api/v1/leads/export/?format=csv");
     });
+
+    it("supports dismissed jobs and muted companies triage endpoints", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=triage-csrf" });
+        const sampleDismissed = {
+            uuid: "dis-1",
+            job_posting: "job-1",
+            job_title: "Staff Python Engineer",
+            company_name: "Acme",
+            ats_source: "greenhouse",
+            created_at: "2026-11-25T12:00:00Z",
+        };
+        const sampleMuted = {
+            uuid: "mut-1",
+            company_name_display: "Spam Agency",
+            company_name_normalized: "spam agency",
+            created_at: "2026-11-25T12:00:00Z",
+        };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        count: 1,
+                        next: null,
+                        previous: null,
+                        results: [sampleDismissed],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(sampleDismissed), {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(null, { status: 204 }))
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        count: 1,
+                        next: null,
+                        previous: null,
+                        results: [sampleMuted],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(sampleMuted), {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(null, { status: 204 }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const dismissedList = await vektrynApi.listDismissedJobs(2);
+        expect(dismissedList.count).toBe(1);
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/jobs/dismissed/?page=2");
+
+        const dismissed = await vektrynApi.dismissJob("job-1");
+        expect(dismissed.uuid).toBe("dis-1");
+        expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe("POST");
+
+        await vektrynApi.restoreDismissedJob("dis-1");
+        expect((fetchMock.mock.calls[2] as [string])[0]).toBe("/api/v1/jobs/dismissed/dis-1/");
+
+        const mutedList = await vektrynApi.listMutedCompanies(1);
+        expect(mutedList.count).toBe(1);
+        expect((fetchMock.mock.calls[3] as [string])[0]).toBe(
+            "/api/v1/jobs/muted-companies/?page=1",
+        );
+
+        const muted = await vektrynApi.muteCompany("Spam Agency");
+        expect(muted.uuid).toBe("mut-1");
+        expect((fetchMock.mock.calls[4] as [string, RequestInit])[1].method).toBe("POST");
+
+        await vektrynApi.unmuteCompany("mut-1");
+        expect((fetchMock.mock.calls[5] as [string])[0]).toBe(
+            "/api/v1/jobs/muted-companies/mut-1/",
+        );
+    });
 });

@@ -23,6 +23,7 @@ from apps.jobs.services.manual_import import (
     ManualImportValidationError,
     ManualJobImportService,
 )
+from apps.jobs.services.triage import apply_triage_filters
 
 
 class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
@@ -43,6 +44,12 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
     def list(self, request, *args, **kwargs):
         structured_qs = DjangoFilterBackend().filter_queryset(
             request, self.get_queryset(), self
+        )
+        structured_qs = apply_triage_filters(
+            structured_qs,
+            request,
+            job_id_field="uuid",
+            company_field="company_name",
         )
         search_query = extract_search_query(request.query_params)
         search_mode: str | None = None

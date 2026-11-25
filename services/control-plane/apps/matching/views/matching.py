@@ -10,6 +10,7 @@ from apps.jobs.services.hybrid_search import (
     execute_hybrid_search,
     extract_search_query,
 )
+from apps.jobs.services.triage import apply_triage_filters
 from apps.matching.filters.matching import MatchScoreFilter
 from apps.matching.models.matching import MatchScore
 from apps.matching.serializers.matching import MatchScoreSerializer
@@ -74,6 +75,12 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     def list(self, request, *args, **kwargs):
         structured_qs = DjangoFilterBackend().filter_queryset(
             request, self.get_queryset(), self
+        )
+        structured_qs = apply_triage_filters(
+            structured_qs,
+            request,
+            job_id_field="job_posting_id",
+            company_field="job_posting__company_name",
         )
         search_query = extract_search_query(request.query_params)
         search_mode: str | None = None
