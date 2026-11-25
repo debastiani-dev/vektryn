@@ -1,4 +1,5 @@
 import {
+    ArrowUpDown,
     Banknote,
     Bell,
     BookmarkCheck,
@@ -783,6 +784,42 @@ function RadarKpiGrid({
     );
 }
 
+type RadarSortOption = "best_match" | "newest" | "posted_at" | "vector";
+
+const RADAR_SORT_OPTIONS: ReadonlyArray<{
+    value: RadarSortOption;
+    label: string;
+    ordering: string;
+}> = [
+    {
+        value: "best_match",
+        label: "Best Match",
+        ordering: "-fit_score,-cosine_similarity,-created_at",
+    },
+    {
+        value: "newest",
+        label: "Newest Added",
+        ordering: "-created_at",
+    },
+    {
+        value: "posted_at",
+        label: "Posted Date",
+        ordering: "-job_posting__posted_at,-created_at",
+    },
+    {
+        value: "vector",
+        label: "Vector Similarity",
+        ordering: "-cosine_similarity,-fit_score,-created_at",
+    },
+];
+
+function resolveRadarOrdering(sortBy: RadarSortOption): string | null {
+    if (sortBy === "best_match") {
+        return null;
+    }
+    return RADAR_SORT_OPTIONS.find((opt) => opt.value === sortBy)?.ordering ?? null;
+}
+
 export function JobRadarView() {
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [totalCount, setTotalCount] = useState(0);
@@ -799,6 +836,7 @@ export function JobRadarView() {
     const [error, setError] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
     const [minScore, setMinScore] = useState<number>(0);
+    const [sortBy, setSortBy] = useState<RadarSortOption>("best_match");
     const [selectedJobMatch, setSelectedJobMatch] = useState<MatchScore | null>(null);
     const [selectedImportedJob, setSelectedImportedJob] = useState<JobPostingSummary | null>(null);
     const [selectedGapMatch, setSelectedGapMatch] = useState<MatchScore | null>(null);
@@ -895,6 +933,10 @@ export function JobRadarView() {
                 if (evaluatedOnly) {
                     params.set("evaluated_only", "true");
                 }
+                const orderingParam = resolveRadarOrdering(sortBy);
+                if (orderingParam) {
+                    params.set("ordering", orderingParam);
+                }
                 const matchRes = await vektrynApi.listMatches(`?${params.toString()}`);
                 if (cancelled) return;
                 setMatches(matchRes.results);
@@ -927,7 +969,7 @@ export function JobRadarView() {
         return () => {
             cancelled = true;
         };
-    }, [page, minScore, resumeFilter, evaluatedOnly, reloadTick]);
+    }, [page, minScore, resumeFilter, evaluatedOnly, sortBy, reloadTick]);
 
     const handleImportedPersisted = useCallback(
         (externalId: string, persisted: JobPostingSummary, match: MatchScore | null) => {
@@ -1303,6 +1345,33 @@ export function JobRadarView() {
                             AI Scored Only
                         </button>
                     </Tooltip>
+
+                    <div className="flex items-center gap-2.5">
+                        <ArrowUpDown className="h-4 w-4 text-zinc-400" />
+                        <label htmlFor="radar-sort" className="text-zinc-400">
+                            Sort:
+                        </label>
+                        <Tooltip content="Order matching roles server-side">
+                            <div className="relative">
+                                <select
+                                    id="radar-sort"
+                                    value={sortBy}
+                                    onChange={(e) => {
+                                        setSortBy(e.target.value as RadarSortOption);
+                                        setPage(1);
+                                    }}
+                                    className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                >
+                                    {RADAR_SORT_OPTIONS.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>
+                                            {opt.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
+                            </div>
+                        </Tooltip>
+                    </div>
 
                     <div className="flex items-center gap-2.5">
                         <SlidersHorizontal className="h-4 w-4 text-zinc-400" />
