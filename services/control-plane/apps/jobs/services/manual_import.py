@@ -7,6 +7,7 @@ import html
 import ipaddress
 import json
 import logging
+import re
 import secrets
 import socket
 from typing import Any
@@ -85,8 +86,27 @@ _GENERIC_SUBDOMAINS = (
     "job-boards.",
 )
 _GENERIC_SITE_NAMES = frozenset(
-    {"greenhouse", "job boards", "lever", "ashby", "workable", "smartrecruiters"}
+    {
+        "greenhouse",
+        "job boards",
+        "lever",
+        "ashby",
+        "workable",
+        "smartrecruiters",
+        "linkedin",
+    }
 )
+_LINKEDIN_HIRING_MARKERS = (
+    " hiring ",
+    " está contratando ",
+    " esta contratando ",
+    " contratando ",
+    " busca ",
+    " recrutando ",
+)
+_LINKEDIN_AUTHWALL_PATHS = ("/authwall", "/login", "/uas/login", "/checkpoint/")
+_LINKEDIN_SLUG_COMPANY_RE = re.compile(r"-at-([a-z0-9-]+?)(?:-\d+)?$")
+_COUNTRY_SUBDOMAIN_RE = re.compile(r"^[a-z]{2}\.")
 _STRIPPED_HTML_TAGS = ("script", "style", "noscript", "svg", "iframe")
 _CHROME_HTML_TAGS = ("nav", "header", "footer", "aside")
 
@@ -476,10 +496,38 @@ def _send_pinned_request(
         ) from exc
 
 
+def _is_linkedin_host(host: str) -> bool:
+    normalized = host.lower().strip(".")
+    return normalized == "linkedin.com" or normalized.endswith(".linkedin.com")
+
+
+def normalize_import_url(url: str) -> str:
+    raw = (url or "").strip()
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if not _is_linkedin_host(host):
+        return raw
+    for key, value in parse_qsl(parsed.query, keep_blank_values=False):
+        if key.lower() == "currentjobid" and value.strip().isdigit():
+            return f"https://www.linkedin.com/jobs/view/{value.strip()}/"
+    return raw
+
+
+def _assert_not_linkedin_authwall(logical_url: str) -> None:
+    parsed = urlparse(logical_url)
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+    if _is_linkedin_host(host) and path.startswith(_LINKEDIN_AUTHWALL_PATHS):
+        raise ManualImportFetchError(
+            "LinkedIn redirected this listing to a sign-in wall. "
+            "Switch to Enter Manually to paste the job description."
+        )
+
+
 def fetch_public_job_page(
     url: str, *, client: httpx.Client | None = None
 ) -> tuple[str, str]:
-    logical_url = url.strip()
+    logical_url = normalize_import_url(url)
     owns_client = client is None
     http_client = client or httpx.Client(
         timeout=EXTERNAL_FETCH_TIMEOUT,
@@ -499,6 +547,7 @@ def fetch_public_job_page(
                     # Resolve relative redirects against logical hostname URL, never the pinned IP
                     logical_url = urljoin(target.logical_url, location)
                     continue
+                _assert_not_linkedin_authwall(target.logical_url)
                 return _read_bounded_response(response), target.logical_url
             finally:
                 response.close()
@@ -595,34 +644,68 @@ def _humanize_slug(slug: str) -> str:
     return slug.replace("-", " ").replace("_", " ").strip().title()
 
 
+def _extract_linkedin_company_from_url(parsed) -> str:
+    segments = [seg.strip().lower() for seg in parsed.path.split("/") if seg.strip()]
+    if len(segments) < 3 or segments[0] != "jobs" or segments[1] != "view":
+        return ""
+    match = _LINKEDIN_SLUG_COMPANY_RE.search(segments[2])
+    if not match:
+        return ""
+    return _humanize_slug(match.group(1))
+
+
+def _strip_subdomains(host: str) -> str:
+    cleaned = host
+    for prefix in _GENERIC_SUBDOMAINS:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix) :]
+            break
+    if cleaned.count(".") >= 2 and _COUNTRY_SUBDOMAIN_RE.match(cleaned):
+        cleaned = cleaned[3:]
+    return cleaned
+
+
 def _fallback_company_from_url(url: str) -> str:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
+    if _is_linkedin_host(host):
+        linkedin_company = _extract_linkedin_company_from_url(parsed)
+        if linkedin_company:
+            return linkedin_company
     if host in _HOSTED_ATS_PATH_HOSTS:
         segments = [seg.strip() for seg in parsed.path.split("/") if seg.strip()]
         if segments:
             return _humanize_slug(segments[0]) or "External"
-    for prefix in _GENERIC_SUBDOMAINS:
-        if host.startswith(prefix):
-            host = host[len(prefix) :]
-            break
-    primary = host.split(".")[0] if host else "External"
+    cleaned_host = _strip_subdomains(host)
+    primary = cleaned_host.split(".")[0] if cleaned_host else "External"
     return _humanize_slug(primary) or "External"
 
 
-def _extract_company_from_title(page_title: str) -> str:
+def _strip_title_suffix(page_title: str) -> str:
     cleaned = page_title.strip()
-    if not cleaned:
-        return ""
     for sep in (" | ", " - ", " — "):
         if sep in cleaned:
             cleaned = cleaned.split(sep, 1)[0].strip()
-    lower = cleaned.lower()
-    marker = " at "
-    idx = lower.rfind(marker)
-    if idx == -1:
+    return cleaned
+
+
+def _extract_company_from_title(page_title: str) -> str:
+    cleaned = _strip_title_suffix(page_title)
+    if not cleaned:
         return ""
-    candidate = cleaned[idx + len(marker) :].strip()
+    lower = cleaned.lower()
+
+    for marker in _LINKEDIN_HIRING_MARKERS:
+        idx = lower.find(marker)
+        if idx > 0:
+            candidate = cleaned[:idx].strip()
+            if candidate and candidate.lower() not in _GENERIC_SITE_NAMES:
+                return candidate[:180]
+
+    at_idx = lower.rfind(" at ")
+    if at_idx == -1:
+        return ""
+    candidate = cleaned[at_idx + 4 :].strip()
     if not candidate or candidate.lower() in _GENERIC_SITE_NAMES:
         return ""
     return candidate[:180]
