@@ -14,6 +14,7 @@ import { clearPendingImport } from "./utils/pendingImportStorage";
 
 export function App() {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
+    const [pendingRadarSearch, setPendingRadarSearch] = useState("");
     const [user, setUser] = useState<CurrentUser | null>(null);
     const [checkingSession, setCheckingSession] = useState(true);
     const [activeNotificationMatch, setActiveNotificationMatch] = useState<MatchScore | null>(null);
@@ -152,6 +153,15 @@ export function App() {
         [markRead],
     );
 
+    const handleSearchSkillInRadar = useCallback((skill: string) => {
+        setPendingRadarSearch(skill);
+        setActiveTab("radar");
+    }, []);
+
+    const handleConsumeRadarSearch = useCallback(() => {
+        setPendingRadarSearch("");
+    }, []);
+
     if (checkingSession) {
         return (
             <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
@@ -199,9 +209,16 @@ export function App() {
                     onOpenRadar: handleOpenRadarFromNotification,
                 }}
             >
-                {activeTab === "radar" && <JobRadarView />}
+                {activeTab === "radar" && (
+                    <JobRadarView
+                        initialSearch={pendingRadarSearch}
+                        onConsumeInitialSearch={handleConsumeRadarSearch}
+                    />
+                )}
                 {activeTab === "tracker" && <PipelineTrackerView />}
-                {activeTab === "analytics" && <StackTrendsView />}
+                {activeTab === "analytics" && (
+                    <StackTrendsView onSearchSkillInRadar={handleSearchSkillInRadar} />
+                )}
                 {activeTab === "resumes" && <ResumesView />}
             </AppShell>
 

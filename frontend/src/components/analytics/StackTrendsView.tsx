@@ -1,14 +1,28 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, BarChart3, Calendar, RotateCcw } from "lucide-react";
+import {
+    ArrowDown,
+    ArrowUp,
+    ArrowUpDown,
+    BarChart3,
+    Calendar,
+    RotateCcw,
+    Target,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
 import type { StackTrendDaily, TechCategory } from "../../types/models";
 import { categoryBadgeStyle, formatCategoryLabel, formatUsdAnnual } from "../../utils/format";
 import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
+import { PersonalAnalyticsPanel } from "./PersonalAnalyticsPanel";
 import { StackTrendsChart } from "./StackTrendsChart";
 
+type AnalyticsSubTab = "market" | "personal";
 type SortColumn = "mention_count" | "unique_companies_count" | "median_annual_usd" | "bucket_date";
 type SortDirection = "asc" | "desc";
+
+interface StackTrendsViewProps {
+    onSearchSkillInRadar?: (skill: string) => void;
+}
 
 const CATEGORIES: Array<{ id: TechCategory | "all"; label: string }> = [
     { id: "all", label: "All Categories" },
@@ -58,7 +72,68 @@ function TrendsSkeleton() {
     );
 }
 
-export function StackTrendsView() {
+function AnalyticsTabHeader({
+    activeSubTab,
+    onSelectSubTab,
+}: Readonly<{
+    activeSubTab: AnalyticsSubTab;
+    onSelectSubTab: (tab: AnalyticsSubTab) => void;
+}>) {
+    const isMarket = activeSubTab === "market";
+    const title = isMarket ? "Stack Trends" : "My Pipeline & Skill Gaps";
+    const subtitle = isMarket
+        ? "Daily market demand, company adoption, and median compensation across technologies."
+        : "Your personal application funnel, channel response rates, and recurring high-fit skill gaps.";
+
+    return (
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-col gap-1">
+                <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">{title}</h1>
+                <p className="text-sm text-zinc-400">{subtitle}</p>
+            </div>
+
+            <div
+                role="tablist"
+                aria-label="Analytics views"
+                className="inline-flex rounded-xl border border-zinc-800/90 bg-zinc-900/70 p-1"
+            >
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isMarket}
+                    onClick={() => onSelectSubTab("market")}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                        isMarket
+                            ? "bg-violet-600 text-white shadow-sm shadow-violet-600/25"
+                            : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                >
+                    <BarChart3 className="h-3.5 w-3.5" />
+                    Market Trends
+                </button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={!isMarket}
+                    onClick={() => onSelectSubTab("personal")}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                        !isMarket
+                            ? "bg-violet-600 text-white shadow-sm shadow-violet-600/25"
+                            : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                >
+                    <Target className="h-3.5 w-3.5" />
+                    My Pipeline & Skill Gaps
+                </button>
+            </div>
+        </div>
+    );
+}
+
+export function StackTrendsView({
+    onSearchSkillInRadar,
+}: Readonly<StackTrendsViewProps> = {}) {
+    const [activeSubTab, setActiveSubTab] = useState<AnalyticsSubTab>("market");
     const [trends, setTrends] = useState<StackTrendDaily[]>([]);
     const [totalCount, setTotalCount] = useState(0);
     const [hasNext, setHasNext] = useState(false);
@@ -319,76 +394,78 @@ export function StackTrendsView() {
 
     return (
         <div className="space-y-8">
-            <header className="space-y-6">
-                <div className="flex flex-col gap-1">
-                    <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-                        Stack Trends
-                    </h1>
-                    <p className="text-sm text-zinc-400">
-                        Daily market demand, company adoption, and median compensation across technologies.
-                    </p>
-                </div>
+            <header className="space-y-5">
+                <AnalyticsTabHeader
+                    activeSubTab={activeSubTab}
+                    onSelectSubTab={setActiveSubTab}
+                />
 
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <Tooltip
-                        content="Distinct technology trend rows in the current category filter"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-                                Tracked Tags
-                            </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-100">
-                                {loading ? "—" : trends.length}
-                            </p>
-                        </div>
-                    </Tooltip>
+                {activeSubTab === "market" && (
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <Tooltip
+                            content="Distinct technology trend rows in the current category filter"
+                            className="block"
+                        >
+                            <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                                    Tracked Tags
+                                </p>
+                                <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-100">
+                                    {loading ? "—" : trends.length}
+                                </p>
+                            </div>
+                        </Tooltip>
 
-                    <Tooltip
-                        content="Most frequently mentioned technology in the active category"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-violet-300/80">
-                                Top Demand
-                            </p>
-                            <p className="mt-2 truncate font-mono text-2xl font-semibold text-violet-300">
-                                {topDemandLabel}
-                            </p>
-                        </div>
-                    </Tooltip>
+                        <Tooltip
+                            content="Most frequently mentioned technology in the active category"
+                            className="block"
+                        >
+                            <div className="rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                                <p className="text-xs font-medium uppercase tracking-wider text-violet-300/80">
+                                    Top Demand
+                                </p>
+                                <p className="mt-2 truncate font-mono text-2xl font-semibold text-violet-300">
+                                    {topDemandLabel}
+                                </p>
+                            </div>
+                        </Tooltip>
 
-                    <Tooltip
-                        content="Sum of job posting mentions across displayed technologies"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-                                Total Mentions
-                            </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-sky-300">
-                                {loading ? "—" : totalMentions}
-                            </p>
-                        </div>
-                    </Tooltip>
+                        <Tooltip
+                            content="Sum of job posting mentions across displayed technologies"
+                            className="block"
+                        >
+                            <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                                <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                                    Total Mentions
+                                </p>
+                                <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-sky-300">
+                                    {loading ? "—" : totalMentions}
+                                </p>
+                            </div>
+                        </Tooltip>
 
-                    <Tooltip
-                        content="Average of reported median annual USD salaries in this view"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-emerald-300/80">
-                                Avg Median Comp
-                            </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-emerald-300">
-                                {loading ? "—" : avgMedianSalary}
-                            </p>
-                        </div>
-                    </Tooltip>
-                </div>
+                        <Tooltip
+                            content="Average of reported median annual USD salaries in this view"
+                            className="block"
+                        >
+                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                                <p className="text-xs font-medium uppercase tracking-wider text-emerald-300/80">
+                                    Avg Median Comp
+                                </p>
+                                <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-emerald-300">
+                                    {loading ? "—" : avgMedianSalary}
+                                </p>
+                            </div>
+                        </Tooltip>
+                    </div>
+                )}
             </header>
 
-            <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] xl:flex-row xl:items-center xl:justify-between">
+            {activeSubTab === "personal" ? (
+                <PersonalAnalyticsPanel onSearchSkillInRadar={onSearchSkillInRadar} />
+            ) : (
+                <>
+                    <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
                     {CATEGORIES.map((item) => {
                         const active = category === item.id;
@@ -479,15 +556,17 @@ export function StackTrendsView() {
 
             {renderContent()}
 
-            <PaginationBar
-                page={page}
-                totalCount={totalCount}
-                hasPrevious={hasPrevious}
-                hasNext={hasNext}
-                loading={loading}
-                itemLabel="trend rows"
-                onPageChange={setPage}
-            />
+                    <PaginationBar
+                        page={page}
+                        totalCount={totalCount}
+                        hasPrevious={hasPrevious}
+                        hasNext={hasNext}
+                        loading={loading}
+                        itemLabel="trend rows"
+                        onPageChange={setPage}
+                    />
+                </>
+            )}
         </div>
     );
 }

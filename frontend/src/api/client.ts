@@ -22,6 +22,8 @@ import type {
     NotificationActionResponse,
     NotificationListResponse,
     PaginatedResponse,
+    PersonalAnalyticsResponse,
+    PersonalAnalyticsWindow,
     PipelineStatusResponse,
     ReadAllNotificationsResponse,
     RescoreResponse,
@@ -409,4 +411,20 @@ export const vektrynApi = {
             method: "POST",
             body: JSON.stringify({ event_ids: eventIds }),
         }),
+
+    getPersonalAnalytics: (options?: {
+        days?: PersonalAnalyticsWindow;
+        resumeProfileUuid?: string;
+    }) => {
+        const params = new URLSearchParams();
+        if (options?.days) {
+            params.set("days", options.days);
+        }
+        if (options?.resumeProfileUuid) {
+            params.set("resume_profile", options.resumeProfileUuid);
+        }
+        const qs = params.toString();
+        const path = qs ? `/api/v1/analytics/personal/?${qs}` : "/api/v1/analytics/personal/";
+        return apiFetch<PersonalAnalyticsResponse>(path);
+    },
 };

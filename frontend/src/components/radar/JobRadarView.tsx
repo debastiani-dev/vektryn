@@ -929,7 +929,16 @@ function buildMatchesQueryParams(opts: {
     return `?${params.toString()}`;
 }
 
-export function JobRadarView() {
+interface JobRadarViewProps {
+    initialSearch?: string;
+    onConsumeInitialSearch?: () => void;
+}
+
+export function JobRadarView({
+    initialSearch = "",
+    onConsumeInitialSearch,
+}: Readonly<JobRadarViewProps> = {}) {
+    const trimmedInitialSearch = initialSearch.trim();
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [totalCount, setTotalCount] = useState(0);
     const [aiScoredCount, setAiScoredCount] = useState(0);
@@ -946,8 +955,14 @@ export function JobRadarView() {
     const [hideMuted, setHideMuted] = useState(true);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [searchTerm, setSearchTerm] = useState("");
-    const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [searchTerm, setSearchTerm] = useState(trimmedInitialSearch);
+    const [debouncedSearch, setDebouncedSearch] = useState(trimmedInitialSearch);
+
+    useEffect(() => {
+        if (trimmedInitialSearch) {
+            onConsumeInitialSearch?.();
+        }
+    }, [trimmedInitialSearch, onConsumeInitialSearch]);
     const [searchMode, setSearchMode] = useState<HybridSearchMode | null>(null);
     const [metadataFilters, setMetadataFilters] = useState<RadarMetadataFilters>(
         EMPTY_METADATA_FILTERS,
