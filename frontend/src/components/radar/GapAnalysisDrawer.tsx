@@ -1,5 +1,6 @@
 import {
     Banknote,
+    Bell,
     BookmarkCheck,
     BookmarkPlus,
     CheckCircle2,
@@ -13,6 +14,7 @@ import {
 import { useEffect } from "react";
 import type { MatchScore } from "../../types/models";
 import {
+    DEFAULT_MIN_ALERT_SCORE,
     formatAtsSource,
     formatContractType,
     formatExactDate,
@@ -20,6 +22,7 @@ import {
     formatSalaryRange,
     formatScoreLabel,
     formatSeniority,
+    isAlertMatch,
     scoreBadgeStyle,
     scoreVisualTheme,
 } from "../../utils/format";
@@ -27,6 +30,7 @@ import { Tooltip } from "../ui/Tooltip";
 
 interface GapAnalysisDrawerProps {
     match: MatchScore | null;
+    minAlertScore?: number;
     saving: boolean;
     saved: boolean;
     onClose: () => void;
@@ -35,6 +39,7 @@ interface GapAnalysisDrawerProps {
 
 export function GapAnalysisDrawer({
     match,
+    minAlertScore = DEFAULT_MIN_ALERT_SCORE,
     saving,
     saved,
     onClose,
@@ -56,9 +61,12 @@ export function GapAnalysisDrawer({
     }
 
     const job = match.job_posting;
-    const scoreTheme = scoreVisualTheme(match.fit_score);
-    const cosinePct = Math.max(0, Math.min(100, Math.round(match.cosine_similarity * 100)));
-    const fitPct = match.fit_score !== null ? Math.max(0, Math.min(100, match.fit_score)) : null;
+    const rawFit = match.fit_score;
+    const hasAiScore = rawFit !== null && rawFit !== undefined;
+    const scoreTheme = scoreVisualTheme(rawFit, minAlertScore);
+    const isAlert = isAlertMatch(rawFit, minAlertScore);
+    const vectorPct = Math.max(0, Math.min(100, Math.round(match.cosine_similarity * 100)));
+    const fitPct = hasAiScore ? Math.max(0, Math.min(100, Math.round(rawFit))) : null;
     const salaryLabel = formatSalaryRange(
         job.salary_min,
         job.salary_max,
@@ -76,10 +84,11 @@ export function GapAnalysisDrawer({
     } else if (saving) {
         saveButtonLabel = "Saving...";
     }
-    const fitBadgeTooltip =
-        match.fit_score !== null
-            ? "Overall AI compatibility score"
-            : "Not AI-scored yet — matched via resume embedding similarity";
+    const aiFitTooltip = hasAiScore
+        ? "Stage 2 Gemini AI fit score (0–100%) evaluating tech stack, seniority, and experience alignment against your active resume."
+        : "Stage 1 vector match only. Roles below the semantic similarity threshold skip automatic Gemini scoring to save tokens.";
+    const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
+    const alertTooltip = `Meets or exceeds your ${minAlertScore}% alert threshold for this resume profile.`;
     const saveTooltip = saved
         ? "This role is already saved in your Pipeline Tracker"
         : "Save this role to your Pipeline Tracker";
@@ -101,10 +110,20 @@ export function GapAnalysisDrawer({
                 <div className="flex items-start justify-between gap-4 border-b border-zinc-800/90 bg-zinc-950/90 px-6 py-5 sm:px-8 sm:py-6">
                     <div className="min-w-0 space-y-2.5">
                         <div className="flex flex-wrap items-center gap-2">
-                            <Tooltip content={fitBadgeTooltip} side="bottom">
+                            {isAlert && (
+                                <Tooltip content={alertTooltip} side="bottom">
+                                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300 ring-1 ring-violet-500/35">
+                                        <Bell className="h-3.5 w-3.5" />
+                                        Alert Match
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            <Tooltip content={aiFitTooltip} side="bottom">
                                 <span
                                     className={`rounded-lg px-2.5 py-1 font-mono text-xs font-semibold tabular-nums ${scoreBadgeStyle(
                                         match.fit_score,
+                                        minAlertScore,
                                     )}`}
                                 >
                                     {formatScoreLabel(match.fit_score)}
@@ -180,19 +199,16 @@ export function GapAnalysisDrawer({
 
                 <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-7">
                     <section className="grid gap-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:grid-cols-2 sm:p-6">
-                        <Tooltip
-                            content="LLM-evaluated compatibility score comparing resume and job description"
-                            className="block"
-                        >
+                        <Tooltip content={aiFitTooltip} className="block">
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between text-xs">
                                     <span className="font-medium uppercase tracking-wider text-zinc-400">
-                                        AI Fit Score
+                                        AI Fit
                                     </span>
                                     <span
                                         className={`font-mono font-semibold tabular-nums ${scoreTheme.value}`}
                                     >
-                                        {fitPct !== null ? `${fitPct}%` : "Not scored"}
+                                        {fitPct !== null ? `${fitPct}%` : "Not Scored"}
                                     </span>
                                 </div>
                                 <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
@@ -204,23 +220,20 @@ export function GapAnalysisDrawer({
                             </div>
                         </Tooltip>
 
-                        <Tooltip
-                            content="pgvector embedding cosine similarity between your profile and this posting"
-                            className="block"
-                        >
+                        <Tooltip content={vectorTooltip} className="block">
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between text-xs">
                                     <span className="font-medium uppercase tracking-wider text-zinc-400">
-                                        Vector Cosine Similarity
+                                        Vector Similarity
                                     </span>
                                     <span className="font-mono font-semibold tabular-nums text-sky-300">
-                                        {(match.cosine_similarity * 100).toFixed(1)}%
+                                        {vectorPct}%
                                     </span>
                                 </div>
                                 <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
                                     <div
                                         className="h-full rounded-full bg-sky-400 transition-all"
-                                        style={{ width: `${cosinePct}%` }}
+                                        style={{ width: `${vectorPct}%` }}
                                     />
                                 </div>
                             </div>

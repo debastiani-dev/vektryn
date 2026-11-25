@@ -53,53 +53,79 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
     AUD: "A$",
 };
 
-export function scoreBadgeStyle(score: number | null): string {
-    if (score === null) return "bg-zinc-800/90 text-zinc-400 ring-1 ring-zinc-700/60";
-    if (score >= 80) return "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/35";
-    if (score >= 70) return "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/35";
-    return "bg-zinc-800/90 text-zinc-300 ring-1 ring-zinc-700/60";
+export const DEFAULT_MIN_ALERT_SCORE = 70;
+
+export function isAlertMatch(
+    score: number | null | undefined,
+    minAlertScore = DEFAULT_MIN_ALERT_SCORE,
+): boolean {
+    return score !== null && score !== undefined && score >= minAlertScore;
 }
 
-export function scoreVisualTheme(score: number | null): {
+export function scoreBadgeStyle(
+    score: number | null | undefined,
+    minAlertScore = DEFAULT_MIN_ALERT_SCORE,
+): string {
+    if (score === null || score === undefined) {
+        return "bg-zinc-800/80 text-zinc-400 ring-1 ring-zinc-700/60";
+    }
+    if (score >= minAlertScore) {
+        return "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/35";
+    }
+    if (score >= 55) {
+        return "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/35";
+    }
+    return "bg-amber-500/12 text-amber-300 ring-1 ring-amber-500/30";
+}
+
+export function scoreVisualTheme(
+    score: number | null | undefined,
+    minAlertScore = DEFAULT_MIN_ALERT_SCORE,
+): {
     tile: string;
     value: string;
     bar: string;
-    caption: string;
+    caption: "AI FIT" | "UNSCORED";
 } {
-    if (score === null) {
+    if (score === null || score === undefined) {
         return {
-            tile: "border-sky-500/25 bg-sky-950/15",
-            value: "text-sky-300",
-            bar: "bg-sky-400/80",
-            caption: "Cosine Sim",
+            tile: "border-zinc-800 bg-zinc-900/60 text-zinc-400",
+            value: "text-zinc-400",
+            bar: "bg-zinc-700",
+            caption: "UNSCORED",
         };
     }
-    if (score >= 80) {
+    if (score >= minAlertScore) {
         return {
-            tile: "border-emerald-500/30 bg-emerald-950/25",
-            value: "text-emerald-300",
-            bar: "bg-emerald-400",
-            caption: "Strong Fit",
-        };
-    }
-    if (score >= 70) {
-        return {
-            tile: "border-violet-500/30 bg-violet-950/25",
+            tile: "border-violet-500/35 bg-violet-950/25",
             value: "text-violet-300",
             bar: "bg-violet-400",
-            caption: "Alert Fit",
+            caption: "AI FIT",
+        };
+    }
+    if (score >= 55) {
+        return {
+            tile: "border-emerald-500/30 bg-emerald-950/20",
+            value: "text-emerald-300",
+            bar: "bg-emerald-400",
+            caption: "AI FIT",
         };
     }
     return {
-        tile: "border-zinc-800 bg-zinc-900/80",
-        value: "text-zinc-200",
-        bar: "bg-zinc-400",
-        caption: "AI Fit",
+        tile: "border-amber-500/25 bg-amber-950/15",
+        value: "text-amber-300",
+        bar: "bg-amber-400/80",
+        caption: "AI FIT",
     };
 }
 
-export function formatScoreLabel(score: number | null): string {
-    return score !== null ? `${score}% AI Fit` : "No AI Score";
+export function formatScoreLabel(score: number | null | undefined): string {
+    return score !== null && score !== undefined ? `${Math.round(score)}% AI Fit` : "Not Scored";
+}
+
+export function formatVectorSimilarity(cosineSimilarity: number): string {
+    const pct = Math.max(0, Math.min(100, Math.round(cosineSimilarity * 100)));
+    return `${pct}% vector`;
 }
 
 export function formatContractType(contract: ContractType | string): string {
