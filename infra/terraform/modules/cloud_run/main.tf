@@ -188,6 +188,14 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
     }
   }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
 }
 
 resource "google_cloud_run_v2_service" "stream_edge" {
@@ -310,6 +318,14 @@ resource "google_cloud_run_v2_service" "stream_edge" {
       }
     }
   }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
 }
 
 resource "google_cloud_run_v2_service" "frontend" {
@@ -357,6 +373,14 @@ resource "google_cloud_run_v2_service" "frontend" {
         cpu_idle = true
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 }
 
@@ -484,6 +508,14 @@ resource "google_cloud_run_v2_job" "scheduled_workers" {
       }
     }
   }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+      client,
+      client_version,
+    ]
+  }
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_invokers" {
@@ -584,6 +616,14 @@ resource "google_cloud_run_v2_job" "migrate" {
         }
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      template[0].template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 }
 
