@@ -324,7 +324,7 @@ export function GapAnalysisDrawer({
                                 <Sparkles className="h-4 w-4" />
                                 Fit Summary ({match.scoring_model || "gemini"})
                             </div>
-                            <p className="text-sm leading-relaxed text-zinc-300">
+                            <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-300">
                                 {match.gap_summary}
                             </p>
                         </section>
