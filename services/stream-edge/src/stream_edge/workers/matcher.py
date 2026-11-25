@@ -13,6 +13,7 @@ from pgvector.psycopg import register_vector
 import psycopg
 
 from stream_edge.clients.gemini import GeminiStreamClient
+from stream_edge.clients.heartbeat import WorkerHeartbeat
 from stream_edge.clients.kafka import (
     KafkaEventProducer,
     create_kafka_consumer,
@@ -957,6 +958,7 @@ async def run_matcher_worker() -> None:
     start_worker_metrics_server(9102)
     ensure_topics_exist()
     gemini = GeminiStreamClient()
+    heartbeat = WorkerHeartbeat("matcher-worker")
     producer = KafkaEventProducer()
     consumer = create_kafka_consumer(
         group_id=settings.kafka_matcher_group_id,
@@ -980,6 +982,7 @@ async def run_matcher_worker() -> None:
         KafkaTopic.JOBS_ENRICHED.value,
         KafkaTopic.JOBS_RESCORE.value,
     )
+    await heartbeat.start()
     try:
         while running:
             msg = await asyncio.to_thread(consumer.poll, 1.0)
@@ -1032,6 +1035,7 @@ async def run_matcher_worker() -> None:
                 WORKER_MESSAGES_TOTAL.labels(
                     worker="matcher", outcome="processed"
                 ).inc()
+                heartbeat.record_message()
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
                 )
@@ -1054,6 +1058,7 @@ async def run_matcher_worker() -> None:
                     time.perf_counter() - started
                 )
     finally:
+        await heartbeat.stop()
         await asyncio.to_thread(producer.flush, 5.0)
         await asyncio.to_thread(consumer.close)
 

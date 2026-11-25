@@ -571,4 +571,113 @@ describe("vektrynApi", () => {
             expect(apiErr.detail).toBe("AI Copilot is temporarily unavailable.");
         }
     });
+
+    it("inspects and replays DLQ messages and handles 429 cooldown errors", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=dlq-csrf" });
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        total_count: 1,
+                        returned_count: 1,
+                        limit: 25,
+                        replay_cooldown_remaining_seconds: 0,
+                        items: [
+                            {
+                                event_id: "evt-1",
+                                original_topic: "jobs.raw",
+                                partition: 0,
+                                offset: 4,
+                                dlq_partition: 0,
+                                dlq_offset: 10,
+                                error_type: "RuntimeError",
+                                error_message: "boom",
+                                retry_count: 1,
+                                produced_at: "2026-11-25T12:00:00Z",
+                                payload_preview: "{}",
+                                payload_truncated: false,
+                                replayable: true,
+                                replayed_at: null,
+                                dismissed_at: null,
+                            },
+                        ],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        dry_run: true,
+                        matched_count: 1,
+                        replayed_count: 0,
+                        skipped_count: 0,
+                        failed_count: 0,
+                        cooldown_seconds: 30,
+                        items: [],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        detail: "DLQ replay is on cooldown. Try again in 22s.",
+                        retry_after_seconds: 22,
+                    }),
+                    {
+                        status: 429,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Retry-After": "22",
+                        },
+                    },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        dismissed_count: 1,
+                        dismissed_at: "2026-11-25T15:00:00Z",
+                        event_ids: ["evt-1"],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const listRes = await vektrynApi.listDlqMessages({
+            limit: 25,
+            original_topic: "jobs.raw",
+        });
+        expect(listRes.returned_count).toBe(1);
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+            "/api/v1/system/dlq/?limit=25&original_topic=jobs.raw",
+        );
+
+        const dryRes = await vektrynApi.replayDlqMessages({
+            dry_run: true,
+            event_ids: ["evt-1"],
+        });
+        expect(dryRes.matched_count).toBe(1);
+        const [replayUrl, replayInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+        expect(replayUrl).toBe("/api/v1/system/dlq/replay/");
+        expect(replayInit.method).toBe("POST");
+
+        try {
+            await vektrynApi.replayDlqMessages({ dry_run: false, event_ids: ["evt-1"] });
+            expect.unreachable("Expected 429 ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            expect((err as ApiError).status).toBe(429);
+            expect((err as ApiError).retryAfterSeconds).toBe(22);
+        }
+
+        const dismissRes = await vektrynApi.dismissDlqMessages(["evt-1"]);
+        expect(dismissRes.dismissed_count).toBe(1);
+        const [dismissUrl, dismissInit] = fetchMock.mock.calls[3] as [string, RequestInit];
+        expect(dismissUrl).toBe("/api/v1/system/dlq/dismiss/");
+        expect(dismissInit.method).toBe("POST");
+    });
 });
