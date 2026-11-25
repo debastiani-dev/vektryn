@@ -160,7 +160,7 @@ function SourceBreakdownList({ sources }: Readonly<{ sources: ReadonlyArray<Coll
                     key={src.source}
                     className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-2.5 py-1.5 text-xs"
                 >
-                    <div className="min-w-0">
+                    <div className="min-w-0 truncate">
                         <span className="font-medium text-zinc-200">
                             {formatAtsSource(src.source)}
                         </span>
@@ -169,10 +169,19 @@ function SourceBreakdownList({ sources }: Readonly<{ sources: ReadonlyArray<Coll
                         </span>
                     </div>
                     <div className="flex shrink-0 items-center gap-2 font-mono text-[11px] tabular-nums">
-                        <span className="text-emerald-300">+{src.ingested_count}</span>
-                        <span className="text-zinc-400">{src.deduped_count} dup</span>
+                        <span className="text-zinc-300" title="Raw postings fetched">
+                            {src.fetched_count} fetched
+                        </span>
+                        <span className="text-emerald-300" title="New postings ingested">
+                            +{src.ingested_count}
+                        </span>
+                        <span className="text-zinc-400" title="Deduplicated postings">
+                            {src.deduped_count} dup
+                        </span>
                         {src.error_count > 0 && (
-                            <span className="text-red-300">{src.error_count} err</span>
+                            <span className="text-red-300" title="Fetch or ingest errors">
+                                {src.error_count} err
+                            </span>
                         )}
                     </div>
                 </div>
