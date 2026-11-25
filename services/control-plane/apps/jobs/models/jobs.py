@@ -1,5 +1,6 @@
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 from pgvector.django import HnswIndex, VectorField
@@ -12,7 +13,14 @@ from vektryn_contracts.enums import (
     SalaryPeriod,
     SeniorityLevel,
 )
-from vektryn_contracts.events import EMBEDDING_DIMENSIONS
+from vektryn_contracts.events import EMBEDDING_DIMENSIONS, validate_apply_url
+
+
+def validate_apply_url_field(value: str) -> None:
+    try:
+        validate_apply_url(value)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
 
 
 class JobPosting(BaseModel):
@@ -25,7 +33,10 @@ class JobPosting(BaseModel):
 
     title = models.CharField(max_length=255)
     company_name = models.CharField(max_length=180)
-    apply_url = models.URLField(max_length=512)
+    apply_url = models.CharField(
+        max_length=512,
+        validators=[validate_apply_url_field],
+    )
     raw_html_gcs_uri = models.CharField(max_length=512)
     location_raw = models.CharField(max_length=255, blank=True, default="")
     description_clean = models.TextField()

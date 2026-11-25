@@ -20,6 +20,8 @@ class ATSSource(StrEnum):
     JOBICY = "jobicy"
     TRAMPOS = "trampos"
     GITHUB_VAGAS = "github_vagas"
+    # User-submitted external postings
+    MANUAL = "manual"
 
 
 class SeniorityLevel(StrEnum):

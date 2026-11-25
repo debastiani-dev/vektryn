@@ -97,6 +97,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      STREAM_EDGE_URL: http://stream-edge:8001
+      INGEST_API_KEY: ${INGEST_API_KEY:-}
       STREAM_AUTH_SECRET: ${STREAM_AUTH_SECRET:-vektryn-dev-stream-secret}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     ports:
@@ -129,6 +131,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vektryn_dev_password}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      INGEST_API_KEY: ${INGEST_API_KEY:-}
       STREAM_AUTH_SECRET: ${STREAM_AUTH_SECRET:-vektryn-dev-stream-secret}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     ports:

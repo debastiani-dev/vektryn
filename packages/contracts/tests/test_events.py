@@ -18,10 +18,12 @@ from vektryn_contracts import (
     SalaryPeriod,
     SeniorityLevel,
     alert_partition_key,
+    compute_job_content_hash,
     dlq_partition_key,
     job_partition_key,
     rescore_partition_key,
     sign_stream_token,
+    validate_apply_url,
     verify_stream_token,
 )
 
@@ -143,3 +145,41 @@ def test_job_rescore_event_defaults_bounds_and_partition_key() -> None:
         JobRescoreEvent(resume_profile_uuid=resume_uuid, user_id=42, max_jobs=0)
     with pytest.raises(ValidationError):
         JobRescoreEvent(resume_profile_uuid=resume_uuid, user_id=42, max_jobs=101)
+
+
+def test_manual_source_apply_url_and_content_hash() -> None:
+    kwargs = _sample_raw_kwargs()
+    kwargs["ats_source"] = ATSSource.MANUAL
+    kwargs["external_id"] = "manual-123456"
+    kwargs["apply_url"] = "MAILTO:Hiring@Acme.COM"
+    event = JobRawEvent(**kwargs)
+    assert event.ats_source == ATSSource.MANUAL
+    assert event.apply_url == "mailto:Hiring@acme.com"
+
+    assert (
+        validate_apply_url("https://acme.com/jobs/123") == "https://acme.com/jobs/123"
+    )
+    for bad in (
+        "javascript:alert(1)",
+        "ftp://example.com/job",
+        "mailto:not-an-email",
+        "mailto:a@b.com?subject=hi",
+        "mailto:a@b.com\r\nBcc:evil@x.com",
+    ):
+        with pytest.raises(ValueError):
+            validate_apply_url(bad)
+
+    h1 = compute_job_content_hash(
+        ATSSource.MANUAL,
+        "  Senior   Python  Engineer ",
+        "Acme Corp",
+        "Build  APIs\nwith Django",
+    )
+    h2 = compute_job_content_hash(
+        "manual",
+        "senior python engineer",
+        "acme corp",
+        "build apis with django",
+    )
+    assert h1 == h2
+    assert len(h1) == 64

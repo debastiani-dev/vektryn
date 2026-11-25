@@ -7,6 +7,7 @@ import {
     ExternalLink,
     Eye,
     EyeOff,
+    Mail,
     MapPin,
     Sparkles,
     StickyNote,
@@ -16,11 +17,13 @@ import { useEffect, useRef, useState } from "react";
 import { fetchAllPages, vektrynApi } from "../../api/client";
 import type { ApplicationLead, LeadPriority, LeadStatus, MatchScore } from "../../types/models";
 import {
+    formatApplyLinkTooltip,
     formatContractType,
     formatExactDate,
     formatRelativeTime,
     formatSalaryRange,
     formatScoreLabel,
+    isMailtoUrl,
     scoreBadgeStyle,
 } from "../../utils/format";
 import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
@@ -127,6 +130,27 @@ interface PipelineLeadCardProps {
     onCancelEditingNotes: () => void;
     onSaveNotes: (lead: ApplicationLead) => void;
     onDeleteLead: (lead: ApplicationLead) => void;
+}
+
+function LeadApplyLink({ applyUrl }: Readonly<{ applyUrl: string }>) {
+    const isEmailApply = isMailtoUrl(applyUrl);
+    return (
+        <Tooltip content={formatApplyLinkTooltip(applyUrl)}>
+            <a
+                href={applyUrl}
+                target={isEmailApply ? undefined : "_blank"}
+                rel={isEmailApply ? undefined : "noreferrer"}
+                aria-label={isEmailApply ? "Apply via email" : "Open job posting"}
+                className="rounded-lg p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+            >
+                {isEmailApply ? (
+                    <Mail className="h-4 w-4" />
+                ) : (
+                    <ExternalLink className="h-4 w-4" />
+                )}
+            </a>
+        </Tooltip>
+    );
 }
 
 function PipelineLeadCard({
@@ -369,17 +393,7 @@ function PipelineLeadCard({
                         </button>
                     </Tooltip>
 
-                    <Tooltip content="Open original job posting in a new tab">
-                        <a
-                            href={applyUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            aria-label="Open job posting"
-                            className="rounded-lg p-2 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
-                        >
-                            <ExternalLink className="h-4 w-4" />
-                        </a>
-                    </Tooltip>
+                    <LeadApplyLink applyUrl={applyUrl} />
 
                     <Tooltip content="Unsave and remove lead from tracker">
                         <button

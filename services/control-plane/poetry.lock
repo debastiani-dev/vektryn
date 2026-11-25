@@ -60,6 +60,29 @@ files = [
 ]
 
 [[package]]
+name = "beautifulsoup4"
+version = "4.15.0"
+description = "Screen-scraping library"
+optional = false
+python-versions = ">=3.7.0"
+groups = ["main"]
+files = [
+    {file = "beautifulsoup4-4.15.0-py3-none-any.whl", hash = "sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9"},
+    {file = "beautifulsoup4-4.15.0.tar.gz", hash = "sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7"},
+]
+
+[package.dependencies]
+soupsieve = ">=1.6.1"
+typing-extensions = ">=4.0.0"
+
+[package.extras]
+cchardet = ["cchardet"]
+chardet = ["chardet"]
+charset-normalizer = ["charset-normalizer"]
+html5lib = ["html5lib"]
+lxml = ["lxml"]
+
+[[package]]
 name = "black"
 version = "25.12.0"
 description = "The uncompromising code formatter."
@@ -2531,6 +2554,18 @@ files = [
 ]
 
 [[package]]
+name = "soupsieve"
+version = "4.1.3"
+description = "A modern CSS selector implementation for Beautiful Soup."
+optional = false
+python-versions = ">=3.11.5"
+groups = ["main"]
+files = [
+    {file = "soupsieve-4.1.3-py3-none-any.whl", hash = "sha256:7a390d1a57d1ab7bb228531e9b8a750a5ebf87db774e0ef6faeeac057d22a5bf"},
+    {file = "soupsieve-4.1.3.tar.gz", hash = "sha256:13f70186c8f40bf8d0ff7bbab09a18fb149600b465269207b5e5b588f55fda08"},
+]
+
+[[package]]
 name = "sqlparse"
 version = "0.6.1"
 description = "A non-validating SQL parser."
@@ -2900,4 +2935,4 @@ dev = ["pytest", "setuptools"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.13"
-content-hash = "bbe0c3cd485e734d54d4d47421560c95b2fbf9f76647fcfd5052476c79d73a0f"
+content-hash = "de3e3c52a6aedfd311711a6957e4e10461603a3a789d070a88a1947fd4cb4d09"

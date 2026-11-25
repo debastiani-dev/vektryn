@@ -19,27 +19,20 @@ describe("fetchAllPages", () => {
         expect(queries).toEqual(["?status=applied&page=1", "?status=applied&page=2"]);
     });
 
-    it("stops at maxPages even when next remains non-null", async () => {
-        const fetchPage = async (): Promise<PaginatedResponse<string>> => ({
-            count: 99,
-            next: "/api/next",
-            previous: null,
-            results: ["row"],
-        });
+    const fetchInfinitePage = async (): Promise<PaginatedResponse<string>> => ({
+        count: 99,
+        next: "/api/next",
+        previous: null,
+        results: ["row"],
+    });
 
-        const items = await fetchAllPages(fetchPage, "", 3);
+    it("stops at maxPages even when next remains non-null", async () => {
+        const items = await fetchAllPages(fetchInfinitePage, "", 3);
         expect(items).toEqual(["row", "row", "row"]);
     });
 
     it("preserves server total count in fetchAllPagesWithCount even when capped by maxPages", async () => {
-        const fetchPage = async (): Promise<PaginatedResponse<string>> => ({
-            count: 99,
-            next: "/api/next",
-            previous: null,
-            results: ["row"],
-        });
-
-        const result = await fetchAllPagesWithCount(fetchPage, "", 2);
+        const result = await fetchAllPagesWithCount(fetchInfinitePage, "", 2);
         expect(result).toEqual({ items: ["row", "row"], totalCount: 99 });
     });
 });
@@ -127,5 +120,59 @@ describe("vektrynApi", () => {
         expect(init.method).toBe("POST");
         expect((init.headers as Headers).get("X-CSRFToken")).toBe("rescore-csrf");
         expect(init.body).toBe(JSON.stringify({ max_jobs: 25, force: true }));
+    });
+
+    it("posts manual job import with CSRF token and supports listJobs external_id lookup", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=import-csrf" });
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        status: "queued",
+                        ats_source: "manual",
+                        external_id: "manual-abc123",
+                        content_hash: "a".repeat(64),
+                        title: "Staff Python Engineer",
+                        company_name: "Acme",
+                        apply_url: "mailto:hiring@acme.com",
+                        event_id: "evt-9",
+                        job_posting_uuid: null,
+                    }),
+                    { status: 202, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        count: 1,
+                        next: null,
+                        previous: null,
+                        results: [{ uuid: "job-1", external_id: "manual-abc123" }],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const imported = await vektrynApi.importJob({
+            title: "Staff Python Engineer",
+            company_name: "Acme",
+            apply_url: "hiring@acme.com",
+            description: "Build Python and Kafka services at scale.",
+        });
+        expect(imported.status).toBe("queued");
+        expect(imported.apply_url).toBe("mailto:hiring@acme.com");
+
+        const [importUrl, importInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(importUrl).toBe("/api/v1/jobs/import/");
+        expect(importInit.method).toBe("POST");
+        expect((importInit.headers as Headers).get("X-CSRFToken")).toBe("import-csrf");
+
+        const listed = await vektrynApi.listJobs("?ats_source=manual&external_id=manual-abc123");
+        expect(listed.count).toBe(1);
+        expect((fetchMock.mock.calls[1] as [string])[0]).toBe(
+            "/api/v1/jobs/?ats_source=manual&external_id=manual-abc123",
+        );
     });
 });

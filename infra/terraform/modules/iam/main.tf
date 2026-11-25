@@ -61,6 +61,7 @@ locals {
     "vektryn-redis-url",
     "vektryn-kafka-bootstrap",
     "vektryn-gemini-api-key",
+    "vektryn-ingest-api-key",
     "vektryn-stream-auth-secret",
   ]
   stream_edge_secrets = [

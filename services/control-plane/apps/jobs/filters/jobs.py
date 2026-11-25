@@ -12,7 +12,13 @@ class JobPostingFilter(django_filters.FilterSet):
 
     class Meta:
         model = JobPosting
-        fields = ["ats_source", "seniority", "contract_type", "is_active"]
+        fields = [
+            "ats_source",
+            "external_id",
+            "seniority",
+            "contract_type",
+            "is_active",
+        ]
 
     def filter_tech(self, queryset, _name: str, value: str):
         tags = [t.strip().lower() for t in value.split(",") if t.strip()]

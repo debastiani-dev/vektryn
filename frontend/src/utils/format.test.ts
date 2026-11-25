@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+    extractMailtoAddress,
+    formatApplyLinkLabel,
+    formatApplyLinkTooltip,
     formatAtsSource,
     formatCategoryLabel,
     formatContractType,
@@ -10,6 +13,7 @@ import {
     formatUsdAnnual,
     formatVectorSimilarity,
     isAlertMatch,
+    isMailtoUrl,
     scoreBadgeStyle,
     scoreVisualTheme,
 } from "./format";
@@ -79,5 +83,19 @@ describe("format utilities", () => {
         expect(formatVectorSimilarity(0.624)).toBe("62% vector");
         expect(formatVectorSimilarity(0)).toBe("0% vector");
         expect(formatVectorSimilarity(1.1)).toBe("100% vector");
+    });
+
+    it("detects and formats mailto vs HTTP apply links cleanly", () => {
+        expect(isMailtoUrl("mailto:hiring@acme.com")).toBe(true);
+        expect(isMailtoUrl("MAILTO:jobs@acme.com")).toBe(true);
+        expect(isMailtoUrl("https://acme.com/apply")).toBe(false);
+        expect(extractMailtoAddress("mailto:hiring@acme.com")).toBe("hiring@acme.com");
+        expect(formatApplyLinkLabel("mailto:hiring@acme.com", "Apply")).toBe("Apply via Email");
+        expect(formatApplyLinkLabel("https://acme.com/apply", "Apply")).toBe("Apply");
+        expect(formatApplyLinkTooltip("mailto:hiring@acme.com")).toBe(
+            "Send application email to hiring@acme.com",
+        );
+        expect(formatApplyLinkTooltip("https://acme.com/apply", "Open link")).toBe("Open link");
+        expect(formatAtsSource("manual")).toBe("Manual");
     });
 });

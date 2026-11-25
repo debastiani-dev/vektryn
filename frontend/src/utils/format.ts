@@ -128,7 +128,7 @@ export function formatVectorSimilarity(cosineSimilarity: number): string {
     return `${pct}% vector`;
 }
 
-export function formatContractType(contract: ContractType | string): string {
+export function formatContractType(contract: string): string {
     if (contract in CONTRACT_LABELS) {
         return CONTRACT_LABELS[contract as ContractType];
     }
@@ -137,7 +137,7 @@ export function formatContractType(contract: ContractType | string): string {
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
-export function formatSeniority(seniority: SeniorityLevel | string): string {
+export function formatSeniority(seniority: string): string {
     if (seniority in SENIORITY_LABELS) {
         return SENIORITY_LABELS[seniority as SeniorityLevel];
     }
@@ -153,7 +153,7 @@ export function formatAtsSource(source: string): string {
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
-export function formatCategoryLabel(category: TechCategory | string): string {
+export function formatCategoryLabel(category: string): string {
     if (category in CATEGORY_LABELS) {
         return CATEGORY_LABELS[category as TechCategory];
     }
@@ -162,7 +162,7 @@ export function formatCategoryLabel(category: TechCategory | string): string {
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
-export function categoryBadgeStyle(category: TechCategory | string): string {
+export function categoryBadgeStyle(category: string): string {
     if (category in CATEGORY_BADGE_STYLES) {
         return CATEGORY_BADGE_STYLES[category as TechCategory];
     }
@@ -280,4 +280,30 @@ export function formatExactDate(iso: string | null): string | null {
         month: "short",
         day: "numeric",
     });
+}
+
+export function isMailtoUrl(url: string | null | undefined): boolean {
+    return typeof url === "string" && url.trim().toLowerCase().startsWith("mailto:");
+}
+
+export function extractMailtoAddress(url: string): string {
+    return url.trim().slice(7).split("?")[0].trim();
+}
+
+export function formatApplyLinkLabel(
+    url: string | null | undefined,
+    defaultLabel = "Apply",
+): string {
+    return isMailtoUrl(url) ? "Apply via Email" : defaultLabel;
+}
+
+export function formatApplyLinkTooltip(
+    url: string | null | undefined,
+    defaultTooltip = "Open original job posting in a new tab",
+): string {
+    if (isMailtoUrl(url) && url) {
+        const email = extractMailtoAddress(url);
+        return email ? `Send application email to ${email}` : "Apply via email";
+    }
+    return defaultTooltip;
 }
