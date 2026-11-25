@@ -1,4 +1,5 @@
 import {
+    AlertCircle,
     Banknote,
     Bell,
     BookmarkCheck,
@@ -31,6 +32,7 @@ import {
     scoreBadgeStyle,
     scoreVisualTheme,
 } from "../../utils/format";
+import { splitLegacySummaryParagraphs } from "../../utils/fitSummary";
 import { Tooltip } from "../ui/Tooltip";
 
 interface GapAnalysisDrawerProps {
@@ -109,6 +111,88 @@ function GapDrawerFooter({
                 </a>
             </Tooltip>
         </div>
+    );
+}
+
+function FitSummarySection({
+    summary,
+    highlights,
+    watchoutNote,
+    scoringModel,
+}: Readonly<{
+    summary: string;
+    highlights: string[];
+    watchoutNote: string;
+    scoringModel: string;
+}>) {
+    const cleanSummary = summary.trim();
+    const cleanHighlights = highlights.map((item) => item.trim()).filter(Boolean);
+    const cleanWatchout = watchoutNote.trim();
+    const hasStructuredFields = cleanHighlights.length > 0 || Boolean(cleanWatchout);
+
+    if (!cleanSummary && !hasStructuredFields) {
+        return null;
+    }
+
+    const legacyParagraphs = hasStructuredFields
+        ? []
+        : splitLegacySummaryParagraphs(cleanSummary);
+
+    return (
+        <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+            <div className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-violet-300">
+                <Sparkles className="h-4 w-4" />
+                Fit Summary ({scoringModel || "gemini"})
+            </div>
+
+            {hasStructuredFields ? (
+                <div className="space-y-3.5">
+                    {cleanSummary && (
+                        <p className="text-[14.5px] font-medium leading-relaxed text-zinc-100">
+                            {cleanSummary}
+                        </p>
+                    )}
+
+                    {cleanHighlights.length > 0 && (
+                        <ul className="space-y-2.5 border-t border-zinc-800/80 pt-3.5 text-sm leading-relaxed text-zinc-300">
+                            {cleanHighlights.map((point) => (
+                                <li key={point} className="flex gap-3">
+                                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/90" />
+                                    <span>{point}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+
+                    {cleanWatchout && (
+                        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-950/20 px-3.5 py-2.5 text-xs leading-relaxed text-amber-200/90">
+                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                            <p>
+                                <span className="font-semibold uppercase tracking-wider text-amber-300">
+                                    Note:{" "}
+                                </span>
+                                {cleanWatchout}
+                            </p>
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    {legacyParagraphs.map((paragraph, index) => (
+                        <p
+                            key={paragraph}
+                            className={
+                                index === 0
+                                    ? "text-[14.5px] font-medium leading-relaxed text-zinc-100"
+                                    : "text-sm leading-relaxed text-zinc-300"
+                            }
+                        >
+                            {paragraph}
+                        </p>
+                    ))}
+                </div>
+            )}
+        </section>
     );
 }
 
@@ -320,16 +404,15 @@ export function GapAnalysisDrawer({
                         </Tooltip>
                     </section>
 
-                    {match.gap_summary && (
-                        <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                            <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-violet-300">
-                                <Sparkles className="h-4 w-4" />
-                                Fit Summary ({match.scoring_model || "gemini"})
-                            </div>
-                            <p className="whitespace-pre-line text-sm leading-relaxed text-zinc-300">
-                                {match.gap_summary}
-                            </p>
-                        </section>
+                    {(match.gap_summary ||
+                        (match.fit_highlights && match.fit_highlights.length > 0) ||
+                        match.watchout_note) && (
+                        <FitSummarySection
+                            summary={match.gap_summary}
+                            highlights={match.fit_highlights ?? []}
+                            watchoutNote={match.watchout_note ?? ""}
+                            scoringModel={match.scoring_model}
+                        />
                     )}
 
                     <div className="grid gap-5 sm:grid-cols-2">

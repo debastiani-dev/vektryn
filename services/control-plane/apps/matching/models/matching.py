@@ -23,6 +23,8 @@ class MatchScore(BaseModel):
     missing_keywords = models.JSONField(default=list, blank=True)
     talking_points = models.JSONField(default=list, blank=True)
     gap_summary = models.TextField(blank=True, default="")
+    fit_highlights = models.JSONField(default=list, db_default=[], blank=True)
+    watchout_note = models.TextField(blank=True, default="", db_default="")
 
     resume_content_hash = models.CharField(max_length=64)
     scoring_model = models.CharField(max_length=64, blank=True, default="")

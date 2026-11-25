@@ -57,6 +57,8 @@ class _EvaluationOutcome:
     missing_keywords: list[str] | None = None
     talking_points: list[str] | None = None
     gap_summary: str = ""
+    fit_highlights: list[str] | None = None
+    watchout_note: str = ""
     scoring_model: str = ""
 
 
@@ -142,6 +144,8 @@ def _run_llm_evaluation(
             missing_keywords=eval_result.missing_keywords,
             talking_points=eval_result.talking_points,
             gap_summary=eval_result.gap_summary,
+            fit_highlights=eval_result.fit_highlights,
+            watchout_note=eval_result.watchout_note,
             scoring_model=model_used,
         )
     except Exception as exc:
@@ -251,14 +255,16 @@ def _upsert_match_score(
             uuid, created_at, modified_at, is_deleted,
             job_posting_id, resume_profile_id,
             cosine_similarity, fit_score,
-            matched_skills, missing_keywords, talking_points, gap_summary,
+            matched_skills, missing_keywords, talking_points,
+            gap_summary, fit_highlights, watchout_note,
             resume_content_hash, scoring_model, alert_sent_at
         )
         VALUES (
             %s, %s, %s, FALSE,
             %s, %s,
             %s, %s,
-            %s::jsonb, %s::jsonb, %s::jsonb, %s,
+            %s::jsonb, %s::jsonb, %s::jsonb,
+            %s, %s::jsonb, %s,
             %s, %s, NULL
         )
         ON CONFLICT (job_posting_id, resume_profile_id) DO UPDATE SET
@@ -289,6 +295,16 @@ def _upsert_match_score(
                 THEN EXCLUDED.gap_summary
                 ELSE matching_matchscore.gap_summary
             END,
+            fit_highlights = CASE
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.fit_score IS NOT NULL
+                THEN EXCLUDED.fit_highlights
+                ELSE matching_matchscore.fit_highlights
+            END,
+            watchout_note = CASE
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.fit_score IS NOT NULL
+                THEN EXCLUDED.watchout_note
+                ELSE matching_matchscore.watchout_note
+            END,
             resume_content_hash = EXCLUDED.resume_content_hash,
             scoring_model = CASE
                 WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.scoring_model <> ''
@@ -309,8 +325,12 @@ def _upsert_match_score(
             json.dumps(outcome.missing_keywords or []),
             json.dumps(outcome.talking_points or []),
             outcome.gap_summary,
+            json.dumps(outcome.fit_highlights or []),
+            outcome.watchout_note,
             resume_hash,
             outcome.scoring_model,
+            replace_evaluation,
+            replace_evaluation,
             replace_evaluation,
             replace_evaluation,
             replace_evaluation,

@@ -38,6 +38,8 @@ class ResumeGapEvaluation(BaseModel):
     missing_keywords: list[str] = Field(default_factory=list)
     talking_points: list[str] = Field(default_factory=list)
     gap_summary: str = ""
+    fit_highlights: list[str] = Field(default_factory=list)
+    watchout_note: str = ""
 
 
 class GeminiStreamClient:
@@ -225,13 +227,15 @@ class GeminiStreamClient:
             "- talking_points: 3-4 concise, concrete interview talking points that connect "
             "specific projects, architectures, or outcomes from the candidate's resume "
             "directly to this role's top responsibilities.\n"
-            "- gap_summary: a thorough, actionable 4-6 sentence Fit Summary written directly "
-            "for the candidate (use second person 'you/your', no generic filler). "
-            "Dedicate ~80% of it to the strongest reasons to apply: connect concrete experience, "
-            "domain background, seniority/scope, and transferable stack strengths from the resume "
-            "directly to what this role needs. End with at most one brief sentence noting the "
-            "single most relevant gap or positioning watch-out (or omit gaps if none are material, "
-            "since missing_keywords is displayed separately).\n\n"
+            "- gap_summary: 1-2 punchy opening sentences summarizing the overall fit verdict "
+            "directly for the candidate (use second person 'you/your', no generic filler) "
+            "explaining why this role is or isn't worth applying to.\n"
+            "- fit_highlights: 2-4 concise, evidence-backed reasons to apply (1 crisp sentence each) "
+            "connecting specific experience, domain background, seniority/scope, and transferable "
+            "stack strengths from the resume directly to what this role needs.\n"
+            "- watchout_note: 1-2 brief sentences concisely summarizing the most relevant material "
+            "gap(s) or positioning watch-out(s) to address when applying (or empty string '' if none "
+            "are material, since missing_keywords is displayed separately).\n\n"
             f"CANDIDATE RESUME SKILLS: {', '.join(resume_skills)}\n"
             f"CANDIDATE RESUME:\n{resume_text[:10000]}\n\n"
             f"TARGET ROLE: {job_title} @ {company_name}\n"
