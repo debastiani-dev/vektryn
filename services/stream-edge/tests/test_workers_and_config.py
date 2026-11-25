@@ -10,6 +10,7 @@ import pytest
 
 from stream_edge import telemetry as edge_telemetry
 from stream_edge.api.alerts_sse import _resolve_stream_user_id
+from stream_edge.clients.gemini import GeminiStreamClient
 from stream_edge.clients.kafka import (
     KafkaEventProducer,
     _kafka_base_config,
@@ -782,3 +783,51 @@ async def test_internal_collect_endpoint_auth_subprocess_and_single_flight(monke
             assert conflict.status_code == 409
 
     app.state.active_collect_proc = None
+
+
+async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused():
+    captured: dict[str, object] = {}
+
+    def _fake_generate_structured_sync(*, prompt: str, schema, operation: str):
+        captured["prompt"] = prompt
+        captured["operation"] = operation
+        return (
+            json.dumps(
+                {
+                    "fit_score": 86,
+                    "matched_skills": ["typescript", "react"],
+                    "missing_keywords": ["graphql"],
+                    "talking_points": [
+                        "Highlight your React design system rollout.",
+                        "Discuss TypeScript migration impact.",
+                        "Frame frontend performance profiling wins.",
+                    ],
+                    "gap_summary": (
+                        "Your React and TypeScript background aligns directly with this role's "
+                        "core product engineering scope."
+                    ),
+                }
+            ),
+            "gemini-4-hydrogen",
+        )
+
+    client = GeminiStreamClient.__new__(GeminiStreamClient)
+    client._generate_structured_sync = _fake_generate_structured_sync  # type: ignore[method-assign]
+
+    evaluation, model_used = await client.evaluate_resume_fit(
+        resume_text="Senior Frontend Engineer building React and TypeScript web apps.",
+        resume_skills=["react", "typescript"],
+        job_title="Staff Frontend Engineer",
+        company_name="Acme",
+        job_description="Own React UI architecture, TypeScript tooling, and GraphQL queries.",
+        job_stack=["react", "typescript", "graphql"],
+    )
+
+    prompt = str(captured["prompt"])
+    assert captured["operation"] == "evaluate_fit"
+    assert model_used == "gemini-4-hydrogen"
+    assert evaluation.fit_score == 86
+    assert "core backend/architecture overlap" not in prompt
+    assert "actual engineering discipline" in prompt
+    assert "strongest reasons to apply" in prompt
+    assert "TARGET ROLE: Staff Frontend Engineer @ Acme" in prompt

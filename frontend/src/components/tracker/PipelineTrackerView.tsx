@@ -170,7 +170,8 @@ function LeadScoreBadges({
     }
 
     const hasAiScore = typeof match?.fit_score === "number";
-    const isAlert = isAlertMatch(match?.fit_score, DEFAULT_MIN_ALERT_SCORE);
+    const minAlertScore = match?.resume_min_alert_score ?? DEFAULT_MIN_ALERT_SCORE;
+    const isAlert = isAlertMatch(match?.fit_score, minAlertScore);
     const vectorPct = match ? Math.max(0, Math.min(100, Math.round(match.cosine_similarity * 100))) : 0;
 
     return (
@@ -187,6 +188,7 @@ function LeadScoreBadges({
                         <span
                             className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeStyle(
                                 match.fit_score,
+                                minAlertScore,
                             )}`}
                         >
                             {hasAiScore ? formatScoreLabel(match.fit_score) : "UNSCORED"}
@@ -194,7 +196,9 @@ function LeadScoreBadges({
                     </Tooltip>
 
                     {isAlert && (
-                        <Tooltip content="Meets or exceeds the alert fit threshold">
+                        <Tooltip
+                            content={`Meets or exceeds your ${minAlertScore}% alert fit threshold for this resume`}
+                        >
                             <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/15 px-2 py-0.5 text-[11px] font-semibold text-violet-300 ring-1 ring-violet-500/35">
                                 <Bell className="h-3 w-3" />
                                 Alert

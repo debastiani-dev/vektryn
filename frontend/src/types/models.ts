@@ -75,6 +75,7 @@ export interface MatchScore {
     job_posting: JobPostingSummary;
     resume_profile_uuid: string;
     resume_profile_label?: string;
+    resume_min_alert_score?: number;
     cosine_similarity: number;
     fit_score: number | null;
     matched_skills: string[];

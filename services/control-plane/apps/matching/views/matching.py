@@ -108,7 +108,9 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
         summary = summary_qs.aggregate(
             ai_scored_count=Count("uuid", filter=Q(fit_score__isnull=False)),
             strong_fit_count=Count("uuid", filter=Q(fit_score__gte=80)),
-            alert_threshold_count=Count("uuid", filter=Q(fit_score__gte=70)),
+            alert_threshold_count=Count(
+                "uuid", filter=Q(fit_score__gte=F("resume_profile__min_alert_score"))
+            ),
         )
 
         page = self.paginate_queryset(ordered_qs)
