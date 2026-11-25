@@ -9,6 +9,9 @@ import type {
     LeadStatus,
     ManualJobImportInput,
     ManualJobImportResponse,
+    MatchArtifactGenerateInput,
+    MatchArtifactGenerateResponse,
+    MatchArtifactListResponse,
     MatchScore,
     MatchScoreListResponse,
     MutedCompany,
@@ -25,6 +28,58 @@ import type {
     StackTrendDaily,
     TriggerCollectResponse,
 } from "../types/models";
+
+export class ApiError extends Error {
+    readonly status: number;
+    readonly detail: string | null;
+    readonly retryAfterSeconds: number | null;
+
+    constructor(
+        status: number,
+        bodyText: string,
+        detail: string | null,
+        retryAfterSeconds: number | null,
+    ) {
+        super(`API ${status}: ${bodyText}`);
+        this.name = "ApiError";
+        this.status = status;
+        this.detail = detail;
+        this.retryAfterSeconds = retryAfterSeconds;
+    }
+}
+
+function parseApiErrorMetadata(
+    bodyText: string,
+    retryAfterHeader: string | null,
+): { detail: string | null; retryAfterSeconds: number | null } {
+    let detail: string | null = null;
+    let retryAfterSeconds: number | null = null;
+
+    if (retryAfterHeader) {
+        const parsedHeader = Number.parseInt(retryAfterHeader, 10);
+        if (Number.isFinite(parsedHeader) && parsedHeader > 0) {
+            retryAfterSeconds = parsedHeader;
+        }
+    }
+
+    try {
+        const parsed = JSON.parse(bodyText) as Record<string, unknown>;
+        if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+            detail = parsed.detail.trim();
+        }
+        if (
+            typeof parsed.retry_after_seconds === "number" &&
+            Number.isFinite(parsed.retry_after_seconds) &&
+            parsed.retry_after_seconds > 0
+        ) {
+            retryAfterSeconds = Math.ceil(parsed.retry_after_seconds);
+        }
+    } catch {
+        // Non-JSON error body; fall back to header metadata only.
+    }
+
+    return { detail, retryAfterSeconds };
+}
 
 function getCookie(name: string): string {
     if (typeof document === "undefined") return "";
@@ -49,7 +104,9 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
         headers,
     });
     if (!res.ok) {
-        throw new Error(`API ${res.status}: ${await res.text()}`);
+        const bodyText = await res.text();
+        const meta = parseApiErrorMetadata(bodyText, res.headers.get("Retry-After"));
+        throw new ApiError(res.status, bodyText, meta.detail, meta.retryAfterSeconds);
     }
     if (res.status === 204) {
         return undefined as T;
@@ -313,5 +370,14 @@ export const vektrynApi = {
     markAllNotificationsRead: () =>
         apiFetch<ReadAllNotificationsResponse>("/api/v1/notifications/read-all/", {
             method: "POST",
+        }),
+
+    listMatchArtifacts: (matchUuid: string) =>
+        apiFetch<MatchArtifactListResponse>(`/api/v1/matches/${matchUuid}/artifacts/`),
+
+    generateMatchArtifact: (matchUuid: string, payload: MatchArtifactGenerateInput) =>
+        apiFetch<MatchArtifactGenerateResponse>(`/api/v1/matches/${matchUuid}/artifacts/`, {
+            method: "POST",
+            body: JSON.stringify(payload),
         }),
 };

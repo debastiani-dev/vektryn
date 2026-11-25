@@ -14,7 +14,7 @@ import {
     X,
     XCircle,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { MatchScore } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
@@ -34,6 +34,7 @@ import {
 } from "../../utils/format";
 import { splitLegacySummaryParagraphs } from "../../utils/fitSummary";
 import { Tooltip } from "../ui/Tooltip";
+import { CopilotPanel } from "./CopilotPanel";
 
 interface GapAnalysisDrawerProps {
     match: MatchScore | null;
@@ -196,28 +197,175 @@ function FitSummarySection({
     );
 }
 
-export function GapAnalysisDrawer({
+type DrawerTab = "analysis" | "copilot";
+
+interface GapAnalysisTabContentProps {
+    match: MatchScore;
+    fitPct: number | null;
+    vectorPct: number;
+    scoreTheme: ReturnType<typeof scoreVisualTheme>;
+    aiFitTooltip: string;
+    vectorTooltip: string;
+}
+
+function GapAnalysisTabContent({
+    match,
+    fitPct,
+    vectorPct,
+    scoreTheme,
+    aiFitTooltip,
+    vectorTooltip,
+}: Readonly<GapAnalysisTabContentProps>) {
+    const hasFitSummary =
+        Boolean(match.gap_summary) ||
+        Boolean(match.fit_highlights?.length) ||
+        Boolean(match.watchout_note);
+
+    return (
+        <>
+            <section className="grid gap-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:grid-cols-2 sm:p-6">
+                <Tooltip content={aiFitTooltip} className="block">
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium uppercase tracking-wider text-zinc-400">
+                                AI Fit
+                            </span>
+                            <span
+                                className={`font-mono font-semibold tabular-nums ${scoreTheme.value}`}
+                            >
+                                {fitPct !== null ? `${fitPct}%` : "Not Scored"}
+                            </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+                            <div
+                                className={`h-full rounded-full transition-all ${scoreTheme.bar}`}
+                                style={{ width: `${fitPct ?? 0}%` }}
+                            />
+                        </div>
+                    </div>
+                </Tooltip>
+
+                <Tooltip content={vectorTooltip} className="block">
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                            <span className="font-medium uppercase tracking-wider text-zinc-400">
+                                Vector Similarity
+                            </span>
+                            <span className="font-mono font-semibold tabular-nums text-sky-300">
+                                {vectorPct}%
+                            </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
+                            <div
+                                className="h-full rounded-full bg-sky-400 transition-all"
+                                style={{ width: `${vectorPct}%` }}
+                            />
+                        </div>
+                    </div>
+                </Tooltip>
+            </section>
+
+            {hasFitSummary && (
+                <FitSummarySection
+                    summary={match.gap_summary}
+                    highlights={match.fit_highlights ?? []}
+                    watchoutNote={match.watchout_note ?? ""}
+                    scoringModel={match.scoring_model}
+                />
+            )}
+
+            <div className="grid gap-5 sm:grid-cols-2">
+                <section className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                    <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+                        <CheckCircle2 className="h-4 w-4" />
+                        Matched Skills ({match.matched_skills.length})
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                        {match.matched_skills.length > 0 ? (
+                            match.matched_skills.map((skill) => (
+                                <Tooltip
+                                    key={skill}
+                                    content="Skill matched between your resume and this role"
+                                >
+                                    <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/15 px-3 py-1.5 font-mono text-xs text-emerald-200">
+                                        {skill}
+                                    </span>
+                                </Tooltip>
+                            ))
+                        ) : (
+                            <span className="text-xs text-zinc-500">
+                                No matched skills recorded
+                            </span>
+                        )}
+                    </div>
+                </section>
+
+                <section className="rounded-2xl border border-amber-500/20 bg-amber-950/15 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                    <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-300">
+                        <XCircle className="h-4 w-4" />
+                        Missing Keywords ({match.missing_keywords.length})
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                        {match.missing_keywords.length > 0 ? (
+                            match.missing_keywords.map((kw) => (
+                                <Tooltip
+                                    key={kw}
+                                    content="Keyword requested in posting but absent from your resume"
+                                >
+                                    <span className="rounded-lg border border-amber-500/25 bg-amber-500/15 px-3 py-1.5 font-mono text-xs text-amber-200">
+                                        {kw}
+                                    </span>
+                                </Tooltip>
+                            ))
+                        ) : (
+                            <span className="text-xs text-zinc-500">
+                                No critical gaps flagged
+                            </span>
+                        )}
+                    </div>
+                </section>
+            </div>
+
+            <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
+                    <MessageSquareQuote className="h-4 w-4 text-violet-400" />
+                    Interview Talking Points
+                </h3>
+                {match.talking_points.length > 0 ? (
+                    <ul className="space-y-3 text-sm leading-relaxed text-zinc-300">
+                        {match.talking_points.map((point) => (
+                            <li key={point} className="flex gap-3">
+                                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
+                                <span>{point}</span>
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="text-xs text-zinc-500">
+                        No talking points generated for this match.
+                    </p>
+                )}
+            </section>
+        </>
+    );
+}
+
+function GapAnalysisDrawerContent({
     match,
     minAlertScore,
     saving,
     saved,
     onClose,
     onSaveLead,
-}: Readonly<GapAnalysisDrawerProps>) {
-    useEffect(() => {
-        if (!match) return;
-        function handleKeyDown(event: KeyboardEvent) {
-            if (event.key === "Escape") {
-                onClose();
-            }
-        }
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [match, onClose]);
-
-    if (!match) {
-        return null;
-    }
+}: Readonly<{
+    match: MatchScore;
+    minAlertScore?: number;
+    saving: boolean;
+    saved: boolean;
+    onClose: () => void;
+    onSaveLead: (match: MatchScore) => void;
+}>) {
+    const [activeTab, setActiveTab] = useState<DrawerTab>("analysis");
 
     const job = match.job_posting;
     const rawFit = match.fit_score;
@@ -361,132 +509,59 @@ export function GapAnalysisDrawer({
                     </Tooltip>
                 </div>
 
+                <div
+                    role="tablist"
+                    aria-label="Match analysis views"
+                    className="flex items-center gap-1 border-b border-zinc-800/90 bg-zinc-950/80 px-6 sm:px-8"
+                >
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeTab === "analysis"}
+                        onClick={() => setActiveTab("analysis")}
+                        className={`relative px-3 py-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                            activeTab === "analysis"
+                                ? "text-zinc-100"
+                                : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                    >
+                        Gap Analysis
+                        {activeTab === "analysis" && (
+                            <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-violet-500" />
+                        )}
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={activeTab === "copilot"}
+                        onClick={() => setActiveTab("copilot")}
+                        className={`relative inline-flex items-center gap-1.5 px-3 py-3 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                            activeTab === "copilot"
+                                ? "text-violet-200"
+                                : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                    >
+                        <Sparkles className="h-3.5 w-3.5 text-violet-400" />
+                        AI Copilot
+                        {activeTab === "copilot" && (
+                            <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-violet-500" />
+                        )}
+                    </button>
+                </div>
+
                 <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-7">
-                    <section className="grid gap-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:grid-cols-2 sm:p-6">
-                        <Tooltip content={aiFitTooltip} className="block">
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between text-xs">
-                                    <span className="font-medium uppercase tracking-wider text-zinc-400">
-                                        AI Fit
-                                    </span>
-                                    <span
-                                        className={`font-mono font-semibold tabular-nums ${scoreTheme.value}`}
-                                    >
-                                        {fitPct !== null ? `${fitPct}%` : "Not Scored"}
-                                    </span>
-                                </div>
-                                <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-                                    <div
-                                        className={`h-full rounded-full transition-all ${scoreTheme.bar}`}
-                                        style={{ width: `${fitPct ?? 0}%` }}
-                                    />
-                                </div>
-                            </div>
-                        </Tooltip>
-
-                        <Tooltip content={vectorTooltip} className="block">
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between text-xs">
-                                    <span className="font-medium uppercase tracking-wider text-zinc-400">
-                                        Vector Similarity
-                                    </span>
-                                    <span className="font-mono font-semibold tabular-nums text-sky-300">
-                                        {vectorPct}%
-                                    </span>
-                                </div>
-                                <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-800">
-                                    <div
-                                        className="h-full rounded-full bg-sky-400 transition-all"
-                                        style={{ width: `${vectorPct}%` }}
-                                    />
-                                </div>
-                            </div>
-                        </Tooltip>
-                    </section>
-
-                    {(match.gap_summary ||
-                        (match.fit_highlights && match.fit_highlights.length > 0) ||
-                        match.watchout_note) && (
-                        <FitSummarySection
-                            summary={match.gap_summary}
-                            highlights={match.fit_highlights ?? []}
-                            watchoutNote={match.watchout_note ?? ""}
-                            scoringModel={match.scoring_model}
+                    {activeTab === "copilot" ? (
+                        <CopilotPanel key={match.uuid} match={match} />
+                    ) : (
+                        <GapAnalysisTabContent
+                            match={match}
+                            fitPct={fitPct}
+                            vectorPct={vectorPct}
+                            scoreTheme={scoreTheme}
+                            aiFitTooltip={aiFitTooltip}
+                            vectorTooltip={vectorTooltip}
                         />
                     )}
-
-                    <div className="grid gap-5 sm:grid-cols-2">
-                        <section className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                            <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                                <CheckCircle2 className="h-4 w-4" />
-                                Matched Skills ({match.matched_skills.length})
-                            </h3>
-                            <div className="flex flex-wrap gap-2">
-                                {match.matched_skills.length > 0 ? (
-                                    match.matched_skills.map((skill) => (
-                                        <Tooltip
-                                            key={skill}
-                                            content="Skill matched between your resume and this role"
-                                        >
-                                            <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/15 px-3 py-1.5 font-mono text-xs text-emerald-200">
-                                                {skill}
-                                            </span>
-                                        </Tooltip>
-                                    ))
-                                ) : (
-                                    <span className="text-xs text-zinc-500">
-                                        No matched skills recorded
-                                    </span>
-                                )}
-                            </div>
-                        </section>
-
-                        <section className="rounded-2xl border border-amber-500/20 bg-amber-950/15 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                            <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-300">
-                                <XCircle className="h-4 w-4" />
-                                Missing Keywords ({match.missing_keywords.length})
-                            </h3>
-                            <div className="flex flex-wrap gap-2">
-                                {match.missing_keywords.length > 0 ? (
-                                    match.missing_keywords.map((kw) => (
-                                        <Tooltip
-                                            key={kw}
-                                            content="Keyword requested in posting but absent from your resume"
-                                        >
-                                            <span className="rounded-lg border border-amber-500/25 bg-amber-500/15 px-3 py-1.5 font-mono text-xs text-amber-200">
-                                                {kw}
-                                            </span>
-                                        </Tooltip>
-                                    ))
-                                ) : (
-                                    <span className="text-xs text-zinc-500">
-                                        No critical gaps flagged
-                                    </span>
-                                )}
-                            </div>
-                        </section>
-                    </div>
-
-                    <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                        <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
-                            <MessageSquareQuote className="h-4 w-4 text-violet-400" />
-                            Interview Talking Points
-                        </h3>
-                        {match.talking_points.length > 0 ? (
-                            <ul className="space-y-3 text-sm leading-relaxed text-zinc-300">
-                                {match.talking_points.map((point) => (
-                                    <li key={point} className="flex gap-3">
-                                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
-                                        <span>{point}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p className="text-xs text-zinc-500">
-                                No talking points generated for this match.
-                            </p>
-                        )}
-                    </section>
                 </div>
 
                 <GapDrawerFooter
@@ -497,5 +572,41 @@ export function GapAnalysisDrawer({
                 />
             </dialog>
         </div>
+    );
+}
+
+export function GapAnalysisDrawer({
+    match,
+    minAlertScore,
+    saving,
+    saved,
+    onClose,
+    onSaveLead,
+}: Readonly<GapAnalysisDrawerProps>) {
+    useEffect(() => {
+        if (!match) return;
+        function handleKeyDown(event: KeyboardEvent) {
+            if (event.key === "Escape") {
+                onClose();
+            }
+        }
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [match, onClose]);
+
+    if (!match) {
+        return null;
+    }
+
+    return (
+        <GapAnalysisDrawerContent
+            key={match.uuid}
+            match={match}
+            minAlertScore={minAlertScore}
+            saving={saving}
+            saved={saved}
+            onClose={onClose}
+            onSaveLead={onSaveLead}
+        />
     );
 }

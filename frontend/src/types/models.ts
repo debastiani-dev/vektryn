@@ -358,3 +358,44 @@ export interface TriggerCollectResponse {
     cooldown_seconds: number;
 }
 
+export type MatchArtifactKind =
+    | "tailored_bullets"
+    | "cover_letter"
+    | "recruiter_outreach"
+    | "interview_questions"
+    | "questions_to_ask";
+
+export type CopilotTone =
+    | "balanced"
+    | "concise"
+    | "executive"
+    | "technical"
+    | "conversational";
+
+export interface MatchArtifact {
+    uuid: string;
+    match_score: string;
+    kind: MatchArtifactKind;
+    resume_content_hash: string;
+    content_markdown: string;
+    model_name: string;
+    is_stale: boolean;
+    created_at: string;
+    modified_at: string;
+}
+
+export interface MatchArtifactListResponse {
+    results: MatchArtifact[];
+}
+
+export interface MatchArtifactGenerateInput {
+    kind: MatchArtifactKind;
+    regenerate?: boolean;
+    tone?: CopilotTone;
+    guidance?: string;
+}
+
+export interface MatchArtifactGenerateResponse extends MatchArtifact {
+    cached: boolean;
+}
+

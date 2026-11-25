@@ -1,5 +1,6 @@
 from django.contrib import admin
 
+from apps.matching.models.artifacts import MatchArtifact
 from apps.matching.models.matching import MatchScore
 
 
@@ -14,4 +15,18 @@ class MatchScoreAdmin(admin.ModelAdmin):
         "created_at",
     )
     list_filter = ("scoring_model", "is_deleted")
+    readonly_fields = ("uuid", "resume_content_hash", "created_at", "modified_at")
+
+
+@admin.register(MatchArtifact)
+class MatchArtifactAdmin(admin.ModelAdmin):
+    list_display = (
+        "match_score",
+        "user",
+        "kind",
+        "model_name",
+        "is_deleted",
+        "modified_at",
+    )
+    list_filter = ("kind", "model_name", "is_deleted")
     readonly_fields = ("uuid", "resume_content_hash", "created_at", "modified_at")

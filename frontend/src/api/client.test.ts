@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaginatedResponse } from "../types/models";
-import { fetchAllPages, fetchAllPagesWithCount, vektrynApi } from "./client";
+import { ApiError, fetchAllPages, fetchAllPagesWithCount, vektrynApi } from "./client";
 
 describe("fetchAllPages", () => {
     it("follows DRF pagination until next is null while preserving query params", async () => {
@@ -472,5 +472,103 @@ describe("vektrynApi", () => {
         expect((fetchMock.mock.calls[5] as [string])[0]).toBe(
             "/api/v1/jobs/muted-companies/mut-1/",
         );
+    });
+
+    it("lists and generates match artifacts and parses 429/503 ApiError metadata", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=copilot-csrf" });
+        const sampleArtifact = {
+            uuid: "art-1",
+            match_score: "match-1",
+            kind: "tailored_bullets",
+            resume_content_hash: "hash-v1",
+            content_markdown: "## Tailored Resume Bullets\n- Shipped Kafka pipelines.",
+            model_name: "gemini-4-hydrogen",
+            is_stale: false,
+            created_at: "2026-11-25T12:00:00Z",
+            modified_at: "2026-11-25T12:00:00Z",
+        };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ results: [sampleArtifact] }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ ...sampleArtifact, cached: false }), {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        detail: "AI Copilot rate limit exceeded. Try again in 42s.",
+                        retry_after_seconds: 42,
+                    }),
+                    {
+                        status: 429,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Retry-After": "42",
+                        },
+                    },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({ detail: "AI Copilot is temporarily unavailable." }),
+                    {
+                        status: 503,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const listed = await vektrynApi.listMatchArtifacts("match-1");
+        expect(listed.results).toHaveLength(1);
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+            "/api/v1/matches/match-1/artifacts/",
+        );
+
+        const generated = await vektrynApi.generateMatchArtifact("match-1", {
+            kind: "tailored_bullets",
+            regenerate: true,
+            tone: "technical",
+            guidance: "Focus on throughput",
+        });
+        expect(generated.cached).toBe(false);
+        const [postUrl, postInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+        expect(postUrl).toBe("/api/v1/matches/match-1/artifacts/");
+        expect(postInit.method).toBe("POST");
+        expect(JSON.parse(postInit.body as string)).toEqual({
+            kind: "tailored_bullets",
+            regenerate: true,
+            tone: "technical",
+            guidance: "Focus on throughput",
+        });
+
+        try {
+            await vektrynApi.generateMatchArtifact("match-1", { kind: "cover_letter" });
+            expect.unreachable("Expected 429 ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            const apiErr = err as ApiError;
+            expect(apiErr.status).toBe(429);
+            expect(apiErr.retryAfterSeconds).toBe(42);
+            expect(apiErr.detail).toContain("42s");
+        }
+
+        try {
+            await vektrynApi.generateMatchArtifact("match-1", { kind: "cover_letter" });
+            expect.unreachable("Expected 503 ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            const apiErr = err as ApiError;
+            expect(apiErr.status).toBe(503);
+            expect(apiErr.detail).toBe("AI Copilot is temporarily unavailable.");
+        }
     });
 });
