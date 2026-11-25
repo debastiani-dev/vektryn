@@ -7,6 +7,7 @@ from confluent_kafka import KafkaError
 from opentelemetry import trace
 
 from stream_edge.clients.gemini import GeminiStreamClient
+from stream_edge.clients.heartbeat import WorkerHeartbeat
 from stream_edge.clients.kafka import (
     KafkaEventProducer,
     create_kafka_consumer,
@@ -126,6 +127,7 @@ async def run_enrichment_worker() -> None:
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     redis_client = DedupRedisClient()
+    heartbeat = WorkerHeartbeat("enrichment-worker")
     producer = KafkaEventProducer()
     consumer = create_kafka_consumer(
         group_id=settings.kafka_enrichment_group_id,
@@ -145,6 +147,7 @@ async def run_enrichment_worker() -> None:
     logger.info(
         "Enrichment worker started (group=%s)", settings.kafka_enrichment_group_id
     )
+    await heartbeat.start()
     try:
         while running:
             msg = await asyncio.to_thread(consumer.poll, 1.0)
@@ -163,6 +166,7 @@ async def run_enrichment_worker() -> None:
                     redis_client=redis_client,
                     producer=producer,
                 )
+                heartbeat.record_message()
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
                 )
@@ -185,6 +189,7 @@ async def run_enrichment_worker() -> None:
                     time.perf_counter() - started
                 )
     finally:
+        await heartbeat.stop()
         await redis_client.close()
         await asyncio.to_thread(producer.flush, 5.0)
         await asyncio.to_thread(consumer.close)

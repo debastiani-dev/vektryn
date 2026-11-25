@@ -6,6 +6,7 @@ import {
     Loader2,
     Play,
     RefreshCw,
+    Search,
     ShieldAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -15,9 +16,12 @@ import type {
     DlqHealthStatus,
     PipelineOverallStatus,
     PipelineStatusResponse,
+    WorkerHeartbeatItem,
+    WorkerLivenessStatus,
 } from "../../types/models";
 import { formatAtsSource, formatExactDate, formatRelativeTime } from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
+import { DlqInspectorModal } from "./DlqInspectorModal";
 
 const IDLE_POLL_INTERVAL_MS = 60_000;
 const RUNNING_POLL_INTERVAL_MS = 5_000;
@@ -144,6 +148,98 @@ function DlqBadge({
     );
 }
 
+function workerBadgeStyle(status: WorkerLivenessStatus): {
+    dot: string;
+    badge: string;
+    label: string;
+} {
+    if (status === "alive") {
+        return {
+            dot: "bg-emerald-400",
+            badge: "bg-emerald-500/12 text-emerald-300 ring-emerald-500/30",
+            label: "Alive",
+        };
+    }
+    if (status === "stale") {
+        return {
+            dot: "bg-amber-400",
+            badge: "bg-amber-500/12 text-amber-300 ring-amber-500/30",
+            label: "Stale",
+        };
+    }
+    if (status === "offline") {
+        return {
+            dot: "bg-red-400",
+            badge: "bg-red-500/15 text-red-300 ring-red-500/35",
+            label: "Offline",
+        };
+    }
+    return {
+        dot: "bg-zinc-500",
+        badge: "bg-zinc-800 text-zinc-400 ring-zinc-700",
+        label: "Unknown",
+    };
+}
+
+function formatWorkerLabel(workerName: string): string {
+    const base = workerName.replace(/-worker$/, "");
+    if (!base) return workerName;
+    return base.charAt(0).toUpperCase() + base.slice(1);
+}
+
+function formatWorkerTooltip(item: WorkerHeartbeatItem): string {
+    if (item.status === "offline") {
+        return `${item.worker} has not sent a heartbeat within the last 90s.`;
+    }
+    if (item.status === "unknown") {
+        return `${item.worker} liveness unavailable (Redis not reachable).`;
+    }
+    const hbAge = item.age_seconds !== null ? `${item.age_seconds}s ago` : "just now";
+    const lastMsg = item.last_message_at
+        ? formatRelativeTime(item.last_message_at) ?? "recently"
+        : "none yet";
+    return `Heartbeat ${hbAge} · Processed ${item.processed_count} msgs · Last msg ${lastMsg}`;
+}
+
+function WorkerLivenessSection({ items }: Readonly<{ items: ReadonlyArray<WorkerHeartbeatItem> }>) {
+    if (items.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className="space-y-2 rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-zinc-300">Worker Liveness</span>
+                <span className="text-[11px] text-zinc-500">Kafka consumers</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+                {items.map((item) => {
+                    const style = workerBadgeStyle(item.status);
+                    return (
+                        <Tooltip
+                            key={item.worker}
+                            content={formatWorkerTooltip(item)}
+                            className="block w-full"
+                        >
+                            <div className="flex w-full items-center justify-between gap-2 rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-2.5 py-1.5 text-xs">
+                                <span className="truncate font-medium text-zinc-200">
+                                    {formatWorkerLabel(item.worker)}
+                                </span>
+                                <span
+                                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${style.badge}`}
+                                >
+                                    <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+                                    {style.label}
+                                </span>
+                            </div>
+                        </Tooltip>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
 function SourceBreakdownList({ sources }: Readonly<{ sources: ReadonlyArray<CollectorSourceLog> }>) {
     if (sources.length === 0) {
         return (
@@ -209,6 +305,7 @@ function computeLiveCooldown(
 
 export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }>) {
     const [open, setOpen] = useState(false);
+    const [dlqModalOpen, setDlqModalOpen] = useState(false);
     const [data, setData] = useState<PipelineStatusResponse | null>(null);
     const [fetchedAtMs, setFetchedAtMs] = useState<number | null>(null);
     const [nowMs, setNowMs] = useState(() => Date.now());
@@ -474,15 +571,32 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                                 </div>
                             </div>
 
-                            <div className="flex items-center justify-between gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2">
-                                <span className="text-xs font-medium text-zinc-300">
-                                    Dead-Letter Queue
-                                </span>
-                                <DlqBadge
-                                    status={data.dlq.status}
-                                    recent24h={data.dlq.recent_24h_count}
-                                    total={data.dlq.total_count}
-                                />
+                            {data.workers && <WorkerLivenessSection items={data.workers.items} />}
+
+                            <div className="space-y-2 rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs font-medium text-zinc-300">
+                                        Dead-Letter Queue
+                                    </span>
+                                    <DlqBadge
+                                        status={data.dlq.status}
+                                        recent24h={data.dlq.recent_24h_count}
+                                        total={data.dlq.total_count}
+                                    />
+                                </div>
+                                {canTrigger && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setOpen(false);
+                                            setDlqModalOpen(true);
+                                        }}
+                                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-zinc-700/80 bg-zinc-950/70 px-2.5 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
+                                    >
+                                        <Search className="h-3.5 w-3.5 text-violet-400" />
+                                        Inspect DLQ
+                                    </button>
+                                )}
                             </div>
 
                             <div className="space-y-1.5">
@@ -523,6 +637,12 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                     )}
                 </dialog>
             )}
+
+            <DlqInspectorModal
+                open={dlqModalOpen}
+                onClose={() => setDlqModalOpen(false)}
+                onReplayed={() => void fetchStatus()}
+            />
         </div>
     );
 }

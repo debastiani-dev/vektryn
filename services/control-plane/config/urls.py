@@ -5,6 +5,9 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from apps.analytics.views.system import (
+    system_dlq_dismiss_view,
+    system_dlq_list_view,
+    system_dlq_replay_view,
     system_status_view,
     trigger_collector_sync_view,
 )
@@ -51,5 +54,16 @@ urlpatterns = [
         "api/v1/system/collect/",
         trigger_collector_sync_view,
         name="api-system-collect",
+    ),
+    path("api/v1/system/dlq/", system_dlq_list_view, name="api-system-dlq"),
+    path(
+        "api/v1/system/dlq/replay/",
+        system_dlq_replay_view,
+        name="api-system-dlq-replay",
+    ),
+    path(
+        "api/v1/system/dlq/dismiss/",
+        system_dlq_dismiss_view,
+        name="api-system-dlq-dismiss",
     ),
 ]

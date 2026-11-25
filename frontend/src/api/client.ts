@@ -3,6 +3,10 @@ import type {
     ContractType,
     CurrentUser,
     DismissedJob,
+    DlqDismissResponse,
+    DlqInspectResponse,
+    DlqReplayRequest,
+    DlqReplayResponse,
     JobPostingDetail,
     JobPostingSummary,
     LeadPriority,
@@ -379,5 +383,30 @@ export const vektrynApi = {
         apiFetch<MatchArtifactGenerateResponse>(`/api/v1/matches/${matchUuid}/artifacts/`, {
             method: "POST",
             body: JSON.stringify(payload),
+        }),
+
+    listDlqMessages: (options?: { limit?: number; original_topic?: string }) => {
+        const params = new URLSearchParams();
+        if (options?.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+        if (options?.original_topic) {
+            params.set("original_topic", options.original_topic);
+        }
+        const qs = params.toString();
+        const path = qs ? `/api/v1/system/dlq/?${qs}` : "/api/v1/system/dlq/";
+        return apiFetch<DlqInspectResponse>(path);
+    },
+
+    replayDlqMessages: (payload: DlqReplayRequest) =>
+        apiFetch<DlqReplayResponse>("/api/v1/system/dlq/replay/", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        }),
+
+    dismissDlqMessages: (eventIds: string[]) =>
+        apiFetch<DlqDismissResponse>("/api/v1/system/dlq/dismiss/", {
+            method: "POST",
+            body: JSON.stringify({ event_ids: eventIds }),
         }),
 };

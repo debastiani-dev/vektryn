@@ -303,6 +303,22 @@ export interface ManualJobImportResponse {
 
 export type PipelineOverallStatus = "healthy" | "warning" | "degraded";
 export type DlqHealthStatus = "healthy" | "warning" | "unavailable";
+export type WorkerLivenessStatus = "alive" | "stale" | "offline" | "unknown";
+export type WorkerHealthStatus = "healthy" | "warning" | "degraded" | "unavailable";
+
+export interface WorkerHeartbeatItem {
+    worker: string;
+    status: WorkerLivenessStatus;
+    last_heartbeat_at: string | null;
+    last_message_at: string | null;
+    processed_count: number;
+    age_seconds: number | null;
+}
+
+export interface WorkersHealthSummary {
+    status: WorkerHealthStatus;
+    items: WorkerHeartbeatItem[];
+}
 
 export interface CollectorSourceLog {
     source: string;
@@ -342,12 +358,73 @@ export interface PipelineStatusResponse {
         recent_24h_count: number | null;
         total_count: number | null;
     };
+    workers?: WorkersHealthSummary;
     collect_trigger: {
         can_trigger: boolean;
         is_running?: boolean;
         running_started_at?: string | null;
         cooldown_remaining_seconds: number;
     };
+}
+
+export type ReplayableTopic = "jobs.raw" | "jobs.enriched" | "jobs.rescore";
+
+export interface DlqMessageItem {
+    event_id: string;
+    original_topic: string;
+    partition: number;
+    offset: number;
+    dlq_partition: number;
+    dlq_offset: number;
+    error_type: string;
+    error_message: string;
+    retry_count: number;
+    produced_at: string | null;
+    payload_preview: string;
+    payload_truncated: boolean;
+    replayable: boolean;
+    replayed_at: string | null;
+    dismissed_at: string | null;
+}
+
+export interface DlqDismissResponse {
+    dismissed_count: number;
+    dismissed_at: string | null;
+    event_ids: string[];
+}
+
+export interface DlqInspectResponse {
+    total_count: number;
+    returned_count: number;
+    limit: number;
+    replay_cooldown_remaining_seconds: number;
+    items: DlqMessageItem[];
+}
+
+export interface DlqReplayRequest {
+    dry_run?: boolean;
+    event_ids?: string[];
+    limit?: number;
+    original_topic?: ReplayableTopic;
+}
+
+export interface DlqReplayItemResult {
+    event_id: string;
+    original_topic: string;
+    dlq_partition: number;
+    dlq_offset: number;
+    status: "would_replay" | "replayed" | "skipped" | "failed";
+    reason: string;
+}
+
+export interface DlqReplayResponse {
+    dry_run: boolean;
+    matched_count: number;
+    replayed_count: number;
+    skipped_count: number;
+    failed_count: number;
+    cooldown_seconds: number;
+    items: DlqReplayItemResult[];
 }
 
 export interface TriggerCollectResponse {

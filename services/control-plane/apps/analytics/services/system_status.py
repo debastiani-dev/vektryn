@@ -13,6 +13,29 @@ from apps.analytics.services.collector_trigger import (
     get_collect_cooldown_remaining,
     get_collect_running_state,
 )
+from apps.analytics.services.dlq_inspector import (
+    MAX_DLQ_INSPECT_LIMIT,
+    count_unresolved_recent_dlq_messages,
+)
+from apps.analytics.services.kafka_probe import (
+    DLQ_CACHE_KEY,
+    KAFKA_PROBE_TIMEOUT_SECONDS,
+    build_kafka_probe_config as _build_kafka_probe_config,
+    close_consumer_safely as _close_consumer_safely,
+    close_redis_safely as _close_redis_safely,
+)
+from apps.analytics.services.dlq_inspector import (
+    MAX_DLQ_INSPECT_LIMIT,
+    count_unresolved_recent_dlq_messages,
+)
+from apps.analytics.services.kafka_probe import (
+    DLQ_CACHE_KEY,
+    KAFKA_PROBE_GROUP_ID,
+    KAFKA_PROBE_TIMEOUT_SECONDS,
+    build_kafka_probe_config as _build_kafka_probe_config,
+    close_consumer_safely as _close_consumer_safely,
+    close_redis_safely as _close_redis_safely,
+)
 from apps.jobs.models.jobs import JobPosting
 from apps.matching.models.matching import MatchScore
 from apps.resumes.models.resumes import ResumeProfile
@@ -20,15 +43,17 @@ from vektryn_contracts import KafkaTopic
 
 logger = logging.getLogger(__name__)
 
-DLQ_CACHE_KEY = "vektryn:system:dlq_health:v1"
 DLQ_CACHE_TTL_SECONDS = 30
 COLLECT_STALE_HOURS = 12
 MATCH_LAG_WINDOW_HOURS = 2
 DLQ_LOOKBACK_HOURS = 24
-KAFKA_PROBE_TIMEOUT_SECONDS = 1.5
-KAFKA_PROBE_GROUP_ID = "vektryn-system-status-probe"
+
+EXPECTED_WORKERS: tuple[str, ...] = ("enrichment-worker", "matcher-worker")
+WORKER_HEARTBEAT_KEY_PREFIX = "vektryn:worker:heartbeat:"
+WORKER_HEARTBEAT_STALE_SECONDS = 60
 
 OverallStatus = Literal["healthy", "warning", "degraded"]
+WorkerLivenessStatus = Literal["alive", "stale", "offline", "unknown"]
 
 
 def _get_redis_client() -> redis.Redis | None:
@@ -47,47 +72,12 @@ def _get_redis_client() -> redis.Redis | None:
         return None
 
 
-def _build_kafka_probe_config() -> dict[str, Any] | None:
-    bootstrap = (getattr(settings, "KAFKA_BOOTSTRAP_SERVERS", "") or "").strip()
-    if not bootstrap:
-        return None
-    config: dict[str, Any] = {
-        "bootstrap.servers": bootstrap,
-        "group.id": KAFKA_PROBE_GROUP_ID,
-        "enable.auto.commit": False,
-        "socket.timeout.ms": int(KAFKA_PROBE_TIMEOUT_SECONDS * 1000),
-        "metadata.request.timeout.ms": int(KAFKA_PROBE_TIMEOUT_SECONDS * 1000),
-    }
-    protocol = (getattr(settings, "KAFKA_SECURITY_PROTOCOL", "") or "").strip()
-    if protocol:
-        config["security.protocol"] = protocol
-    mechanism = (getattr(settings, "KAFKA_SASL_MECHANISM", "") or "").strip()
-    if mechanism:
-        config["sasl.mechanism"] = mechanism
-    username = (getattr(settings, "KAFKA_SASL_USERNAME", "") or "").strip()
-    if username:
-        config["sasl.username"] = username
-    password = (getattr(settings, "KAFKA_SASL_PASSWORD", "") or "").strip()
-    if password:
-        config["sasl.password"] = password
-    return config
-
-
 def _unavailable_dlq_health() -> dict[str, Any]:
     return {
         "status": "unavailable",
         "recent_24h_count": None,
         "total_count": None,
     }
-
-
-def _close_consumer_safely(consumer: Consumer | None) -> None:
-    if consumer is None:
-        return
-    try:
-        consumer.close()
-    except Exception as close_exc:
-        logger.debug("Ignoring Kafka probe consumer close error: %s", close_exc)
 
 
 def _count_partition_dlq_messages(
@@ -156,23 +146,179 @@ def _probe_kafka_dlq_health() -> dict[str, Any]:
 
 def get_dlq_health() -> dict[str, Any]:
     client = _get_redis_client()
-    if client is not None:
-        try:
-            cached = client.get(DLQ_CACHE_KEY)
-            if isinstance(cached, str) and cached:
-                parsed = json.loads(cached)
-                if isinstance(parsed, dict) and "status" in parsed:
-                    return parsed
-        except Exception as exc:
-            logger.debug("Failed reading cached DLQ health: %s", exc)
+    try:
+        if client is not None:
+            try:
+                cached = client.get(DLQ_CACHE_KEY)
+                if isinstance(cached, str) and cached:
+                    parsed = json.loads(cached)
+                    if isinstance(parsed, dict) and "status" in parsed:
+                        return parsed
+            except Exception as exc:
+                logger.debug("Failed reading cached DLQ health: %s", exc)
 
-    health = _probe_kafka_dlq_health()
-    if client is not None:
-        try:
-            client.set(DLQ_CACHE_KEY, json.dumps(health), ex=DLQ_CACHE_TTL_SECONDS)
-        except Exception as exc:
-            logger.debug("Failed caching DLQ health: %s", exc)
-    return health
+        health = _probe_kafka_dlq_health()
+        if (
+            client is not None
+            and (health.get("recent_24h_count") or 0) > 0
+            and health.get("status") != "unavailable"
+        ):
+            unresolved = _count_unresolved_recent_dlq(
+                since_dt=datetime.now(UTC) - timedelta(hours=DLQ_LOOKBACK_HOURS),
+                raw_recent_count=int(health["recent_24h_count"]),
+            )
+            if unresolved is not None:
+                health["recent_24h_count"] = unresolved
+                health["status"] = "warning" if unresolved > 0 else "healthy"
+
+        if client is not None:
+            try:
+                client.set(DLQ_CACHE_KEY, json.dumps(health), ex=DLQ_CACHE_TTL_SECONDS)
+            except Exception as exc:
+                logger.debug("Failed caching DLQ health: %s", exc)
+        return health
+    finally:
+        _close_redis_safely(client)
+
+
+def _count_unresolved_recent_dlq(
+    *,
+    since_dt: datetime,
+    raw_recent_count: int,
+) -> int | None:
+    if raw_recent_count > MAX_DLQ_INSPECT_LIMIT:
+        return None
+    return count_unresolved_recent_dlq_messages(
+        since_dt=since_dt,
+        max_scan_per_partition=raw_recent_count,
+    )
+
+
+def _unknown_workers_payload() -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "items": [
+            {
+                "worker": name,
+                "status": "unknown",
+                "last_heartbeat_at": None,
+                "last_message_at": None,
+                "processed_count": 0,
+                "age_seconds": None,
+            }
+            for name in EXPECTED_WORKERS
+        ],
+    }
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def _parse_worker_entry(
+    worker_name: str,
+    raw_value: object,
+    now: datetime,
+) -> dict[str, Any]:
+    if not isinstance(raw_value, str) or not raw_value:
+        return {
+            "worker": worker_name,
+            "status": "offline",
+            "last_heartbeat_at": None,
+            "last_message_at": None,
+            "processed_count": 0,
+            "age_seconds": None,
+        }
+
+    try:
+        parsed = json.loads(raw_value)
+    except (ValueError, TypeError):
+        parsed = None
+
+    if not isinstance(parsed, dict):
+        return {
+            "worker": worker_name,
+            "status": "offline",
+            "last_heartbeat_at": None,
+            "last_message_at": None,
+            "processed_count": 0,
+            "age_seconds": None,
+        }
+
+    hb_dt = _parse_iso_datetime(parsed.get("last_heartbeat_at"))
+    if hb_dt is None:
+        return {
+            "worker": worker_name,
+            "status": "offline",
+            "last_heartbeat_at": None,
+            "last_message_at": None,
+            "processed_count": 0,
+            "age_seconds": None,
+        }
+
+    age_seconds = max(0, int((now - hb_dt).total_seconds()))
+    liveness: WorkerLivenessStatus = (
+        "alive" if age_seconds <= WORKER_HEARTBEAT_STALE_SECONDS else "stale"
+    )
+    msg_dt = _parse_iso_datetime(parsed.get("last_message_at"))
+    raw_count = parsed.get("processed_count", 0)
+    processed_count = (
+        max(0, int(raw_count))
+        if isinstance(raw_count, (int, float)) and not isinstance(raw_count, bool)
+        else 0
+    )
+    return {
+        "worker": worker_name,
+        "status": liveness,
+        "last_heartbeat_at": hb_dt.isoformat(),
+        "last_message_at": msg_dt.isoformat() if msg_dt else None,
+        "processed_count": processed_count,
+        "age_seconds": age_seconds,
+    }
+
+
+def _aggregate_worker_status(items: list[dict[str, Any]]) -> str:
+    statuses = {item["status"] for item in items}
+    if "offline" in statuses:
+        return "degraded"
+    if "stale" in statuses:
+        return "warning"
+    if statuses == {"alive"}:
+        return "healthy"
+    return "unavailable"
+
+
+def get_worker_health() -> tuple[dict[str, Any], bool]:
+    """Returns (workers_payload, redis_runtime_error)."""
+    client = _get_redis_client()
+    if client is None:
+        return _unknown_workers_payload(), False
+
+    keys = [f"{WORKER_HEARTBEAT_KEY_PREFIX}{name}" for name in EXPECTED_WORKERS]
+    now = datetime.now(UTC)
+    try:
+        values = client.mget(keys)
+    except Exception as exc:
+        logger.warning("Redis unavailable while reading worker heartbeats: %s", exc)
+        return _unknown_workers_payload(), True
+    finally:
+        _close_redis_safely(client)
+
+    items = [
+        _parse_worker_entry(
+            name,
+            values[idx] if idx < len(values) else None,
+            now,
+        )
+        for idx, name in enumerate(EXPECTED_WORKERS)
+    ]
+    return {"status": _aggregate_worker_status(items), "items": items}, False
 
 
 def _get_collector_telemetry() -> (
@@ -293,9 +439,12 @@ def _derive_overall_status(
     latest_run_totals: dict[str, int],
     jobs_metrics: dict[str, int],
     dlq: dict[str, Any],
+    workers: dict[str, Any] | None = None,
+    workers_redis_error: bool = False,
 ) -> OverallStatus:
     recent_dlq = dlq.get("recent_24h_count") or 0
-    if recent_dlq > 0:
+    worker_status = (workers or {}).get("status")
+    if recent_dlq > 0 or worker_status == "degraded":
         return "degraded"
     if (
         last_collect_at is not None
@@ -310,6 +459,8 @@ def _derive_overall_status(
         last_collect_at is None
         or last_collect_at < stale_cutoff
         or dlq.get("status") == "unavailable"
+        or worker_status == "warning"
+        or workers_redis_error
         or jobs_metrics["unembedded_active_count"] > 0
         or jobs_metrics["recent_unmatched_count"] > 0
     ):
@@ -323,11 +474,14 @@ def build_system_status_payload(user) -> dict[str, Any]:
     jobs_metrics = _get_job_backlog_metrics(user)
     rollup_metrics = _get_rollup_metrics()
     dlq_health = get_dlq_health()
+    workers_health, workers_redis_error = get_worker_health()
     overall_status = _derive_overall_status(
         last_collect_at=last_collect_at,
         latest_run_totals=latest_run_totals,
         jobs_metrics=jobs_metrics,
         dlq=dlq_health,
+        workers=workers_health,
+        workers_redis_error=workers_redis_error,
     )
 
     is_running, running_started_at = get_collect_running_state(last_collect_at)
@@ -340,6 +494,7 @@ def build_system_status_payload(user) -> dict[str, Any]:
         "jobs": jobs_metrics,
         "rollup": rollup_metrics,
         "dlq": dlq_health,
+        "workers": workers_health,
         "collect_trigger": {
             "can_trigger": bool(getattr(user, "is_staff", False)),
             "is_running": is_running,
