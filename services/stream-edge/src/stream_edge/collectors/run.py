@@ -11,6 +11,10 @@ import httpx
 import psycopg
 import redis.asyncio as aioredis
 
+from stream_edge.clients.notifications import (
+    persist_collector_sync_notifications,
+    persist_pipeline_error_notifications,
+)
 from stream_edge.clients.redis import DedupRedisClient
 from stream_edge.collectors.ashby import AshbyCollector
 from stream_edge.collectors.ats_boards import (
@@ -376,6 +380,8 @@ async def run_collection(
 
         pushed_total = sum(s.ingested_count for s in metrics_by_source.values())
         deduped_total = sum(s.deduped_count for s in metrics_by_source.values())
+        fetched_total = sum(s.fetched_count for s in metrics_by_source.values())
+        errors_total = sum(s.error_count for s in metrics_by_source.values())
         logger.info(
             "Collection complete: pushed %d new, skipped %d deduped (of %d ranked) to %s",
             pushed_total,
@@ -383,6 +389,26 @@ async def run_collection(
             len(merged),
             edge_url,
         )
+
+        if errors_total > 0 and fetched_total == 0 and pushed_total == 0:
+            await asyncio.to_thread(
+                persist_pipeline_error_notifications,
+                source="vektryn-collect",
+                error_type="CollectorTotalFailure",
+                error_message=(
+                    f"Collector sync finished with {errors_total} errors and 0 jobs fetched."
+                ),
+                extra_payload={"error_count": errors_total},
+            )
+        elif pushed_total > 0 or errors_total > 0:
+            await asyncio.to_thread(
+                persist_collector_sync_notifications,
+                fetched_count=fetched_total,
+                ingested_count=pushed_total,
+                deduped_count=deduped_total,
+                error_count=errors_total,
+                sources_count=len(metrics_by_source),
+            )
 
         try:
             persisted = await asyncio.to_thread(

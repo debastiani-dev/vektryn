@@ -6,6 +6,7 @@ import {
     isMailtoUrl,
     scoreBadgeStyle,
 } from "../../utils/format";
+import { getAlertDedupeKey } from "../../utils/notifications";
 import { Tooltip } from "../ui/Tooltip";
 
 interface LiveAlertBannerProps {
@@ -26,9 +27,10 @@ export function LiveAlertBanner({ alerts, onDismiss }: Readonly<LiveAlertBannerP
         >
             {alerts.slice(0, 3).map((alert) => {
                 const simPct = (alert.cosine_similarity * 100).toFixed(0);
+                const alertKey = getAlertDedupeKey(alert);
                 return (
                     <div
-                        key={alert.event_id}
+                        key={alertKey}
                         className="animate-toast-in pointer-events-auto rounded-2xl border border-violet-500/35 bg-zinc-900/95 p-4 shadow-2xl shadow-black/60 ring-1 ring-inset ring-white/[0.05] backdrop-blur-md"
                     >
                         <div className="flex items-start justify-between gap-3">
@@ -63,7 +65,7 @@ export function LiveAlertBanner({ alerts, onDismiss }: Readonly<LiveAlertBannerP
                             <Tooltip content="Dismiss live alert" side="bottom">
                                 <button
                                     type="button"
-                                    onClick={() => onDismiss(alert.event_id)}
+                                    onClick={() => onDismiss(alertKey)}
                                     aria-label="Dismiss alert"
                                     className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                                 >

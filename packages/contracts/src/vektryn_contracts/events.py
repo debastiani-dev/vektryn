@@ -99,6 +99,7 @@ class JobRawEvent(EventEnvelope):
     location_raw: str = Field(default="", max_length=255)
     description_clean: str = Field(min_length=1)
     posted_at: datetime | None = None
+    submitted_by_user_id: int | UUID | None = None
 
 
 class JobEnrichedEvent(JobRawEvent):
@@ -152,6 +153,7 @@ class JobRescoreEvent(EventEnvelope):
 
 
 class JobMatchAlertEvent(EventEnvelope):
+    notification_uuid: UUID | None = None
     user_id: int | UUID
     job_posting_uuid: UUID
     resume_profile_uuid: UUID

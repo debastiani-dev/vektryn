@@ -115,6 +115,7 @@ export interface StackTrendDaily {
 
 export interface LiveMatchAlert {
     event_id: string;
+    notification_uuid?: string | null;
     user_id: string;
     job_posting_uuid: string;
     resume_profile_uuid: string;
@@ -126,6 +127,60 @@ export interface LiveMatchAlert {
     matched_skills: string[];
     missing_keywords: string[];
     apply_url: string;
+}
+
+export type NotificationKind =
+    | "match_alert"
+    | "tracked_job_closed"
+    | "pipeline_error"
+    | "rescore_completed"
+    | "manual_import_ready"
+    | "collector_sync_completed";
+
+export interface NotificationPayload {
+    job_posting_uuid?: string;
+    resume_profile_uuid?: string;
+    match_score_uuid?: string;
+    lead_uuid?: string;
+    lead_status?: string;
+    title?: string;
+    company_name?: string;
+    fit_score?: number;
+    cosine_similarity?: number;
+    matched_skills?: string[];
+    missing_keywords?: string[];
+    apply_url?: string;
+    source?: string;
+    error_type?: string;
+    error_message?: string;
+    [key: string]: unknown;
+}
+
+export interface NotificationItem {
+    uuid: string;
+    kind: NotificationKind;
+    title: string;
+    body: string;
+    payload: NotificationPayload;
+    read_at: string | null;
+    dismissed_at: string | null;
+    is_read: boolean;
+    created_at: string;
+    modified_at: string;
+}
+
+export interface NotificationListResponse extends PaginatedResponse<NotificationItem> {
+    unread_count: number;
+}
+
+export interface NotificationActionResponse {
+    notification: NotificationItem;
+    unread_count: number;
+}
+
+export interface ReadAllNotificationsResponse {
+    updated_count: number;
+    unread_count: number;
 }
 
 export interface CurrentUser {

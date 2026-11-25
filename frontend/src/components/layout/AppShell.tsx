@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { CurrentUser, LiveMatchAlert } from "../../types/models";
 import { Tooltip } from "../ui/Tooltip";
 import { LiveAlertBanner } from "./LiveAlertBanner";
+import { NotificationCenter, type NotificationCenterProps } from "./NotificationCenter";
 import { PipelineStatusPopover } from "./PipelineStatusPopover";
 
 export type ActiveTab = "radar" | "tracker" | "analytics" | "resumes";
@@ -15,6 +16,7 @@ interface AppShellProps {
     sseConnected: boolean;
     alerts: LiveMatchAlert[];
     onDismissAlert: (eventId: string) => void;
+    notificationCenter: NotificationCenterProps;
     children: ReactNode;
 }
 
@@ -58,6 +60,7 @@ export function AppShell({
     sseConnected,
     alerts,
     onDismissAlert,
+    notificationCenter,
     children,
 }: Readonly<AppShellProps>) {
     const streamTooltip = sseConnected
@@ -130,6 +133,8 @@ export function AppShell({
                                 <span>{sseConnected ? "Live Stream" : "Stream Offline"}</span>
                             </div>
                         </Tooltip>
+
+                        <NotificationCenter {...notificationCenter} />
 
                         {user && (
                             <div className="flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/70 py-1 pr-1.5 pl-3 text-xs text-zinc-300">

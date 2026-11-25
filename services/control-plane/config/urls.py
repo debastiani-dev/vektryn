@@ -45,6 +45,7 @@ urlpatterns = [
     path("api/v1/matches/", include("apps.matching.urls")),
     path("api/v1/leads/", include("apps.tracker.urls")),
     path("api/v1/analytics/", include("apps.analytics.urls")),
+    path("api/v1/notifications/", include("apps.base.urls")),
     path("api/v1/system/status/", system_status_view, name="api-system-status"),
     path(
         "api/v1/system/collect/",

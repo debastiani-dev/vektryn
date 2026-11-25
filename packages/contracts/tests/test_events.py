@@ -14,6 +14,7 @@ from vektryn_contracts import (
     JobRawEvent,
     JobRescoreEvent,
     KafkaTopic,
+    NotificationKind,
     RegionEligibility,
     SalaryPeriod,
     SeniorityLevel,
@@ -92,7 +93,9 @@ def test_job_enriched_event_rejects_inverted_salary_range() -> None:
 
 
 def test_job_match_alert_and_dlq_contracts() -> None:
+    notif_id = uuid4()
     alert = JobMatchAlertEvent(
+        notification_uuid=notif_id,
         user_id=42,
         job_posting_uuid=uuid4(),
         resume_profile_uuid=uuid4(),
@@ -106,6 +109,26 @@ def test_job_match_alert_and_dlq_contracts() -> None:
         apply_url="https://boards.greenhouse.io/acme/jobs/987654",
     )
     assert alert_partition_key(alert.user_id) == "42"
+    assert alert.notification_uuid == notif_id
+    assert NotificationKind.MATCH_ALERT.value == "match_alert"
+    assert NotificationKind.TRACKED_JOB_CLOSED.value == "tracked_job_closed"
+    assert NotificationKind.PIPELINE_ERROR.value == "pipeline_error"
+    assert NotificationKind.RESCORE_COMPLETED.value == "rescore_completed"
+    assert NotificationKind.MANUAL_IMPORT_READY.value == "manual_import_ready"
+    assert NotificationKind.COLLECTOR_SYNC_COMPLETED.value == "collector_sync_completed"
+
+    legacy_alert = JobMatchAlertEvent(
+        user_id=42,
+        job_posting_uuid=uuid4(),
+        resume_profile_uuid=uuid4(),
+        match_score_uuid=uuid4(),
+        title="Senior Python Backend Engineer",
+        company_name="Acme Cloud",
+        fit_score=88,
+        cosine_similarity=0.84,
+        apply_url="https://boards.greenhouse.io/acme/jobs/987654",
+    )
+    assert legacy_alert.notification_uuid is None
 
     dlq = DeadLetterEvent(
         original_topic=KafkaTopic.JOBS_RAW,

@@ -91,3 +91,12 @@ class TechCategory(StrEnum):
     DEVOPS = "devops"
     AI_ML = "ai_ml"
     OTHER = "other"
+
+
+class NotificationKind(StrEnum):
+    MATCH_ALERT = "match_alert"
+    TRACKED_JOB_CLOSED = "tracked_job_closed"
+    PIPELINE_ERROR = "pipeline_error"
+    RESCORE_COMPLETED = "rescore_completed"
+    MANUAL_IMPORT_READY = "manual_import_ready"
+    COLLECTOR_SYNC_COMPLETED = "collector_sync_completed"

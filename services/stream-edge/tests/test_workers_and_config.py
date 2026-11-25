@@ -387,6 +387,7 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
         ),
         (uuid4(), None),
         (uuid4(), None),
+        (uuid4(),),
     ]
     fake_cursor.fetchall.side_effect = [
         [
@@ -447,7 +448,7 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
         )
 
     assert processed == 2
-    assert fake_conn.commit.call_count == 2
+    assert fake_conn.commit.call_count == 3
     fake_producer.flush.assert_called_once()
     # Only the qualifying unscored job should trigger Gemini & emit an alert
     fake_gemini.evaluate_resume_fit.assert_awaited_once()
@@ -609,6 +610,7 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
     fake_cursor.fetchone.side_effect = [
         (job_uuid,),
         (uuid4(), None),
+        (uuid4(),),
     ]
     fake_cursor.fetchall.return_value = [
         (

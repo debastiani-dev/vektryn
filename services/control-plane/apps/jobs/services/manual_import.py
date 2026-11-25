@@ -956,6 +956,7 @@ class ManualJobImportService:
             "raw_html": raw_html,
             "description_clean": description_clean,
             "posted_at": posted_at.isoformat() if posted_at is not None else None,
+            "submitted_by_user_id": self.user.pk,
         }
 
         try:
