@@ -11,6 +11,7 @@ CONTRACTS_DIR     := packages/contracts
 CONTROL_PLANE_DIR := services/control-plane
 STREAM_EDGE_DIR   := services/stream-edge
 FRONTEND_DIR      := frontend
+BACKEND_SERVICES  := control-plane stream-edge enrichment-worker matcher-worker
 PORT              ?= 8000
 EDGE_PORT         ?= 8001
 
@@ -32,11 +33,23 @@ help:
 	} \
 	{ lastLine = $$0 }' $(MAKEFILE_LIST)
 
-## Start Docker Compose infrastructure (PostgreSQL, Redis, Kafka)
+## Start Docker Compose stack (infrastructure, backend, frontend, observability)
 .PHONY: up
 up:
-	@echo "${GREEN}Starting Docker Compose infrastructure${RESET}"
+	@echo "${GREEN}Starting Docker Compose stack${RESET}"
 	docker compose up -d --build
+
+## Build and start/reload backend services (and required infra dependencies)
+.PHONY: up/backend
+up/backend:
+	@echo "${GREEN}Starting backend services ($(BACKEND_SERVICES))${RESET}"
+	docker compose up -d --build $(BACKEND_SERVICES)
+
+## Build and start/reload only the frontend container
+.PHONY: up/frontend
+up/frontend:
+	@echo "${GREEN}Starting frontend service${RESET}"
+	docker compose up -d --build --no-deps frontend
 
 ## Stop and remove Docker Compose containers
 .PHONY: down
