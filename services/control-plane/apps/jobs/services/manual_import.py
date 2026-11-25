@@ -56,6 +56,7 @@ _TRACKING_QUERY_PARAMS = frozenset(
     {
         "fbclid",
         "gclid",
+        "gh_src",
         "mc_cid",
         "mc_eid",
         "ref",
@@ -63,6 +64,28 @@ _TRACKING_QUERY_PARAMS = frozenset(
         "trk",
         "trkinfo",
     }
+)
+_HOSTED_ATS_PATH_HOSTS = frozenset(
+    {
+        "job-boards.greenhouse.io",
+        "boards.greenhouse.io",
+        "jobs.lever.co",
+        "jobs.ashbyhq.com",
+        "apply.workable.com",
+        "jobs.smartrecruiters.com",
+    }
+)
+_GENERIC_SUBDOMAINS = (
+    "www.",
+    "careers.",
+    "jobs.",
+    "apply.",
+    "hire.",
+    "boards.",
+    "job-boards.",
+)
+_GENERIC_SITE_NAMES = frozenset(
+    {"greenhouse", "job boards", "lever", "ashby", "workable", "smartrecruiters"}
 )
 _STRIPPED_HTML_TAGS = ("script", "style", "noscript", "svg", "iframe")
 _CHROME_HTML_TAGS = ("nav", "header", "footer", "aside")
@@ -568,12 +591,41 @@ def _clean_html_fragment(fragment: str) -> str:
     return "\n".join(lines)
 
 
+def _humanize_slug(slug: str) -> str:
+    return slug.replace("-", " ").replace("_", " ").strip().title()
+
+
 def _fallback_company_from_url(url: str) -> str:
-    host = (urlparse(url).hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host in _HOSTED_ATS_PATH_HOSTS:
+        segments = [seg.strip() for seg in parsed.path.split("/") if seg.strip()]
+        if segments:
+            return _humanize_slug(segments[0]) or "External"
+    for prefix in _GENERIC_SUBDOMAINS:
+        if host.startswith(prefix):
+            host = host[len(prefix) :]
+            break
     primary = host.split(".")[0] if host else "External"
-    return primary.replace("-", " ").replace("_", " ").title() or "External"
+    return _humanize_slug(primary) or "External"
+
+
+def _extract_company_from_title(page_title: str) -> str:
+    cleaned = page_title.strip()
+    if not cleaned:
+        return ""
+    for sep in (" | ", " - ", " — "):
+        if sep in cleaned:
+            cleaned = cleaned.split(sep, 1)[0].strip()
+    lower = cleaned.lower()
+    marker = " at "
+    idx = lower.rfind(marker)
+    if idx == -1:
+        return ""
+    candidate = cleaned[idx + len(marker) :].strip()
+    if not candidate or candidate.lower() in _GENERIC_SITE_NAMES:
+        return ""
+    return candidate[:180]
 
 
 def _find_json_ld_job_posting(soup: BeautifulSoup) -> dict[str, Any] | None:
@@ -628,8 +680,11 @@ def _extract_meta_hints(soup: BeautifulSoup) -> tuple[str, str, str, str]:
         if og_title_tag is not None
         else ""
     )
-    meta_company = (
+    raw_meta_company = (
         str(og_site_tag.get("content") or "").strip() if og_site_tag is not None else ""
+    )
+    meta_company = (
+        "" if raw_meta_company.lower() in _GENERIC_SITE_NAMES else raw_meta_company
     )
     h1_text = h1_tag.get_text(" ", strip=True) if h1_tag is not None else ""
     page_title = title_tag.get_text(" ", strip=True) if title_tag is not None else ""
@@ -698,6 +753,7 @@ def extract_job_from_html(
         company_override.strip()
         or ld_company
         or meta_company
+        or _extract_company_from_title(page_title)
         or _fallback_company_from_url(final_url)
     )[:180]
     location_raw = (location_override.strip() or ld_location)[:255]
