@@ -29,6 +29,7 @@ from stream_edge.telemetry import configure_tracing
 from vektryn_contracts import (
     JobEnrichedEvent,
     JobMatchAlertEvent,
+    JobRescoreEvent,
     KafkaTopic,
     alert_partition_key,
 )
@@ -39,6 +40,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer("vektryn-matcher-worker")
+
+MATCHER_MAX_POLL_INTERVAL_MS = 600_000
 
 
 @dataclass
@@ -51,23 +54,46 @@ class _EvaluationOutcome:
     scoring_model: str = ""
 
 
+@dataclass
+class _JobCandidate:
+    uuid: uuid.UUID
+    title: str
+    company_name: str
+    apply_url: str
+    description_clean: str
+    seniority: str
+    contract_type: str
+    region_eligibility: list[str]
+    tech_stack: list[str]
+
+
+def _parse_json_list(raw: list[str] | str | None) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    return [str(item) for item in json.loads(raw or "[]")]
+
+
 def _matches_profile_constraints(
     *,
-    enriched: JobEnrichedEvent,
+    seniority: str,
+    contract_type: str,
+    region_eligibility: list[str],
     target_seniority: list[str] | None,
     target_contract_types: list[str] | None,
     target_regions: list[str] | None,
 ) -> bool:
-    if target_seniority and enriched.seniority.value != "unknown":
-        if enriched.seniority.value not in target_seniority:
+    if target_seniority and seniority != "unknown":
+        if seniority not in target_seniority:
             return False
 
-    if target_contract_types and enriched.contract_type.value != "unknown":
-        if enriched.contract_type.value not in target_contract_types:
+    if target_contract_types and contract_type != "unknown":
+        if contract_type not in target_contract_types:
             return False
 
     if target_regions:
-        job_regions = {r.value for r in enriched.region_eligibility}
+        job_regions = set(region_eligibility)
         if job_regions and job_regions != {"unknown"}:
             if not (job_regions & set(target_regions)):
                 return False
@@ -78,27 +104,22 @@ def _matches_profile_constraints(
 def _run_llm_evaluation(
     *,
     gemini: GeminiStreamClient,
-    enriched: JobEnrichedEvent,
-    job_posting_uuid: uuid.UUID,
+    job: _JobCandidate,
     resume_uuid: uuid.UUID,
     raw_text: str,
     extracted_skills: list[str] | str | None,
     cosine_val: float,
 ) -> _EvaluationOutcome:
-    skills_list = (
-        extracted_skills
-        if isinstance(extracted_skills, list)
-        else json.loads(extracted_skills or "[]")
-    )
+    skills_list = _parse_json_list(extracted_skills)
     try:
         eval_result, model_used = asyncio.run(
             gemini.evaluate_resume_fit(
                 resume_text=raw_text,
                 resume_skills=skills_list,
-                job_title=enriched.title,
-                company_name=enriched.company_name,
-                job_description=enriched.description_clean,
-                job_stack=enriched.tech_stack,
+                job_title=job.title,
+                company_name=job.company_name,
+                job_description=job.description_clean,
+                job_stack=job.tech_stack,
             )
         )
         return _EvaluationOutcome(
@@ -113,7 +134,7 @@ def _run_llm_evaluation(
         logger.warning(
             "Gap analysis failed for job=%s resume=%s (cosine=%.4f); "
             "persisting vector match without LLM score: %s",
-            job_posting_uuid,
+            job.uuid,
             resume_uuid,
             cosine_val,
             exc,
@@ -206,6 +227,7 @@ def _upsert_match_score(
     cosine_val: float,
     outcome: _EvaluationOutcome,
     resume_hash: str,
+    replace_evaluation: bool = False,
 ) -> tuple[uuid.UUID, datetime | None]:
     cur.execute(
         """
@@ -226,26 +248,35 @@ def _upsert_match_score(
         ON CONFLICT (job_posting_id, resume_profile_id) DO UPDATE SET
             modified_at = EXCLUDED.modified_at,
             cosine_similarity = EXCLUDED.cosine_similarity,
-            fit_score = COALESCE(EXCLUDED.fit_score, matching_matchscore.fit_score),
+            fit_score = CASE
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash
+                THEN EXCLUDED.fit_score
+                ELSE COALESCE(EXCLUDED.fit_score, matching_matchscore.fit_score)
+            END,
             matched_skills = CASE
-                WHEN EXCLUDED.fit_score IS NOT NULL THEN EXCLUDED.matched_skills
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.fit_score IS NOT NULL
+                THEN EXCLUDED.matched_skills
                 ELSE matching_matchscore.matched_skills
             END,
             missing_keywords = CASE
-                WHEN EXCLUDED.fit_score IS NOT NULL THEN EXCLUDED.missing_keywords
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.fit_score IS NOT NULL
+                THEN EXCLUDED.missing_keywords
                 ELSE matching_matchscore.missing_keywords
             END,
             talking_points = CASE
-                WHEN EXCLUDED.fit_score IS NOT NULL THEN EXCLUDED.talking_points
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.fit_score IS NOT NULL
+                THEN EXCLUDED.talking_points
                 ELSE matching_matchscore.talking_points
             END,
             gap_summary = CASE
-                WHEN EXCLUDED.fit_score IS NOT NULL THEN EXCLUDED.gap_summary
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.fit_score IS NOT NULL
+                THEN EXCLUDED.gap_summary
                 ELSE matching_matchscore.gap_summary
             END,
             resume_content_hash = EXCLUDED.resume_content_hash,
             scoring_model = CASE
-                WHEN EXCLUDED.scoring_model <> '' THEN EXCLUDED.scoring_model
+                WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash OR EXCLUDED.scoring_model <> ''
+                THEN EXCLUDED.scoring_model
                 ELSE matching_matchscore.scoring_model
             END
         RETURNING uuid, alert_sent_at
@@ -264,9 +295,110 @@ def _upsert_match_score(
             outcome.gap_summary,
             resume_hash,
             outcome.scoring_model,
+            replace_evaluation,
+            replace_evaluation,
+            replace_evaluation,
+            replace_evaluation,
+            replace_evaluation,
+            replace_evaluation,
         ),
     )
     return cur.fetchone()
+
+
+def _score_and_persist_pair(
+    cur: psycopg.Cursor,
+    *,
+    now: datetime,
+    trace_id: str,
+    job: _JobCandidate,
+    resume_uuid: uuid.UUID,
+    user_id: int | uuid.UUID,
+    raw_text: str,
+    resume_hash: str,
+    extracted_skills: list[str] | str | None,
+    target_seniority: list[str] | None,
+    target_contract_types: list[str] | None,
+    target_regions: list[str] | None,
+    min_alert_score: int,
+    cosine_val: float,
+    gemini: GeminiStreamClient,
+    producer: KafkaEventProducer,
+    replace_evaluation: bool = False,
+) -> None:
+    should_score = (
+        cosine_val >= settings.cosine_similarity_threshold
+        and _matches_profile_constraints(
+            seniority=job.seniority,
+            contract_type=job.contract_type,
+            region_eligibility=job.region_eligibility,
+            target_seniority=target_seniority,
+            target_contract_types=target_contract_types,
+            target_regions=target_regions,
+        )
+    )
+    outcome = (
+        _run_llm_evaluation(
+            gemini=gemini,
+            job=job,
+            resume_uuid=resume_uuid,
+            raw_text=raw_text,
+            extracted_skills=extracted_skills,
+            cosine_val=cosine_val,
+        )
+        if should_score
+        else _EvaluationOutcome()
+    )
+
+    match_score_uuid, alert_sent_at = _upsert_match_score(
+        cur,
+        now=now,
+        job_posting_uuid=job.uuid,
+        resume_uuid=resume_uuid,
+        cosine_val=cosine_val,
+        outcome=outcome,
+        resume_hash=resume_hash,
+        replace_evaluation=replace_evaluation,
+    )
+
+    if (
+        outcome.fit_score is not None
+        and outcome.fit_score >= min_alert_score
+        and alert_sent_at is None
+    ):
+        cur.execute(
+            "UPDATE matching_matchscore SET alert_sent_at = %s, modified_at = %s WHERE uuid = %s",
+            (now, now, match_score_uuid),
+        )
+        alert_event = JobMatchAlertEvent(
+            trace_id=trace_id,
+            user_id=user_id,
+            job_posting_uuid=job.uuid,
+            resume_profile_uuid=resume_uuid,
+            match_score_uuid=match_score_uuid,
+            title=job.title,
+            company_name=job.company_name,
+            fit_score=outcome.fit_score,
+            cosine_similarity=cosine_val,
+            matched_skills=outcome.matched_skills or [],
+            missing_keywords=outcome.missing_keywords or [],
+            apply_url=job.apply_url,
+        )
+        producer._publish_sync(
+            topic=KafkaTopic.JOBS_ALERTS,
+            key=alert_partition_key(user_id),
+            event=alert_event,
+        )
+        MATCH_ALERTS_EMITTED_TOTAL.inc()
+    logger.info(
+        "Evaluated %s @ %s against resume=%s | cosine=%.4f | fit_score=%s | alert=%s",
+        job.title,
+        job.company_name,
+        resume_uuid,
+        cosine_val,
+        outcome.fit_score,
+        outcome.fit_score is not None and outcome.fit_score >= min_alert_score,
+    )
 
 
 def _upsert_job_and_score_sync(
@@ -281,6 +413,17 @@ def _upsert_job_and_score_sync(
         register_vector(conn)
         with conn.cursor() as cur:
             job_posting_uuid = _upsert_job_posting(cur, enriched, now)
+            candidate = _JobCandidate(
+                uuid=job_posting_uuid,
+                title=enriched.title,
+                company_name=enriched.company_name,
+                apply_url=str(enriched.apply_url),
+                description_clean=enriched.description_clean,
+                seniority=enriched.seniority.value,
+                contract_type=enriched.contract_type.value,
+                region_eligibility=[r.value for r in enriched.region_eligibility],
+                tech_stack=enriched.tech_stack,
+            )
 
             cur.execute(
                 """
@@ -318,82 +461,254 @@ def _upsert_job_and_score_sync(
                 min_alert_score,
                 cosine_sim,
             ) in profiles:
-                cosine_val = float(cosine_sim)
-                should_score = (
-                    cosine_val >= settings.cosine_similarity_threshold
-                    and _matches_profile_constraints(
-                        enriched=enriched,
-                        target_seniority=target_seniority,
-                        target_contract_types=target_contract_types,
-                        target_regions=target_regions,
-                    )
-                )
-                outcome = (
-                    _run_llm_evaluation(
-                        gemini=gemini,
-                        enriched=enriched,
-                        job_posting_uuid=job_posting_uuid,
-                        resume_uuid=resume_uuid,
-                        raw_text=raw_text,
-                        extracted_skills=extracted_skills,
-                        cosine_val=cosine_val,
-                    )
-                    if should_score
-                    else _EvaluationOutcome()
-                )
-
-                match_score_uuid, alert_sent_at = _upsert_match_score(
+                _score_and_persist_pair(
                     cur,
                     now=now,
-                    job_posting_uuid=job_posting_uuid,
+                    trace_id=enriched.trace_id,
+                    job=candidate,
                     resume_uuid=resume_uuid,
-                    cosine_val=cosine_val,
-                    outcome=outcome,
+                    user_id=user_id,
+                    raw_text=raw_text,
                     resume_hash=resume_hash,
-                )
-
-                if (
-                    outcome.fit_score is not None
-                    and outcome.fit_score >= min_alert_score
-                    and alert_sent_at is None
-                ):
-                    cur.execute(
-                        "UPDATE matching_matchscore SET alert_sent_at = %s, modified_at = %s WHERE uuid = %s",
-                        (now, now, match_score_uuid),
-                    )
-                    alert_event = JobMatchAlertEvent(
-                        trace_id=enriched.trace_id,
-                        user_id=user_id,
-                        job_posting_uuid=job_posting_uuid,
-                        resume_profile_uuid=resume_uuid,
-                        match_score_uuid=match_score_uuid,
-                        title=enriched.title,
-                        company_name=enriched.company_name,
-                        fit_score=outcome.fit_score,
-                        cosine_similarity=cosine_val,
-                        matched_skills=outcome.matched_skills or [],
-                        missing_keywords=outcome.missing_keywords or [],
-                        apply_url=enriched.apply_url,
-                    )
-                    producer._publish_sync(
-                        topic=KafkaTopic.JOBS_ALERTS,
-                        key=alert_partition_key(user_id),
-                        event=alert_event,
-                    )
-                    MATCH_ALERTS_EMITTED_TOTAL.inc()
-                logger.info(
-                    "Evaluated %s @ %s against resume=%s | cosine=%.4f | fit_score=%s | alert=%s",
-                    enriched.title,
-                    enriched.company_name,
-                    resume_uuid,
-                    cosine_val,
-                    outcome.fit_score,
-                    outcome.fit_score is not None
-                    and outcome.fit_score >= min_alert_score,
+                    extracted_skills=extracted_skills,
+                    target_seniority=target_seniority,
+                    target_contract_types=target_contract_types,
+                    target_regions=target_regions,
+                    min_alert_score=min_alert_score,
+                    cosine_val=float(cosine_sim),
+                    gemini=gemini,
+                    producer=producer,
+                    replace_evaluation=False,
                 )
 
         conn.commit()
         producer.flush(5.0)
+
+
+def _select_rescore_candidates(
+    cur: psycopg.Cursor,
+    *,
+    resume_uuid: uuid.UUID,
+    resume_hash: str,
+    resume_embedding: object,
+    max_jobs: int,
+    force: bool,
+    produced_at: datetime,
+) -> list[tuple]:
+    if force:
+        cur.execute(
+            """
+            SELECT
+                j.uuid,
+                j.title,
+                j.company_name,
+                j.apply_url,
+                j.description_clean,
+                j.seniority,
+                j.contract_type,
+                j.region_eligibility,
+                j.tech_stack,
+                GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim
+            FROM jobs_jobposting j
+            LEFT JOIN matching_matchscore m
+              ON m.job_posting_id = j.uuid
+             AND m.resume_profile_id = %s
+             AND m.is_deleted = FALSE
+            WHERE j.is_deleted = FALSE
+              AND j.is_active = TRUE
+              AND j.embedding IS NOT NULL
+              AND (m.uuid IS NULL OR m.modified_at < %s)
+            ORDER BY j.embedding <=> %s::vector ASC
+            LIMIT %s
+            """,
+            (resume_embedding, resume_uuid, produced_at, resume_embedding, max_jobs),
+        )
+        return cur.fetchall()
+
+    # Query 1: refresh existing stale MatchScore rows first so visible UI badges never starve
+    cur.execute(
+        """
+        SELECT
+            j.uuid,
+            j.title,
+            j.company_name,
+            j.apply_url,
+            j.description_clean,
+            j.seniority,
+            j.contract_type,
+            j.region_eligibility,
+            j.tech_stack,
+            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim
+        FROM jobs_jobposting j
+        INNER JOIN matching_matchscore m
+          ON m.job_posting_id = j.uuid
+         AND m.resume_profile_id = %s
+         AND m.is_deleted = FALSE
+        WHERE j.is_deleted = FALSE
+          AND j.is_active = TRUE
+          AND j.embedding IS NOT NULL
+          AND m.resume_content_hash <> %s
+        ORDER BY j.embedding <=> %s::vector ASC
+        LIMIT %s
+        """,
+        (resume_embedding, resume_uuid, resume_hash, resume_embedding, max_jobs),
+    )
+    rows = list(cur.fetchall())
+    remaining = max_jobs - len(rows)
+    if remaining <= 0:
+        return rows
+
+    # Query 2: backfill unscored active jobs ordered by ascending cosine distance (HNSW index)
+    cur.execute(
+        """
+        SELECT
+            j.uuid,
+            j.title,
+            j.company_name,
+            j.apply_url,
+            j.description_clean,
+            j.seniority,
+            j.contract_type,
+            j.region_eligibility,
+            j.tech_stack,
+            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim
+        FROM jobs_jobposting j
+        WHERE j.is_deleted = FALSE
+          AND j.is_active = TRUE
+          AND j.embedding IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM matching_matchscore m
+              WHERE m.job_posting_id = j.uuid
+                AND m.resume_profile_id = %s
+                AND m.is_deleted = FALSE
+          )
+        ORDER BY j.embedding <=> %s::vector ASC
+        LIMIT %s
+        """,
+        (resume_embedding, resume_uuid, resume_embedding, remaining),
+    )
+    rows.extend(cur.fetchall())
+    return rows
+
+
+def _rescore_resume_sync(
+    *,
+    event: JobRescoreEvent,
+    gemini: GeminiStreamClient,
+    producer: KafkaEventProducer,
+) -> int:
+    with psycopg.connect(settings.postgres_dsn, autocommit=False) as conn:
+        register_vector(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    uuid,
+                    user_id,
+                    raw_text,
+                    content_hash,
+                    extracted_skills,
+                    target_seniority,
+                    target_contract_types,
+                    target_regions,
+                    min_alert_score,
+                    embedding
+                FROM resumes_resumeprofile
+                WHERE uuid = %s
+                  AND is_deleted = FALSE
+                  AND is_active = TRUE
+                  AND embedding IS NOT NULL
+                """,
+                (event.resume_profile_uuid,),
+            )
+            profile_row = cur.fetchone()
+            if profile_row is None:
+                logger.info(
+                    "Skipping jobs.rescore for resume=%s (not found, inactive, or missing embedding)",
+                    event.resume_profile_uuid,
+                )
+                return 0
+
+            (
+                resume_uuid,
+                user_id,
+                raw_text,
+                resume_hash,
+                extracted_skills,
+                target_seniority,
+                target_contract_types,
+                target_regions,
+                min_alert_score,
+                resume_embedding,
+            ) = profile_row
+
+            candidates = _select_rescore_candidates(
+                cur,
+                resume_uuid=resume_uuid,
+                resume_hash=resume_hash,
+                resume_embedding=resume_embedding,
+                max_jobs=event.max_jobs,
+                force=event.force,
+                produced_at=event.produced_at,
+            )
+
+            processed = 0
+            for (
+                job_uuid,
+                title,
+                company_name,
+                apply_url,
+                description_clean,
+                seniority,
+                contract_type,
+                region_eligibility,
+                tech_stack,
+                cosine_sim,
+            ) in candidates:
+                candidate = _JobCandidate(
+                    uuid=job_uuid,
+                    title=title,
+                    company_name=company_name,
+                    apply_url=apply_url,
+                    description_clean=description_clean,
+                    seniority=seniority,
+                    contract_type=contract_type,
+                    region_eligibility=list(region_eligibility or []),
+                    tech_stack=_parse_json_list(tech_stack),
+                )
+                _score_and_persist_pair(
+                    cur,
+                    now=datetime.now(UTC),
+                    trace_id=event.trace_id,
+                    job=candidate,
+                    resume_uuid=resume_uuid,
+                    user_id=user_id,
+                    raw_text=raw_text,
+                    resume_hash=resume_hash,
+                    extracted_skills=extracted_skills,
+                    target_seniority=target_seniority,
+                    target_contract_types=target_contract_types,
+                    target_regions=target_regions,
+                    min_alert_score=min_alert_score,
+                    cosine_val=float(cosine_sim),
+                    gemini=gemini,
+                    producer=producer,
+                    replace_evaluation=True,
+                )
+                # Commit per job so partial progress survives restarts and retries stay idempotent
+                conn.commit()
+                processed += 1
+
+        producer.flush(5.0)
+        logger.info(
+            "Rescore complete for resume=%s | processed=%d | max_jobs=%d | force=%s",
+            resume_uuid,
+            processed,
+            event.max_jobs,
+            event.force,
+        )
+        return processed
 
 
 async def run_matcher_worker() -> None:
@@ -404,7 +719,8 @@ async def run_matcher_worker() -> None:
     producer = KafkaEventProducer()
     consumer = create_kafka_consumer(
         group_id=settings.kafka_matcher_group_id,
-        topics=[KafkaTopic.JOBS_ENRICHED],
+        topics=[KafkaTopic.JOBS_ENRICHED, KafkaTopic.JOBS_RESCORE],
+        max_poll_interval_ms=MATCHER_MAX_POLL_INTERVAL_MS,
     )
 
     running = True
@@ -417,7 +733,12 @@ async def run_matcher_worker() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _stop)
 
-    logger.info("Matcher worker started (group=%s)", settings.kafka_matcher_group_id)
+    logger.info(
+        "Matcher worker started (group=%s, topics=[%s, %s])",
+        settings.kafka_matcher_group_id,
+        KafkaTopic.JOBS_ENRICHED.value,
+        KafkaTopic.JOBS_RESCORE.value,
+    )
     try:
         while running:
             msg = await asyncio.to_thread(consumer.poll, 1.0)
@@ -431,24 +752,42 @@ async def run_matcher_worker() -> None:
             started = time.perf_counter()
             try:
                 raw_value = (msg.value() or b"").decode("utf-8")
-                enriched = JobEnrichedEvent.model_validate_json(raw_value)
-                with tracer.start_as_current_span(
-                    "matcher.upsert_and_score",
-                    attributes={
-                        "vektryn.ats_source": enriched.ats_source.value,
-                        "vektryn.external_id": enriched.external_id,
-                        "vektryn.trace_id": enriched.trace_id,
-                    },
-                ):
-                    await asyncio.to_thread(
-                        _upsert_job_and_score_sync,
-                        enriched=enriched,
-                        gemini=gemini,
-                        producer=producer,
-                    )
-                WORKER_MESSAGES_TOTAL.labels(
-                    worker="matcher", outcome="processed"
-                ).inc()
+                topic = msg.topic()
+                if topic == KafkaTopic.JOBS_RESCORE.value:
+                    rescore_event = JobRescoreEvent.model_validate_json(raw_value)
+                    with tracer.start_as_current_span(
+                        "matcher.rescore_resume",
+                        attributes={
+                            "vektryn.resume_profile_uuid": str(
+                                rescore_event.resume_profile_uuid
+                            ),
+                            "vektryn.max_jobs": rescore_event.max_jobs,
+                            "vektryn.force": rescore_event.force,
+                            "vektryn.trace_id": rescore_event.trace_id,
+                        },
+                    ):
+                        await asyncio.to_thread(
+                            _rescore_resume_sync,
+                            event=rescore_event,
+                            gemini=gemini,
+                            producer=producer,
+                        )
+                else:
+                    enriched = JobEnrichedEvent.model_validate_json(raw_value)
+                    with tracer.start_as_current_span(
+                        "matcher.upsert_and_score",
+                        attributes={
+                            "vektryn.ats_source": enriched.ats_source.value,
+                            "vektryn.external_id": enriched.external_id,
+                            "vektryn.trace_id": enriched.trace_id,
+                        },
+                    ):
+                        await asyncio.to_thread(
+                            _upsert_job_and_score_sync,
+                            enriched=enriched,
+                            gemini=gemini,
+                            producer=producer,
+                        )
                 WORKER_MESSAGES_TOTAL.labels(
                     worker="matcher", outcome="processed"
                 ).inc()

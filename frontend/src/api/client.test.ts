@@ -97,4 +97,35 @@ describe("vektrynApi", () => {
 
         await expect(vektrynApi.logout()).resolves.toBeUndefined();
     });
+
+    it("posts rescore request with CSRF token and options", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=rescore-csrf" });
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    status: "queued",
+                    event_id: "evt-1",
+                    resume_profile_uuid: "resume-1",
+                    max_jobs: 25,
+                    force: true,
+                }),
+                { status: 202, headers: { "Content-Type": "application/json" } },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const res = await vektrynApi.rescoreResume("resume-1", { max_jobs: 25, force: true });
+        expect(res).toEqual({
+            status: "queued",
+            event_id: "evt-1",
+            resume_profile_uuid: "resume-1",
+            max_jobs: 25,
+            force: true,
+        });
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe("/api/v1/resumes/resume-1/rescore/");
+        expect(init.method).toBe("POST");
+        expect((init.headers as Headers).get("X-CSRFToken")).toBe("rescore-csrf");
+        expect(init.body).toBe(JSON.stringify({ max_jobs: 25, force: true }));
+    });
 });

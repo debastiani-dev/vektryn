@@ -12,6 +12,7 @@ from vektryn_contracts import (
     JobEnrichedEvent,
     JobMatchAlertEvent,
     JobRawEvent,
+    JobRescoreEvent,
     KafkaTopic,
     RegionEligibility,
     SalaryPeriod,
@@ -19,6 +20,7 @@ from vektryn_contracts import (
     alert_partition_key,
     dlq_partition_key,
     job_partition_key,
+    rescore_partition_key,
     sign_stream_token,
     verify_stream_token,
 )
@@ -123,3 +125,21 @@ def test_stream_token_sign_and_verify() -> None:
     assert (
         verify_stream_token(f"{token}tampered", "super-secret", now=1_000_030) is None
     )
+
+
+def test_job_rescore_event_defaults_bounds_and_partition_key() -> None:
+    resume_uuid = uuid4()
+    event = JobRescoreEvent(resume_profile_uuid=resume_uuid, user_id=42)
+    restored = JobRescoreEvent.model_validate_json(event.model_dump_json())
+
+    assert KafkaTopic.JOBS_RESCORE == "jobs.rescore"
+    assert restored.resume_profile_uuid == resume_uuid
+    assert restored.user_id == 42
+    assert restored.max_jobs == 50
+    assert restored.force is False
+    assert rescore_partition_key(resume_uuid) == str(resume_uuid)
+
+    with pytest.raises(ValidationError):
+        JobRescoreEvent(resume_profile_uuid=resume_uuid, user_id=42, max_jobs=0)
+    with pytest.raises(ValidationError):
+        JobRescoreEvent(resume_profile_uuid=resume_uuid, user_id=42, max_jobs=101)

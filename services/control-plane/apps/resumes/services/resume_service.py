@@ -1,5 +1,6 @@
 import hashlib
 from io import BytesIO
+import logging
 from pathlib import Path
 import time
 from typing import BinaryIO, Callable, TypeVar
@@ -16,12 +17,22 @@ from pypdf import PdfReader
 
 from apps.base.services.base_service import BaseService
 from apps.resumes.models.resumes import ResumeProfile
+from apps.resumes.services.rescore_publisher import (
+    RescoreBrokerError,
+    acquire_rescore_cooldown,
+    current_trace_id,
+    publish_rescore_event,
+    release_rescore_cooldown,
+)
+from vektryn_contracts import JobRescoreEvent
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS
 
 try:
     from google.cloud import storage as gcs_storage
 except ImportError:
     gcs_storage = None
+
+logger = logging.getLogger(__name__)
 
 
 T = TypeVar("T")
@@ -244,6 +255,78 @@ class ResumeService(BaseService):
 
         return data
 
+    DEFAULT_RESCORE_MAX_JOBS = 50
+
+    @staticmethod
+    def _targeting_signature(
+        profile: ResumeProfile,
+    ) -> tuple[list[str], list[str], list[str]]:
+        return (
+            list(profile.target_seniority or []),
+            list(profile.target_contract_types or []),
+            list(profile.target_regions or []),
+        )
+
+    def _schedule_auto_rescore(
+        self,
+        profile: ResumeProfile,
+        *,
+        force: bool = False,
+    ) -> None:
+        if not profile.is_active or profile.embedding is None:
+            return
+        event = JobRescoreEvent(
+            trace_id=current_trace_id(),
+            resume_profile_uuid=profile.uuid,
+            user_id=profile.user_id,
+            max_jobs=self.DEFAULT_RESCORE_MAX_JOBS,
+            force=force,
+        )
+
+        def _publish() -> None:
+            try:
+                publish_rescore_event(event, require_broker=False)
+            except RescoreBrokerError as exc:
+                logger.warning(
+                    "Auto-rescore publish failed for profile=%s: %s",
+                    profile.uuid,
+                    exc,
+                )
+
+        transaction.on_commit(_publish)
+
+    def trigger_rescore(
+        self,
+        *,
+        instance: ResumeProfile,
+        max_jobs: int = DEFAULT_RESCORE_MAX_JOBS,
+        force: bool = False,
+    ) -> JobRescoreEvent:
+        if not instance.is_active:
+            raise ValueError(
+                "Activate this resume profile before rescoring active jobs."
+            )
+        if instance.embedding is None:
+            raise ValueError(
+                "This resume profile has no embedding yet. Save or re-upload the resume first."
+            )
+
+        cooldown_acquired = acquire_rescore_cooldown(instance.uuid)
+        event = JobRescoreEvent(
+            trace_id=current_trace_id(),
+            resume_profile_uuid=instance.uuid,
+            user_id=instance.user_id,
+            max_jobs=max_jobs,
+            force=force,
+        )
+        try:
+            publish_rescore_event(event, require_broker=True)
+        except RescoreBrokerError:
+            if cooldown_acquired:
+                release_rescore_cooldown(instance.uuid)
+            raise
+        return event
+
     @transaction.atomic
     def create_profile(
         self,
@@ -259,7 +342,9 @@ class ResumeService(BaseService):
             validated_data=validated_data,
             uploaded_file=uploaded_file,
         )
-        return ResumeProfile.objects.create(user=self.user, **enriched_data)
+        profile = ResumeProfile.objects.create(user=self.user, **enriched_data)
+        self._schedule_auto_rescore(profile, force=False)
+        return profile
 
     @transaction.atomic
     def update_profile(
@@ -269,6 +354,10 @@ class ResumeService(BaseService):
         validated_data: dict,
         uploaded_file: BinaryIO | None = None,
     ) -> ResumeProfile:
+        prev_hash = instance.content_hash
+        prev_active = instance.is_active
+        prev_filters = self._targeting_signature(instance)
+
         enriched_data = self._enrich_if_content_changed(
             validated_data=validated_data,
             uploaded_file=uploaded_file,
@@ -277,4 +366,15 @@ class ResumeService(BaseService):
         for attr, value in enriched_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        hash_changed = instance.content_hash != prev_hash
+        activated = not prev_active and instance.is_active
+        filters_changed = self._targeting_signature(instance) != prev_filters
+
+        if instance.is_active and instance.embedding is not None:
+            if hash_changed or activated:
+                self._schedule_auto_rescore(instance, force=False)
+            elif filters_changed:
+                self._schedule_auto_rescore(instance, force=True)
+
         return instance

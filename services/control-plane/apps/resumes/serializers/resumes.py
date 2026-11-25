@@ -24,6 +24,11 @@ def _expand_multi_value_items(raw_items: list) -> list:
     return expanded
 
 
+class ResumeRescoreRequestSerializer(serializers.Serializer):
+    max_jobs = serializers.IntegerField(min_value=1, max_value=100, default=50)
+    force = serializers.BooleanField(default=False)
+
+
 class ResumeProfileSerializer(serializers.ModelSerializer):
     file = serializers.FileField(write_only=True, required=False, allow_null=True)
     raw_text = serializers.CharField(required=False, allow_blank=True)

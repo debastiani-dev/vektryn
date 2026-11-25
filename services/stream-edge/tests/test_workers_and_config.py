@@ -9,19 +9,27 @@ import pytest
 
 from stream_edge import telemetry as edge_telemetry
 from stream_edge.api.alerts_sse import _resolve_stream_user_id
-from stream_edge.clients.kafka import KafkaEventProducer, _kafka_base_config
+from stream_edge.clients.kafka import (
+    KafkaEventProducer,
+    _kafka_base_config,
+    create_kafka_consumer,
+)
 from stream_edge.collectors.ats_boards import BreezyCollector
 from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
 from stream_edge.config import StreamEdgeSettings, settings as edge_settings
 from stream_edge.main import app
 from stream_edge.workers.dlq_replay import replay_dlq
 from stream_edge.workers.lifecycle import _MARK_CLOSED_SQL, _is_posting_closed
-from stream_edge.workers.matcher import _upsert_job_and_score_sync
+from stream_edge.workers.matcher import (
+    _rescore_resume_sync,
+    _upsert_job_and_score_sync,
+)
 from vektryn_contracts import (
     ATSSource,
     DeadLetterEvent,
     EMBEDDING_DIMENSIONS,
     JobEnrichedEvent,
+    JobRescoreEvent,
     KafkaTopic,
     sign_stream_token,
 )
@@ -325,3 +333,179 @@ def test_stream_edge_sentry_gated_by_dsn(monkeypatch):
             assert edge_telemetry.configure_sentry("vektryn-stream-edge") is True
             mock_init.assert_called_once()
             mock_tag.assert_called_once_with("service", "vektryn-stream-edge")
+
+
+def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
+    resume_uuid = uuid4()
+    stale_job_uuid = uuid4()
+    unscored_job_uuid = uuid4()
+    event = JobRescoreEvent(
+        resume_profile_uuid=resume_uuid,
+        user_id=42,
+        max_jobs=10,
+        force=False,
+    )
+
+    executed_sql: list[str] = []
+    fake_cursor = MagicMock()
+    fake_cursor.__enter__.return_value = fake_cursor
+
+    def _capture_execute(sql, params=None):
+        executed_sql.append(sql)
+
+    fake_cursor.execute.side_effect = _capture_execute
+    # Sequence of fetchone/fetchall calls:
+    # 1. fetchone() -> ResumeProfile
+    # 2. fetchall() -> stale MatchScore candidate (1 row)
+    # 3. fetchall() -> unscored active JobPosting candidate (1 row)
+    # 4. fetchone() -> upsert returning (match_uuid, alert_sent_at) for stale job
+    # 5. fetchone() -> upsert returning (match_uuid, alert_sent_at) for unscored job
+    fake_cursor.fetchone.side_effect = [
+        (
+            resume_uuid,
+            42,
+            "Senior Python Django Engineer",
+            "new-hash" + "0" * 56,
+            ["python", "django"],
+            ["senior"],
+            ["pj"],
+            ["brazil"],
+            70,
+            [0.01] * EMBEDDING_DIMENSIONS,
+        ),
+        (uuid4(), None),
+        (uuid4(), None),
+    ]
+    fake_cursor.fetchall.side_effect = [
+        [
+            (
+                stale_job_uuid,
+                "Staff Python Engineer",
+                "Acme",
+                "https://example.com/jobs/stale",
+                "Python Django",
+                "junior",  # Fails target_seniority=["senior"] -> should downgrade to None
+                "pj",
+                ["brazil"],
+                ["python", "django"],
+                0.78,
+            )
+        ],
+        [
+            (
+                unscored_job_uuid,
+                "Senior Python Engineer",
+                "Beta",
+                "https://example.com/jobs/unscored",
+                "Python Django Kafka",
+                "senior",
+                "pj",
+                ["brazil"],
+                ["python", "django", "kafka"],
+                0.86,
+            )
+        ],
+    ]
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.cursor.return_value = fake_cursor
+
+    eval_result = MagicMock(
+        fit_score=88,
+        matched_skills=["python", "django"],
+        missing_keywords=["kafka"],
+        talking_points=["Highlight Django scale."],
+        gap_summary="Strong fit.",
+    )
+    fake_gemini = MagicMock()
+    fake_gemini.evaluate_resume_fit = AsyncMock(
+        return_value=(eval_result, "gemini-4-hydrogen")
+    )
+    fake_producer = MagicMock()
+
+    with (
+        patch("stream_edge.workers.matcher.psycopg.connect", return_value=fake_conn),
+        patch("stream_edge.workers.matcher.register_vector"),
+    ):
+        processed = _rescore_resume_sync(
+            event=event,
+            gemini=fake_gemini,
+            producer=fake_producer,
+        )
+
+    assert processed == 2
+    assert fake_conn.commit.call_count == 2
+    fake_producer.flush.assert_called_once()
+    # Only the qualifying unscored job should trigger Gemini & emit an alert
+    fake_gemini.evaluate_resume_fit.assert_awaited_once()
+    fake_producer._publish_sync.assert_called_once()
+
+    # Verify both candidate queries use HNSW-compatible ORDER BY distance ASC
+    candidate_queries = [s for s in executed_sql if "FROM jobs_jobposting j" in s]
+    assert len(candidate_queries) == 2
+    assert "m.resume_content_hash <> %s" in candidate_queries[0]
+    assert "NOT EXISTS" in candidate_queries[1]
+    for query in candidate_queries:
+        assert "ORDER BY j.embedding <=> %s::vector ASC" in query
+        assert "ORDER BY 1 -" not in query
+
+
+def test_matcher_rescore_force_watermark_and_consumer_poll_interval():
+    resume_uuid = uuid4()
+    event = JobRescoreEvent(
+        resume_profile_uuid=resume_uuid,
+        user_id=42,
+        max_jobs=25,
+        force=True,
+    )
+
+    executed_sql: list[str] = []
+    fake_cursor = MagicMock()
+    fake_cursor.__enter__.return_value = fake_cursor
+    fake_cursor.execute.side_effect = lambda sql, params=None: executed_sql.append(sql)
+    fake_cursor.fetchone.return_value = (
+        resume_uuid,
+        42,
+        "Python Engineer",
+        "hash" + "0" * 60,
+        ["python"],
+        [],
+        [],
+        [],
+        70,
+        [0.01] * EMBEDDING_DIMENSIONS,
+    )
+    fake_cursor.fetchall.return_value = []
+
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.cursor.return_value = fake_cursor
+
+    with (
+        patch("stream_edge.workers.matcher.psycopg.connect", return_value=fake_conn),
+        patch("stream_edge.workers.matcher.register_vector"),
+    ):
+        assert (
+            _rescore_resume_sync(event=event, gemini=MagicMock(), producer=MagicMock())
+            == 0
+        )
+
+    force_queries = [s for s in executed_sql if "FROM jobs_jobposting j" in s]
+    assert len(force_queries) == 1
+    assert "m.modified_at < %s" in force_queries[0]
+    assert "ORDER BY j.embedding <=> %s::vector ASC" in force_queries[0]
+
+    fake_consumer = MagicMock()
+    with patch(
+        "stream_edge.clients.kafka.Consumer", return_value=fake_consumer
+    ) as mock_cls:
+        create_kafka_consumer(
+            group_id="vektryn-matcher-worker",
+            topics=[KafkaTopic.JOBS_ENRICHED, KafkaTopic.JOBS_RESCORE],
+            bootstrap_servers="localhost:9092",
+            max_poll_interval_ms=600_000,
+        )
+    passed_cfg = mock_cls.call_args.args[0]
+    assert passed_cfg["max.poll.interval.ms"] == 600_000
+    fake_consumer.subscribe.assert_called_once_with(["jobs.enriched", "jobs.rescore"])

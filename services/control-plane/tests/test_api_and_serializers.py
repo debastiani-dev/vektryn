@@ -1,7 +1,8 @@
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -13,12 +14,21 @@ from apps.matching.models.matching import MatchScore
 from apps.matching.serializers.matching import MatchScoreSerializer
 from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.serializers.resumes import ResumeProfileSerializer
+from apps.resumes.services import rescore_publisher
+from apps.resumes.services.rescore_publisher import (
+    RescoreBrokerError,
+    RescoreCooldownError,
+)
 from apps.resumes.services.resume_service import ResumeService
 from apps.tracker.serializers.leads import ApplicationLeadSerializer
 from apps.tracker.services.leads import create_lead, update_lead
 from config import telemetry as cp_telemetry
 from config.settings import ControlPlaneSettings, _build_database_config
-from vektryn_contracts import verify_stream_token
+from vektryn_contracts import (
+    EMBEDDING_DIMENSIONS,
+    JobRescoreEvent,
+    verify_stream_token,
+)
 from vektryn_contracts.enums import (
     ATSSource,
     ContractType,
@@ -398,3 +408,217 @@ def test_matches_endpoint_returns_global_summary_totals_across_pages():
         "strong_fit_count": 10,
         "alert_threshold_count": 10,
     }
+
+
+def test_rescore_publisher_raises_on_delivery_error_or_flush_timeout(settings):
+    settings.KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+    event = JobRescoreEvent(resume_profile_uuid=uuid4(), user_id=7)
+
+    # Case 1: flush() returns remaining > 0 (timeout)
+    timeout_producer = MagicMock()
+    timeout_producer.flush.return_value = 1
+    with patch.object(
+        rescore_publisher, "_get_producer", return_value=timeout_producer
+    ):
+        with pytest.raises(RescoreBrokerError, match="flush timeout"):
+            rescore_publisher.publish_rescore_event(event, require_broker=True)
+
+    # Case 2: on_delivery callback reports broker error even though flush() returns 0
+    error_producer = MagicMock()
+
+    def _produce_with_error(*_args, **kwargs):
+        kwargs["on_delivery"]("BrokerNotAvailable", None)
+
+    error_producer.produce.side_effect = _produce_with_error
+    error_producer.flush.return_value = 0
+    with patch.object(rescore_publisher, "_get_producer", return_value=error_producer):
+        with pytest.raises(RescoreBrokerError, match="BrokerNotAvailable"):
+            rescore_publisher.publish_rescore_event(event, require_broker=True)
+
+    # Case 3: clean delivery succeeds
+    ok_producer = MagicMock()
+
+    def _produce_ok(*_args, **kwargs):
+        kwargs["on_delivery"](None, MagicMock())
+
+    ok_producer.produce.side_effect = _produce_ok
+    ok_producer.flush.return_value = 0
+    with patch.object(rescore_publisher, "_get_producer", return_value=ok_producer):
+        assert (
+            rescore_publisher.publish_rescore_event(event, require_broker=True) is True
+        )
+
+
+@pytest.mark.django_db
+def test_resume_service_auto_rescore_triggers(django_capture_on_commit_callbacks):
+    user = User.objects.create_user(username="judy", password="pw")
+    service = ResumeService(user=user)
+    fake_embedding = [0.02] * EMBEDDING_DIMENSIONS
+
+    published: list[JobRescoreEvent] = []
+
+    def _record(event: JobRescoreEvent, **_kwargs):
+        published.append(event)
+        return True
+
+    with (
+        patch.object(
+            ResumeService,
+            "generate_embedding_and_skills",
+            return_value=(fake_embedding, ["python", "django"]),
+        ),
+        patch(
+            "apps.resumes.services.resume_service.publish_rescore_event",
+            side_effect=_record,
+        ),
+    ):
+        # 1. Creating an active embedded profile enqueues force=False rescore
+        with django_capture_on_commit_callbacks(execute=True):
+            profile = service.create_profile(
+                validated_data={
+                    "label": "Backend",
+                    "raw_text": "Python Django",
+                    "is_active": True,
+                }
+            )
+        assert len(published) == 1
+        assert published[-1].resume_profile_uuid == profile.uuid
+        assert published[-1].force is False
+
+        # 2. Label-only edit must NOT trigger rescoring
+        with django_capture_on_commit_callbacks(execute=True):
+            service.update_profile(
+                instance=profile, validated_data={"label": "Senior Backend"}
+            )
+        assert len(published) == 1
+
+        # 3. Targeting filter change triggers force=True rescore
+        with django_capture_on_commit_callbacks(execute=True):
+            service.update_profile(
+                instance=profile,
+                validated_data={"target_regions": [RegionEligibility.BRAZIL]},
+            )
+        assert len(published) == 2
+        assert published[-1].force is True
+
+        # 4. Content edit triggers force=False rescore (new hash makes existing rows stale)
+        with django_capture_on_commit_callbacks(execute=True):
+            service.update_profile(
+                instance=profile,
+                validated_data={"raw_text": "Python Django FastAPI Kafka"},
+            )
+        assert len(published) == 3
+        assert published[-1].force is False
+
+        # 5. Pausing must NOT trigger rescoring; reactivating triggers force=False
+        with django_capture_on_commit_callbacks(execute=True):
+            service.update_profile(
+                instance=profile, validated_data={"is_active": False}
+            )
+        assert len(published) == 3
+
+        with django_capture_on_commit_callbacks(execute=True):
+            service.update_profile(instance=profile, validated_data={"is_active": True})
+        assert len(published) == 4
+        assert published[-1].force is False
+
+
+@pytest.mark.django_db
+def test_resume_rescore_endpoint_validation_cooldown_broker_error_and_idor():
+    owner = User.objects.create_user(username="karl", password="pw")
+    other = User.objects.create_user(username="liam", password="pw")
+    fake_embedding = [0.03] * EMBEDDING_DIMENSIONS
+
+    active_resume = ResumeProfile.objects.create(
+        user=owner,
+        label="Active Embedded",
+        raw_text="Python Django",
+        content_hash="1" * 64,
+        embedding=fake_embedding,
+        is_active=True,
+    )
+    paused_resume = ResumeProfile.objects.create(
+        user=owner,
+        label="Paused Embedded",
+        raw_text="Python Django",
+        content_hash="2" * 64,
+        embedding=fake_embedding,
+        is_active=False,
+    )
+    unembedded_resume = ResumeProfile.objects.create(
+        user=owner,
+        label="Active Unembedded",
+        raw_text="Python Django",
+        content_hash="3" * 64,
+        embedding=None,
+        is_active=True,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=owner)
+
+    # Guard 1: paused profile -> 400
+    paused_resp = client.post(f"/api/v1/resumes/{paused_resume.uuid}/rescore/", {})
+    assert paused_resp.status_code == 400
+
+    # Guard 2: unembedded profile -> 400
+    unembedded_resp = client.post(
+        f"/api/v1/resumes/{unembedded_resume.uuid}/rescore/", {}
+    )
+    assert unembedded_resp.status_code == 400
+
+    # Guard 3: Redis cooldown active -> 429 + Retry-After
+    with patch(
+        "apps.resumes.services.resume_service.acquire_rescore_cooldown",
+        side_effect=RescoreCooldownError(retry_after=30),
+    ):
+        throttled = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
+    assert throttled.status_code == 429
+    assert throttled["Retry-After"] == "30"
+
+    # Guard 4: Broker failure -> 503 and releases cooldown
+    with (
+        patch(
+            "apps.resumes.services.resume_service.acquire_rescore_cooldown",
+            return_value=True,
+        ),
+        patch(
+            "apps.resumes.services.resume_service.publish_rescore_event",
+            side_effect=RescoreBrokerError("broker down"),
+        ),
+        patch(
+            "apps.resumes.services.resume_service.release_rescore_cooldown"
+        ) as mock_release,
+    ):
+        failed = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
+    assert failed.status_code == 503
+    mock_release.assert_called_once_with(active_resume.uuid)
+
+    # Happy path: 202 Accepted
+    with (
+        patch(
+            "apps.resumes.services.resume_service.acquire_rescore_cooldown",
+            return_value=True,
+        ),
+        patch(
+            "apps.resumes.services.resume_service.publish_rescore_event",
+            return_value=True,
+        ) as mock_pub,
+    ):
+        ok = client.post(
+            f"/api/v1/resumes/{active_resume.uuid}/rescore/",
+            {"max_jobs": 25, "force": True},
+            format="json",
+        )
+    assert ok.status_code == 202
+    body = ok.json()
+    assert body["status"] == "queued"
+    assert body["resume_profile_uuid"] == str(active_resume.uuid)
+    assert body["max_jobs"] == 25
+    assert body["force"] is True
+    mock_pub.assert_called_once()
+
+    # IDOR check: another user gets 404
+    client.force_authenticate(user=other)
+    idor_resp = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
+    assert idor_resp.status_code == 404

@@ -7,6 +7,7 @@ from vektryn_contracts.enums import ATSSource
 class KafkaTopic(StrEnum):
     JOBS_RAW = "jobs.raw"
     JOBS_ENRICHED = "jobs.enriched"
+    JOBS_RESCORE = "jobs.rescore"
     JOBS_ALERTS = "jobs.alerts"
     JOBS_DLQ = "jobs.dlq"
 
@@ -14,6 +15,11 @@ class KafkaTopic(StrEnum):
 def job_partition_key(ats_source: ATSSource | str, external_id: str) -> str:
     """Guarantees ordering per upstream ATS posting across partitions."""
     return f"{ats_source}:{external_id}"
+
+
+def rescore_partition_key(resume_profile_uuid: UUID | str) -> str:
+    """Routes all rescore triggers for a resume profile to the same partition."""
+    return str(resume_profile_uuid)
 
 
 def alert_partition_key(user_id: int | UUID | str) -> str:
