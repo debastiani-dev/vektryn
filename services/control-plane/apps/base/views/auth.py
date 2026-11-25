@@ -12,7 +12,13 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.base.serializers.auth import ChangePasswordSerializer, LoginSerializer
+from apps.base.models.user_profile import get_or_create_user_profile
+from apps.base.serializers.auth import (
+    AccountDeactivateSerializer,
+    ChangePasswordSerializer,
+    LoginSerializer,
+    SelfProfileUpdateSerializer,
+)
 from apps.base.services.auth_security import (
     LoginRateLimitError,
     check_login_throttle,
@@ -21,18 +27,47 @@ from apps.base.services.auth_security import (
     invalidate_user_sessions,
     record_login_failure,
 )
+from apps.base.services.user_management import (
+    PROFILE_MUTABLE_FIELDS,
+    PrivilegedGuardError,
+    deactivate_self_account,
+    serialize_profile_summary,
+    update_self_profile,
+)
 from vektryn_contracts import sign_stream_token
 
 
-def _serialize_user_session(user) -> dict[str, str | bool]:
+def _serialize_user_session(user) -> dict[str, object]:
     user_id = str(user.id)
     stream_token = sign_stream_token(user_id, settings.STREAM_AUTH_SECRET)
+    profile = get_or_create_user_profile(user)
     return {
         "id": user_id,
         "username": user.get_username(),
         "email": getattr(user, "email", ""),
         "is_staff": bool(getattr(user, "is_staff", False)),
+        "is_superuser": bool(getattr(user, "is_superuser", False)),
         "stream_token": stream_token,
+        "profile": serialize_profile_summary(profile),
+    }
+
+
+def _serialize_self_profile(user, profile) -> dict[str, object]:
+    return {
+        "id": str(user.id),
+        "username": user.get_username(),
+        "email": getattr(user, "email", ""),
+        "is_staff": bool(getattr(user, "is_staff", False)),
+        "is_superuser": bool(getattr(user, "is_superuser", False)),
+        "display_name": profile.display_name,
+        "timezone": profile.timezone,
+        "preferred_currency": profile.preferred_currency,
+        "default_copilot_tone": profile.default_copilot_tone,
+        "linkedin_url": profile.linkedin_url,
+        "github_url": profile.github_url,
+        "portfolio_url": profile.portfolio_url,
+        "created_at": profile.created_at.isoformat(),
+        "modified_at": profile.modified_at.isoformat(),
     }
 
 
@@ -121,5 +156,53 @@ def change_password_view(request: Request) -> Response:
     )
     return Response(
         {"detail": "Password updated successfully."},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def profile_view(request: Request) -> Response:
+    if request.method == "GET":
+        profile = get_or_create_user_profile(request.user)
+        return Response(_serialize_self_profile(request.user, profile))
+
+    serializer = SelfProfileUpdateSerializer(data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    validated = serializer.validated_data
+    email = validated.get("email") if "email" in validated else None
+    profile_data = {
+        field: validated[field]
+        for field in PROFILE_MUTABLE_FIELDS
+        if field in validated
+    }
+    user, profile = update_self_profile(
+        user=request.user,
+        email=email,
+        profile_data=profile_data,
+    )
+    return Response(_serialize_self_profile(user, profile), status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def deactivate_account_view(request: Request) -> Response:
+    serializer = AccountDeactivateSerializer(
+        data=request.data,
+        context={"request": request},
+    )
+    serializer.is_valid(raise_exception=True)
+
+    user = request.user
+    user_pk = user.pk
+    try:
+        deactivate_self_account(user)
+    except PrivilegedGuardError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    logout(request._request)
+    invalidate_user_sessions(user_pk)
+    return Response(
+        {"detail": "Account deactivated successfully."},
         status=status.HTTP_200_OK,
     )

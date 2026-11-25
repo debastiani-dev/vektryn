@@ -227,12 +227,47 @@ export interface ReadAllNotificationsResponse {
     unread_count: number;
 }
 
+export type PreferredCurrency = "USD" | "BRL" | "EUR" | "GBP";
+
+export interface UserProfileSummary {
+    display_name: string;
+    timezone: string;
+    preferred_currency: PreferredCurrency;
+    default_copilot_tone: CopilotTone;
+}
+
+export interface UserProfileDetail extends UserProfileSummary {
+    id: string;
+    username: string;
+    email: string;
+    is_staff: boolean;
+    is_superuser: boolean;
+    linkedin_url: string;
+    github_url: string;
+    portfolio_url: string;
+    created_at: string;
+    modified_at: string;
+}
+
+export interface UserProfileUpdateInput {
+    email?: string;
+    display_name?: string;
+    timezone?: string;
+    preferred_currency?: PreferredCurrency;
+    default_copilot_tone?: CopilotTone;
+    linkedin_url?: string;
+    github_url?: string;
+    portfolio_url?: string;
+}
+
 export interface CurrentUser {
     id: string;
     username: string;
     email: string;
     is_staff?: boolean;
+    is_superuser?: boolean;
     stream_token: string;
+    profile?: UserProfileSummary;
 }
 
 export interface ChangePasswordInput {
@@ -243,6 +278,44 @@ export interface ChangePasswordInput {
 
 export interface ChangePasswordResponse {
     detail: string;
+}
+
+export interface AccountDeactivateResponse {
+    detail: string;
+}
+
+export interface StaffManagedUserProfile extends UserProfileSummary {
+    linkedin_url: string;
+    github_url: string;
+    portfolio_url: string;
+}
+
+export interface StaffManagedUser {
+    id: number;
+    username: string;
+    email: string;
+    is_active: boolean;
+    is_staff: boolean;
+    is_superuser: boolean;
+    date_joined: string;
+    last_login: string | null;
+    profile: StaffManagedUserProfile;
+}
+
+export interface StaffUserCreateInput {
+    username: string;
+    email?: string;
+    password: string;
+    is_staff?: boolean;
+    is_active?: boolean;
+    profile?: Partial<StaffManagedUserProfile>;
+}
+
+export interface StaffUserUpdateInput {
+    email?: string;
+    is_active?: boolean;
+    is_staff?: boolean;
+    profile?: Partial<StaffManagedUserProfile>;
 }
 
 export interface ResumeProfile {

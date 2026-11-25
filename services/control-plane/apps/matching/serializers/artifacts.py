@@ -2,7 +2,6 @@ from rest_framework import serializers
 
 from apps.matching.models.artifacts import MatchArtifact, MatchArtifactKind
 from apps.matching.services.copilot import (
-    COPILOT_TONE_BALANCED,
     COPILOT_TONE_CHOICES,
     MAX_GUIDANCE_CHARS,
 )
@@ -35,7 +34,8 @@ class MatchArtifactGenerateSerializer(serializers.Serializer):
     regenerate = serializers.BooleanField(default=False, required=False)
     tone = serializers.ChoiceField(
         choices=COPILOT_TONE_CHOICES,
-        default=COPILOT_TONE_BALANCED,
+        default=None,
+        allow_null=True,
         required=False,
     )
     guidance = serializers.CharField(

@@ -8,7 +8,12 @@ import { JobRadarView } from "./components/radar/JobRadarView";
 import { ResumesView } from "./components/resumes/ResumesView";
 import { PipelineTrackerView } from "./components/tracker/PipelineTrackerView";
 import { useNotifications } from "./hooks/useNotifications";
-import type { CurrentUser, MatchScore, NotificationItem } from "./types/models";
+import type {
+    CurrentUser,
+    MatchScore,
+    NotificationItem,
+    UserProfileDetail,
+} from "./types/models";
 import { extractPayloadString } from "./utils/notifications";
 import { clearPendingImport } from "./utils/pendingImportStorage";
 
@@ -87,6 +92,29 @@ export function App() {
         setSessionNotice(null);
         setUser(authenticatedUser);
     }, []);
+
+    const handleUserProfileSaved = useCallback((updatedProfile: UserProfileDetail) => {
+        setUser((prev) => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                email: updatedProfile.email,
+                profile: {
+                    display_name: updatedProfile.display_name,
+                    timezone: updatedProfile.timezone,
+                    preferred_currency: updatedProfile.preferred_currency,
+                    default_copilot_tone: updatedProfile.default_copilot_tone,
+                },
+            };
+        });
+    }, []);
+
+    const handleAccountDeactivated = useCallback(() => {
+        setSessionNotice(
+            "Your account has been deactivated and all active sessions were signed out.",
+        );
+        clearClientSessionState();
+    }, [clearClientSessionState]);
 
     const handleLogout = useCallback(async () => {
         try {
@@ -195,6 +223,7 @@ export function App() {
     }
 
     const activeMatchJobId = activeNotificationMatch?.job_posting.uuid ?? "";
+    const defaultCopilotTone = user.profile?.default_copilot_tone ?? "balanced";
 
     return (
         <>
@@ -202,6 +231,8 @@ export function App() {
                 activeTab={activeTab}
                 onSelectTab={setActiveTab}
                 user={user}
+                onUserProfileSaved={handleUserProfileSaved}
+                onAccountDeactivated={handleAccountDeactivated}
                 onLogout={() => void handleLogout()}
                 sseConnected={sseConnected}
                 alerts={toasts}
@@ -233,9 +264,12 @@ export function App() {
                     <JobRadarView
                         initialSearch={pendingRadarSearch}
                         onConsumeInitialSearch={handleConsumeRadarSearch}
+                        defaultCopilotTone={defaultCopilotTone}
                     />
                 )}
-                {activeTab === "tracker" && <PipelineTrackerView />}
+                {activeTab === "tracker" && (
+                    <PipelineTrackerView defaultCopilotTone={defaultCopilotTone} />
+                )}
                 {activeTab === "analytics" && (
                     <StackTrendsView onSearchSkillInRadar={handleSearchSkillInRadar} />
                 )}
@@ -244,6 +278,7 @@ export function App() {
 
             <GapAnalysisDrawer
                 match={activeNotificationMatch}
+                defaultCopilotTone={defaultCopilotTone}
                 saving={activeMatchJobId !== "" && savingJobId === activeMatchJobId}
                 saved={activeMatchJobId !== "" && savedJobIds.has(activeMatchJobId)}
                 onClose={() => setActiveNotificationMatch(null)}

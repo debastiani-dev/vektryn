@@ -25,6 +25,7 @@ import { Tooltip } from "../ui/Tooltip";
 
 interface CopilotPanelProps {
     match: MatchScore;
+    defaultTone?: CopilotTone;
 }
 
 interface ArtifactKindOption {
@@ -142,7 +143,10 @@ function renderActionIcon(generating: boolean, hasArtifact: boolean) {
     return <Sparkles className="h-3.5 w-3.5" />;
 }
 
-export function CopilotPanel({ match }: Readonly<CopilotPanelProps>) {
+export function CopilotPanel({
+    match,
+    defaultTone = "balanced",
+}: Readonly<CopilotPanelProps>) {
     const [selectedKind, setSelectedKind] = useState<MatchArtifactKind>("tailored_bullets");
     const [artifactsByKind, setArtifactsByKind] = useState<
         Partial<Record<MatchArtifactKind, MatchArtifact>>
@@ -152,7 +156,7 @@ export function CopilotPanel({ match }: Readonly<CopilotPanelProps>) {
     >({});
     const [loadingList, setLoadingList] = useState(true);
     const [generatingKind, setGeneratingKind] = useState<MatchArtifactKind | null>(null);
-    const [tone, setTone] = useState<CopilotTone>("balanced");
+    const [tone, setTone] = useState<CopilotTone>(defaultTone);
     const [guidance, setGuidance] = useState("");
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [copiedKind, setCopiedKind] = useState<MatchArtifactKind | null>(null);

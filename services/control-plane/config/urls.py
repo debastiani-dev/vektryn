@@ -15,8 +15,10 @@ from apps.base.views.auth import (
     change_password_view,
     csrf_cookie_view,
     current_user_view,
+    deactivate_account_view,
     login_view,
     logout_view,
+    profile_view,
 )
 
 
@@ -38,11 +40,18 @@ urlpatterns = [
     path("api/v1/auth/login/", login_view, name="api-auth-login"),
     path("api/v1/auth/logout/", logout_view, name="api-auth-logout"),
     path("api/v1/auth/me/", current_user_view, name="api-auth-me"),
+    path("api/v1/auth/profile/", profile_view, name="api-auth-profile"),
     path(
         "api/v1/auth/change-password/",
         change_password_view,
         name="api-auth-change-password",
     ),
+    path(
+        "api/v1/auth/deactivate/",
+        deactivate_account_view,
+        name="api-auth-deactivate",
+    ),
+    path("api/v1/users/", include("apps.base.user_urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path(
         "api/docs/",

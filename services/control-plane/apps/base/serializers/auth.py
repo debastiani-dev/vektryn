@@ -2,6 +2,12 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from apps.base.models.user_profile import CopilotToneChoice, PreferredCurrency
+from apps.base.services.user_management import (
+    validate_http_url,
+    validate_iana_timezone,
+)
+
 
 class _StrictStringField(serializers.CharField):
     """CharField that rejects non-string JSON values (e.g. ints, lists, dicts)."""
@@ -69,3 +75,62 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError({"new_password": list(exc.messages)})
 
         return attrs
+
+
+class ProfileFieldsValidationMixin:
+    def validate_display_name(self, value: str) -> str:
+        return value.strip()
+
+    def validate_timezone(self, value: str) -> str:
+        try:
+            return validate_iana_timezone(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    def _validate_link(self, value: str) -> str:
+        try:
+            return validate_http_url(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    def validate_linkedin_url(self, value: str) -> str:
+        return self._validate_link(value)
+
+    def validate_github_url(self, value: str) -> str:
+        return self._validate_link(value)
+
+    def validate_portfolio_url(self, value: str) -> str:
+        return self._validate_link(value)
+
+
+class SelfProfileUpdateSerializer(ProfileFieldsValidationMixin, serializers.Serializer):
+    email = serializers.EmailField(required=False, allow_blank=True, max_length=254)
+    display_name = _StrictStringField(required=False, allow_blank=True, max_length=120)
+    timezone = _StrictStringField(required=False, allow_blank=False, max_length=64)
+    preferred_currency = serializers.ChoiceField(
+        choices=PreferredCurrency.choices, required=False
+    )
+    default_copilot_tone = serializers.ChoiceField(
+        choices=CopilotToneChoice.choices, required=False
+    )
+    linkedin_url = _StrictStringField(required=False, allow_blank=True, max_length=300)
+    github_url = _StrictStringField(required=False, allow_blank=True, max_length=300)
+    portfolio_url = _StrictStringField(required=False, allow_blank=True, max_length=300)
+
+    def validate_email(self, value: str) -> str:
+        return value.strip().lower()
+
+
+class AccountDeactivateSerializer(serializers.Serializer):
+    current_password = _StrictStringField(
+        write_only=True,
+        required=True,
+        allow_blank=False,
+        trim_whitespace=False,
+    )
+
+    def validate_current_password(self, value: str) -> str:
+        user = self.context["request"].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value

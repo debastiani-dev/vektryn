@@ -165,7 +165,7 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
                 match_score=match_score,
                 kind=data["kind"],
                 regenerate=data.get("regenerate", False),
-                tone=data.get("tone", "balanced"),
+                tone=data.get("tone"),
                 guidance=data.get("guidance", ""),
             )
         except CopilotRateLimitError as exc:

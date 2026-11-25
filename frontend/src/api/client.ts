@@ -1,4 +1,5 @@
 import type {
+    AccountDeactivateResponse,
     ApplicationLead,
     ChangePasswordInput,
     ChangePasswordResponse,
@@ -34,7 +35,12 @@ import type {
     SavedFilterQueryParams,
     SeniorityLevel,
     StackTrendDaily,
+    StaffManagedUser,
+    StaffUserCreateInput,
+    StaffUserUpdateInput,
     TriggerCollectResponse,
+    UserProfileDetail,
+    UserProfileUpdateInput,
 } from "../types/models";
 
 export class ApiError extends Error {
@@ -283,10 +289,65 @@ export const vektrynApi = {
 
     getCurrentUser: () => apiFetch<CurrentUser>("/api/v1/auth/me/"),
 
+    getUserProfile: () => apiFetch<UserProfileDetail>("/api/v1/auth/profile/"),
+
+    updateUserProfile: (payload: UserProfileUpdateInput) =>
+        apiFetch<UserProfileDetail>("/api/v1/auth/profile/", {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+        }),
+
     changePassword: (payload: ChangePasswordInput) =>
         apiFetch<ChangePasswordResponse>("/api/v1/auth/change-password/", {
             method: "POST",
             body: JSON.stringify(payload),
+        }),
+
+    deactivateAccount: (currentPassword: string) =>
+        apiFetch<AccountDeactivateResponse>("/api/v1/auth/deactivate/", {
+            method: "POST",
+            body: JSON.stringify({ current_password: currentPassword }),
+        }),
+
+    listUsers: (options?: {
+        search?: string;
+        is_active?: string;
+        is_staff?: string;
+        page?: number;
+    }) => {
+        const params = new URLSearchParams();
+        if (options?.search?.trim()) {
+            params.set("search", options.search.trim());
+        }
+        if (options?.is_active) {
+            params.set("is_active", options.is_active);
+        }
+        if (options?.is_staff) {
+            params.set("is_staff", options.is_staff);
+        }
+        if (options?.page !== undefined && options.page > 1) {
+            params.set("page", String(options.page));
+        }
+        const qs = params.toString();
+        const path = qs ? `/api/v1/users/?${qs}` : "/api/v1/users/";
+        return apiFetch<PaginatedResponse<StaffManagedUser>>(path);
+    },
+
+    createUser: (payload: StaffUserCreateInput) =>
+        apiFetch<StaffManagedUser>("/api/v1/users/", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        }),
+
+    updateUser: (id: number, payload: StaffUserUpdateInput) =>
+        apiFetch<StaffManagedUser>(`/api/v1/users/${id}/`, {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+        }),
+
+    deactivateUser: (id: number) =>
+        apiFetch<StaffManagedUser>(`/api/v1/users/${id}/`, {
+            method: "DELETE",
         }),
 
     listJobs: (params = "") =>
