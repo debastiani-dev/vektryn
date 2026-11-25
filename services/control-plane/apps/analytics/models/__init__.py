@@ -1,3 +1,3 @@
-from apps.analytics.models.analytics import StackTrendDaily
+from apps.analytics.models.analytics import CollectorRunLog, StackTrendDaily
 
-__all__ = ["StackTrendDaily"]
+__all__ = ["CollectorRunLog", "StackTrendDaily"]

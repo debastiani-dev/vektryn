@@ -175,4 +175,65 @@ describe("vektrynApi", () => {
             "/api/v1/jobs/?ats_source=manual&external_id=manual-abc123",
         );
     });
+
+    it("fetches pipeline system status and triggers staff collector sync with CSRF token", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=sys-csrf" });
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        overall_status: "healthy",
+                        last_collect_at: "2026-11-25T05:00:00Z",
+                        latest_run_totals: {
+                            fetched_count: 50,
+                            ingested_count: 10,
+                            deduped_count: 40,
+                            error_count: 0,
+                            duration_ms: 1200,
+                        },
+                        sources: [],
+                        jobs: {
+                            active_count: 75,
+                            ai_scored_count: 25,
+                            unscored_active_count: 50,
+                            pending_match_count: 0,
+                            recent_unmatched_count: 0,
+                            unembedded_active_count: 0,
+                        },
+                        rollup: {
+                            latest_bucket_date: "2026-11-25",
+                            latest_updated_at: "2026-11-25T01:00:00Z",
+                        },
+                        dlq: { status: "healthy", recent_24h_count: 0, total_count: 0 },
+                        collect_trigger: { can_trigger: true, cooldown_remaining_seconds: 0 },
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        status: "queued",
+                        mode: "cloud_run_job",
+                        job_name: "vektryn-collect",
+                        execution_id: "exec-1",
+                        cooldown_seconds: 300,
+                    }),
+                    { status: 202, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const statusRes = await vektrynApi.getSystemStatus();
+        expect(statusRes.overall_status).toBe("healthy");
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/system/status/");
+
+        const triggerRes = await vektrynApi.triggerCollectorSync();
+        expect(triggerRes.status).toBe("queued");
+        const [triggerUrl, triggerInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+        expect(triggerUrl).toBe("/api/v1/system/collect/");
+        expect(triggerInit.method).toBe("POST");
+        expect((triggerInit.headers as Headers).get("X-CSRFToken")).toBe("sys-csrf");
+    });
 });

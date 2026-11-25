@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 import logging
+import time
 
 import httpx
 
@@ -20,6 +21,48 @@ def _parse_iso_dt(raw: str | int | float | None) -> datetime | None:
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def _trampos_company_name(item: dict) -> str:
+    company_obj = item.get("company")
+    if isinstance(company_obj, dict) and company_obj.get("name"):
+        return str(company_obj["name"]).strip()
+    return str(item.get("company_name") or "Trampos Company").strip()
+
+
+def _trampos_location(item: dict) -> str:
+    parts = [p for p in (item.get("city"), item.get("state"), "Brazil") if p]
+    if item.get("home_office") or item.get("remote"):
+        parts.append("Remote")
+    return ", ".join(str(p) for p in parts)
+
+
+def _parse_trampos_entry(entry: object) -> CollectedJob | None:
+    if not isinstance(entry, dict):
+        return None
+    item = entry.get("opportunity", entry)
+    if not isinstance(item, dict):
+        return None
+    opp_id = str(item.get("id") or item.get("slug") or "")
+    title = str(item.get("name") or item.get("title") or "").strip()
+    if not opp_id or not title:
+        return None
+
+    permalink = item.get("permalink") or f"https://trampos.co/oportunidades/{opp_id}"
+    raw_html = str(item.get("description") or item.get("name") or "")
+    posted_raw = item.get("published_at") or item.get("created_at")
+
+    return CollectedJob(
+        ats_source=ATSSource.TRAMPOS,
+        external_id=opp_id,
+        title=title,
+        company_name=_trampos_company_name(item),
+        apply_url=permalink,
+        location_raw=_trampos_location(item),
+        raw_html=raw_html,
+        description_clean=html_to_clean_text(raw_html),
+        posted_at=_parse_iso_dt(posted_raw),
+    )
 
 
 class MultiCompanyFeedCollector:
@@ -166,43 +209,8 @@ class MultiCompanyFeedCollector:
         items = (
             payload if isinstance(payload, list) else payload.get("opportunities", [])
         )
-        jobs: list[CollectedJob] = []
-        for entry in items:
-            item = entry.get("opportunity", entry) if isinstance(entry, dict) else {}
-            opp_id = str(item.get("id") or item.get("slug") or "")
-            permalink = item.get("permalink") or (
-                f"https://trampos.co/oportunidades/{opp_id}" if opp_id else ""
-            )
-            if not permalink or not opp_id:
-                continue
-            company_obj = item.get("company")
-            company = (
-                company_obj.get("name")
-                if isinstance(company_obj, dict)
-                else (item.get("company_name") or "Trampos Company")
-            )
-            raw_html = item.get("description") or item.get("name") or ""
-            city = item.get("city") or ""
-            state = item.get("state") or ""
-            loc = ", ".join(p for p in (city, state, "Brazil") if p)
-            if item.get("home_office") or item.get("remote"):
-                loc = f"{loc}, Remote"
-            jobs.append(
-                CollectedJob(
-                    ats_source=ATSSource.TRAMPOS,
-                    external_id=opp_id,
-                    title=(item.get("name") or item.get("title") or "").strip(),
-                    company_name=(company or "Trampos Company").strip(),
-                    apply_url=permalink,
-                    location_raw=loc,
-                    raw_html=raw_html,
-                    description_clean=html_to_clean_text(raw_html),
-                    posted_at=_parse_iso_dt(
-                        item.get("published_at") or item.get("created_at")
-                    ),
-                )
-            )
-        return [j for j in jobs if j.title]
+        parsed = (_parse_trampos_entry(entry) for entry in items)
+        return [job for job in parsed if job is not None]
 
     async def fetch_github_vagas(self, repo: str) -> list[CollectedJob]:
         resp = await self.http_client.get(
@@ -244,37 +252,62 @@ class MultiCompanyFeedCollector:
             )
         return [j for j in jobs if j.apply_url and j.title]
 
-    async def fetch_all(self) -> list[CollectedJob]:
+    async def fetch_all_with_stats(
+        self,
+    ) -> tuple[list[CollectedJob], dict[str, dict[str, int]]]:
         feed_calls = (
-            ("remotive", self.fetch_remotive("software-dev")),
-            ("himalayas", self.fetch_himalayas(limit=100)),
-            ("jobicy:python", self.fetch_jobicy("python")),
-            ("jobicy:backend", self.fetch_jobicy("backend")),
-            ("gupy:python", self.fetch_gupy_portal("python")),
-            ("gupy:backend", self.fetch_gupy_portal("backend")),
-            ("trampos", self.fetch_trampos()),
-            ("github:backend-br", self.fetch_github_vagas("backend-br/vagas")),
+            ("remotive", ATSSource.REMOTIVE.value, self.fetch_remotive("software-dev")),
+            ("himalayas", ATSSource.HIMALAYAS.value, self.fetch_himalayas(limit=100)),
+            ("jobicy:python", ATSSource.JOBICY.value, self.fetch_jobicy("python")),
+            ("jobicy:backend", ATSSource.JOBICY.value, self.fetch_jobicy("backend")),
+            ("gupy:python", ATSSource.GUPY.value, self.fetch_gupy_portal("python")),
+            ("gupy:backend", ATSSource.GUPY.value, self.fetch_gupy_portal("backend")),
+            ("trampos", ATSSource.TRAMPOS.value, self.fetch_trampos()),
+            (
+                "github:backend-br",
+                ATSSource.GITHUB_VAGAS.value,
+                self.fetch_github_vagas("backend-br/vagas"),
+            ),
         )
 
+        async def _timed_fetch(coro):
+            started = time.perf_counter()
+            try:
+                return await coro, int((time.perf_counter() - started) * 1000), None
+            except Exception as exc:
+                return None, int((time.perf_counter() - started) * 1000), exc
+
         results = await asyncio.gather(
-            *(coro for _, coro in feed_calls),
-            return_exceptions=True,
+            *(_timed_fetch(coro) for _, _, coro in feed_calls)
         )
 
         merged: list[CollectedJob] = []
         seen_urls: set[str] = set()
+        stats: dict[str, dict[str, int]] = {}
 
-        for (label, _), result in zip(feed_calls, results, strict=True):
-            if isinstance(result, Exception):
-                logger.warning("Feed[%s] failed: %s", label, result)
+        for (label, source_key, _), (jobs, elapsed_ms, exc) in zip(
+            feed_calls, results, strict=True
+        ):
+            entry = stats.setdefault(
+                source_key, {"fetched": 0, "errors": 0, "duration_ms": 0}
+            )
+            entry["duration_ms"] = max(entry["duration_ms"], elapsed_ms)
+            if exc is not None:
+                entry["errors"] += 1
+                logger.warning("Feed[%s] failed: %s", label, exc)
                 continue
             added = 0
-            for job in result:
+            for job in jobs or []:
                 if job.apply_url in seen_urls:
                     continue
                 seen_urls.add(job.apply_url)
                 merged.append(job)
                 added += 1
+            entry["fetched"] += added
             logger.info("Feed[%s]: fetched %d new postings", label, added)
 
-        return merged
+        return merged, stats
+
+    async def fetch_all(self) -> list[CollectedJob]:
+        jobs, _ = await self.fetch_all_with_stats()
+        return jobs

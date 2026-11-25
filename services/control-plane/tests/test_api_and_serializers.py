@@ -14,6 +14,8 @@ import httpx
 import pytest
 from rest_framework.test import APIClient, APIRequestFactory
 
+from apps.analytics.models.analytics import CollectorRunLog, StackTrendDaily
+from apps.analytics.services import collector_trigger, system_status
 from apps.jobs.models.jobs import JobPosting
 from apps.jobs.services import hybrid_search, manual_import
 from apps.jobs.services.manual_import import (
@@ -1540,3 +1542,253 @@ def test_hybrid_search_embedding_cache_short_query_and_fallback(settings):
         ),
     ):
         assert hybrid_search.embed_search_query("kafka streams") is None
+
+
+@pytest.mark.django_db
+def test_system_status_telemetry_multi_resume_backlog_and_dlq_offset_invalid(settings):
+    settings.KAFKA_BOOTSTRAP_SERVERS = "kafka:9092"
+    user = User.objects.create_user(username="obs-user", password="pw", is_staff=False)
+    staff_user = User.objects.create_user(
+        username="obs-staff", password="pw", is_staff=True
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    me_non_staff = client.get("/api/v1/auth/me/")
+    assert me_non_staff.status_code == 200
+    assert me_non_staff.json()["is_staff"] is False
+
+    client.force_authenticate(user=staff_user)
+    me_staff = client.get("/api/v1/auth/me/")
+    assert me_staff.status_code == 200
+    assert me_staff.json()["is_staff"] is True
+
+    # Two active embedded resumes for staff_user to test distinct Exists() counting
+    vec = _unit_vec(0, 1.0)
+    r1 = ResumeProfile.objects.create(
+        user=staff_user,
+        label="Backend 1",
+        raw_text="Python Django",
+        content_hash=uuid4().hex,
+        embedding=vec,
+        is_active=True,
+    )
+    r2 = ResumeProfile.objects.create(
+        user=staff_user,
+        label="Backend 2",
+        raw_text="Python Kafka",
+        content_hash=uuid4().hex,
+        embedding=vec,
+        is_active=True,
+    )
+
+    now = datetime.now(UTC)
+    j_scored = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE.value,
+        external_id="obs-scored",
+        title="Senior Python",
+        company_name="Acme",
+        apply_url="https://acme.example/1",
+        description_clean="Python backend",
+        embedding=vec,
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+    j_old_unmatched = JobPosting.objects.create(
+        ats_source=ATSSource.LEVER.value,
+        external_id="obs-old-unmatched",
+        title="Older Role",
+        company_name="Beta",
+        apply_url="https://beta.example/2",
+        description_clean="Older job outside 2h lag window",
+        embedding=vec,
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+    JobPosting.objects.filter(pk=j_old_unmatched.pk).update(
+        created_at=now - timedelta(hours=6)
+    )
+
+    # Both resumes score the SAME job -> distinct ai_scored_count must be 1 (never 2 > active_count)
+    MatchScore.objects.create(
+        job_posting=j_scored,
+        resume_profile=r1,
+        cosine_similarity=0.85,
+        fit_score=88,
+    )
+    MatchScore.objects.create(
+        job_posting=j_scored,
+        resume_profile=r2,
+        cosine_similarity=0.83,
+        fit_score=84,
+    )
+
+    older_ts = now - timedelta(hours=5)
+    latest_ts = now - timedelta(minutes=10)
+    CollectorRunLog.objects.create(
+        source=ATSSource.GREENHOUSE.value,
+        fetched_count=50,
+        ingested_count=10,
+        deduped_count=40,
+        error_count=1,
+        duration_ms=2000,
+        ran_at=older_ts,
+    )
+    CollectorRunLog.objects.create(
+        source=ATSSource.GREENHOUSE.value,
+        fetched_count=40,
+        ingested_count=8,
+        deduped_count=32,
+        error_count=0,
+        duration_ms=1500,
+        ran_at=latest_ts,
+    )
+    CollectorRunLog.objects.create(
+        source=ATSSource.REMOTIVE.value,
+        fetched_count=20,
+        ingested_count=4,
+        deduped_count=16,
+        error_count=0,
+        duration_ms=900,
+        ran_at=latest_ts,
+    )
+    StackTrendDaily.objects.create(
+        bucket_date=now.date(),
+        tag="python",
+        mention_count=12,
+        unique_companies_count=10,
+    )
+
+    # Case 1: Kafka offsets_for_times returns -1 (OFFSET_INVALID) -> 0 recent failures, healthy overall
+    fake_topic = MagicMock(error=None, partitions={0: MagicMock()})
+    fake_meta = MagicMock(topics={"jobs.dlq": fake_topic})
+    fake_consumer = MagicMock()
+    fake_consumer.list_topics.return_value = fake_meta
+    fake_consumer.get_watermark_offsets.return_value = (0, 5)
+    fake_consumer.offsets_for_times.return_value = [MagicMock(offset=-1)]
+
+    status_url = "/api/v1/system/status/"
+    with (
+        patch.object(system_status, "_get_redis_client", return_value=None),
+        patch.object(collector_trigger, "_get_redis_client", return_value=None),
+        patch.object(system_status, "Consumer", return_value=fake_consumer),
+    ):
+        resp = client.get(status_url)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["overall_status"] == "healthy"
+    assert body["dlq"] == {"status": "healthy", "recent_24h_count": 0, "total_count": 5}
+    fake_consumer.close.assert_called_once()
+    assert body["latest_run_totals"] == {
+        "fetched_count": 60,
+        "ingested_count": 12,
+        "deduped_count": 48,
+        "error_count": 0,
+        "duration_ms": 1500,
+    }
+    assert len(body["sources"]) == 2
+    assert body["jobs"]["active_count"] == 2
+    assert body["jobs"]["ai_scored_count"] == 1
+    assert body["jobs"]["unscored_active_count"] == 1
+    assert body["jobs"]["pending_match_count"] == 1
+    assert body["jobs"]["recent_unmatched_count"] == 0
+    assert body["rollup"]["latest_bucket_date"] == now.date().isoformat()
+    assert body["collect_trigger"]["can_trigger"] is True
+
+    # Case 2: Zero active resumes for regular user -> pending_match_count == 0
+    # and recent DLQ messages (offset=3, high=5 -> 2 recent) flips status to degraded
+    fake_consumer.close.reset_mock()
+    fake_consumer.offsets_for_times.return_value = [MagicMock(offset=3)]
+    client.force_authenticate(user=user)
+    with (
+        patch.object(system_status, "_get_redis_client", return_value=None),
+        patch.object(collector_trigger, "_get_redis_client", return_value=None),
+        patch.object(system_status, "Consumer", return_value=fake_consumer),
+    ):
+        degraded_resp = client.get(status_url)
+
+    assert degraded_resp.status_code == 200
+    degraded = degraded_resp.json()
+    assert degraded["overall_status"] == "degraded"
+    assert degraded["dlq"] == {
+        "status": "warning",
+        "recent_24h_count": 2,
+        "total_count": 5,
+    }
+    assert degraded["jobs"]["pending_match_count"] == 0
+    assert degraded["collect_trigger"]["can_trigger"] is False
+    fake_consumer.close.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_system_collect_trigger_staff_gate_atomic_cooldown_and_rollback(settings):
+    settings.GCP_PROJECT_ID = "vektryn-prod"
+    settings.GCP_REGION = "us-central1"
+    settings.COLLECTOR_JOB_NAME = "vektryn-collect"
+
+    regular_user = User.objects.create_user(
+        username="non-staff-collect", password="pw", is_staff=False
+    )
+    staff_user = User.objects.create_user(
+        username="staff-collect", password="pw", is_staff=True
+    )
+    collect_url = "/api/v1/system/collect/"
+
+    client = APIClient()
+    client.force_authenticate(user=regular_user)
+    forbidden = client.post(collect_url)
+    assert forbidden.status_code == 403
+
+    client.force_authenticate(user=staff_user)
+    lock_state: dict[str, str] = {}
+    fake_redis = MagicMock()
+
+    def _fake_set(key: str, val: str, nx: bool = False, ex: int | None = None) -> bool:
+        if nx and key in lock_state:
+            return False
+        lock_state[key] = val
+        return True
+
+    fake_redis.set.side_effect = _fake_set
+    fake_redis.ttl.return_value = 240
+    fake_redis.delete.side_effect = lambda key: lock_state.pop(key, None)
+
+    mock_token_resp = MagicMock()
+    mock_token_resp.json.return_value = {"access_token": "gcp-oauth-token"}
+    mock_token_resp.raise_for_status.return_value = None
+
+    mock_run_resp = MagicMock()
+    mock_run_resp.content = b'{"name": "exec-123"}'
+    mock_run_resp.json.return_value = {"name": "exec-123"}
+    mock_run_resp.raise_for_status.return_value = None
+
+    with (
+        patch.object(collector_trigger, "_get_redis_client", return_value=fake_redis),
+        patch.object(collector_trigger.httpx, "get", return_value=mock_token_resp),
+        patch.object(collector_trigger.httpx, "post", return_value=mock_run_resp),
+    ):
+        ok_resp = client.post(collect_url)
+        assert ok_resp.status_code == 202
+        assert ok_resp.json()["execution_id"] == "exec-123"
+        assert ok_resp.json()["mode"] == "cloud_run_job"
+
+        # Second immediate click hits atomic SET NX EX cooldown -> 429 + Retry-After
+        cooldown_resp = client.post(collect_url)
+        assert cooldown_resp.status_code == 429
+        assert cooldown_resp["Retry-After"] == "240"
+
+    # Reset lock and simulate upstream Cloud Run failure -> 503 AND lock released
+    lock_state.clear()
+    with (
+        patch.object(collector_trigger, "_get_redis_client", return_value=fake_redis),
+        patch.object(collector_trigger.httpx, "get", return_value=mock_token_resp),
+        patch.object(
+            collector_trigger.httpx,
+            "post",
+            side_effect=httpx.ConnectError("run API down"),
+        ),
+    ):
+        err_resp = client.post(collect_url)
+    assert err_resp.status_code == 503
+    assert collector_trigger.COLLECT_COOLDOWN_KEY not in lock_state

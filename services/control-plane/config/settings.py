@@ -63,6 +63,9 @@ class ControlPlaneSettings(BaseSettings):
     )
     stream_edge_url: str = ""
     ingest_api_key: str = ""
+    gcp_project_id: str = ""
+    gcp_region: str = "us-central1"
+    collector_job_name: str = ""
     storage_backend: str = ""
     local_storage_dir: Path = REPO_ROOT / ".local_storage"
     gcs_resumes_bucket: str = Field(
@@ -248,6 +251,9 @@ HYBRID_SEARCH_MIN_SIMILARITY = env.hybrid_search_min_similarity
 STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
 STREAM_EDGE_URL = env.stream_edge_url.strip().rstrip("/")
 INGEST_API_KEY = env.ingest_api_key.strip()
+GCP_PROJECT_ID = env.gcp_project_id.strip()
+GCP_REGION = env.gcp_region.strip() or "us-central1"
+COLLECTOR_JOB_NAME = env.collector_job_name.strip()
 STORAGE_BACKEND = env.storage_backend.strip().lower()
 LOCAL_STORAGE_DIR = env.local_storage_dir
 GCS_RESUMES_BUCKET = env.gcs_resumes_bucket.strip()

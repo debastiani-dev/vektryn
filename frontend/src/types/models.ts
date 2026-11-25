@@ -132,6 +132,7 @@ export interface CurrentUser {
     id: string;
     username: string;
     email: string;
+    is_staff?: boolean;
     stream_token: string;
 }
 
@@ -199,5 +200,60 @@ export interface ManualJobImportResponse {
     apply_url: string;
     event_id: string | null;
     job_posting_uuid: string | null;
+}
+
+export type PipelineOverallStatus = "healthy" | "warning" | "degraded";
+export type DlqHealthStatus = "healthy" | "warning" | "unavailable";
+
+export interface CollectorSourceLog {
+    source: string;
+    fetched_count: number;
+    ingested_count: number;
+    deduped_count: number;
+    error_count: number;
+    duration_ms: number;
+    ran_at: string;
+}
+
+export interface PipelineStatusResponse {
+    overall_status: PipelineOverallStatus;
+    last_collect_at: string | null;
+    latest_run_totals: {
+        fetched_count: number;
+        ingested_count: number;
+        deduped_count: number;
+        error_count: number;
+        duration_ms: number;
+    };
+    sources: CollectorSourceLog[];
+    jobs: {
+        active_count: number;
+        ai_scored_count: number;
+        unscored_active_count: number;
+        pending_match_count: number;
+        recent_unmatched_count: number;
+        unembedded_active_count: number;
+    };
+    rollup: {
+        latest_bucket_date: string | null;
+        latest_updated_at: string | null;
+    };
+    dlq: {
+        status: DlqHealthStatus;
+        recent_24h_count: number | null;
+        total_count: number | null;
+    };
+    collect_trigger: {
+        can_trigger: boolean;
+        cooldown_remaining_seconds: number;
+    };
+}
+
+export interface TriggerCollectResponse {
+    status: "queued";
+    mode: "cloud_run_job" | "stream_edge_local";
+    job_name: string;
+    execution_id: string | null;
+    cooldown_seconds: number;
 }
 
