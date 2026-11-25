@@ -3,6 +3,7 @@ import {
     AlertTriangle,
     CheckCircle2,
     Database,
+    Loader2,
     Play,
     RefreshCw,
     ShieldAlert,
@@ -18,14 +19,26 @@ import type {
 import { formatAtsSource, formatExactDate, formatRelativeTime } from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
 
-const STATUS_POLL_INTERVAL_MS = 60_000;
+const IDLE_POLL_INTERVAL_MS = 60_000;
+const RUNNING_POLL_INTERVAL_MS = 5_000;
 
-function statusTheme(status: PipelineOverallStatus | null): {
+function statusTheme(
+    status: PipelineOverallStatus | null,
+    isRunning: boolean,
+): {
     dot: string;
     pill: string;
     badge: string;
     label: string;
 } {
+    if (isRunning) {
+        return {
+            dot: "bg-violet-400",
+            pill: "bg-violet-950/35 text-violet-200 ring-violet-500/35 hover:bg-violet-950/50",
+            badge: "bg-violet-500/15 text-violet-300 ring-violet-500/35",
+            label: "Syncing",
+        };
+    }
     if (status === "healthy") {
         return {
             dot: "bg-emerald-400",
@@ -63,18 +76,36 @@ function formatDurationMs(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function formatCooldown(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`;
-    const mins = Math.ceil(seconds / 60);
-    return `${mins}m`;
+function formatMinutesSeconds(totalSeconds: number): string {
+    const safe = Math.max(0, Math.floor(totalSeconds));
+    if (safe < 60) return `${safe}s`;
+    const mins = Math.floor(safe / 60);
+    const secs = safe % 60;
+    return `${mins}m ${String(secs).padStart(2, "0")}s`;
 }
 
-function getSyncButtonLabel(syncing: boolean, cooldownRemaining: number): string {
-    if (syncing) {
-        return "Triggering Collectors...";
+function getPillSubtitle(isBusy: boolean, lastSyncRelative: string | null): string {
+    if (isBusy) return "· Syncing...";
+    if (lastSyncRelative) return `· ${lastSyncRelative}`;
+    return "· Idle";
+}
+
+function getSyncButtonLabel(
+    triggering: boolean,
+    isRunning: boolean,
+    elapsedRunSeconds: number,
+    cooldownRemaining: number,
+): string {
+    if (triggering) {
+        return "Starting Collector Sync...";
+    }
+    if (isRunning) {
+        return elapsedRunSeconds > 0
+            ? `Syncing Collectors... (${formatMinutesSeconds(elapsedRunSeconds)})`
+            : "Syncing Collectors...";
     }
     if (cooldownRemaining > 0) {
-        return `Sync Cooldown (${formatCooldown(cooldownRemaining)})`;
+        return `Sync Cooldown (${formatMinutesSeconds(cooldownRemaining)})`;
     }
     return "Sync Collectors";
 }
@@ -150,27 +181,63 @@ function SourceBreakdownList({ sources }: Readonly<{ sources: ReadonlyArray<Coll
     );
 }
 
+function computeElapsedRunSeconds(startedAtIso: string | null | undefined, nowMs: number): number {
+    if (!startedAtIso) return 0;
+    const parsed = Date.parse(startedAtIso);
+    if (Number.isNaN(parsed)) return 0;
+    return Math.max(0, Math.floor((nowMs - parsed) / 1000));
+}
+
+function computeLiveCooldown(
+    serverSeconds: number,
+    fetchedAtMs: number | null,
+    nowMs: number,
+): number {
+    if (serverSeconds <= 0 || fetchedAtMs === null) return 0;
+    const elapsedSinceFetch = Math.max(0, Math.floor((nowMs - fetchedAtMs) / 1000));
+    return Math.max(0, serverSeconds - elapsedSinceFetch);
+}
+
 export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }>) {
     const [open, setOpen] = useState(false);
     const [data, setData] = useState<PipelineStatusResponse | null>(null);
+    const [fetchedAtMs, setFetchedAtMs] = useState<number | null>(null);
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [syncing, setSyncing] = useState(false);
+    const [triggering, setTriggering] = useState(false);
     const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
+    const wasRunningRef = useRef(false);
+
+    const applyStatusResponse = useCallback((res: PipelineStatusResponse) => {
+        const now = Date.now();
+        const nextRunning = Boolean(res.collect_trigger.is_running);
+        if (wasRunningRef.current && !nextRunning) {
+            setSyncFeedback("Collector sync complete — telemetry updated.");
+        }
+        wasRunningRef.current = nextRunning;
+        setData(res);
+        setFetchedAtMs(now);
+        setNowMs(now);
+        setError(null);
+    }, []);
 
     const fetchStatus = useCallback(async () => {
         setLoading(true);
         try {
             const res = await vektrynApi.getSystemStatus();
-            setData(res);
-            setError(null);
+            applyStatusResponse(res);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to load pipeline telemetry");
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [applyStatusResponse]);
+
+    const isRunning = Boolean(data?.collect_trigger.is_running);
+    const serverCooldown = data?.collect_trigger.cooldown_remaining_seconds ?? 0;
+    const pollIntervalMs = isRunning ? RUNNING_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
 
     useEffect(() => {
         let cancelled = false;
@@ -178,8 +245,7 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
             try {
                 const res = await vektrynApi.getSystemStatus();
                 if (!cancelled) {
-                    setData(res);
-                    setError(null);
+                    applyStatusResponse(res);
                 }
             } catch (err) {
                 if (!cancelled) {
@@ -194,12 +260,21 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
             if (!document.hidden) {
                 void loadStatus();
             }
-        }, STATUS_POLL_INTERVAL_MS);
+        }, pollIntervalMs);
         return () => {
             cancelled = true;
             window.clearInterval(intervalId);
         };
-    }, []);
+    }, [applyStatusResponse, pollIntervalMs]);
+
+    const shouldTickClock = isRunning || serverCooldown > 0;
+    useEffect(() => {
+        if (!shouldTickClock) return;
+        const tickId = window.setInterval(() => {
+            setNowMs(Date.now());
+        }, 1000);
+        return () => window.clearInterval(tickId);
+    }, [shouldTickClock]);
 
     useEffect(() => {
         if (!open) return;
@@ -220,26 +295,31 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
     }, [open]);
 
     async function handleTriggerSync() {
-        setSyncing(true);
+        setTriggering(true);
         setSyncFeedback(null);
         try {
-            const res = await vektrynApi.triggerCollectorSync();
-            setSyncFeedback(`Collector sync queued (${res.job_name}).`);
-            void fetchStatus();
+            await vektrynApi.triggerCollectorSync();
+            wasRunningRef.current = true;
+            await fetchStatus();
         } catch (err) {
             setSyncFeedback(
                 err instanceof Error ? err.message : "Failed to trigger collector sync",
             );
         } finally {
-            setSyncing(false);
+            setTriggering(false);
         }
     }
 
-    const theme = statusTheme(data?.overall_status ?? null);
+    const isSyncBusy = triggering || isRunning;
+    const theme = statusTheme(data?.overall_status ?? null, isSyncBusy);
     const lastSyncRelative = formatRelativeTime(data?.last_collect_at ?? null);
     const lastSyncExact = formatExactDate(data?.last_collect_at ?? null);
-    const pillSubtitle = lastSyncRelative ? `· ${lastSyncRelative}` : "· Idle";
-    const cooldownRemaining = data?.collect_trigger.cooldown_remaining_seconds ?? 0;
+    const pillSubtitle = getPillSubtitle(isSyncBusy, lastSyncRelative);
+    const elapsedRunSeconds = computeElapsedRunSeconds(
+        data?.collect_trigger.running_started_at,
+        nowMs,
+    );
+    const cooldownRemaining = computeLiveCooldown(serverCooldown, fetchedAtMs, nowMs);
     const canTrigger = isStaff || Boolean(data?.collect_trigger.can_trigger);
 
     return (
@@ -256,9 +336,15 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                     }}
                     className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${theme.pill}`}
                 >
-                    <span className={`h-2 w-2 rounded-full ${theme.dot}`} />
-                    <Activity className="h-3.5 w-3.5 opacity-80" />
-                    <span>Pipeline {data ? pillSubtitle : ""}</span>
+                    {isSyncBusy ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-300" />
+                    ) : (
+                        <>
+                            <span className={`h-2 w-2 rounded-full ${theme.dot}`} />
+                            <Activity className="h-3.5 w-3.5 opacity-80" />
+                        </>
+                    )}
+                    <span>Pipeline {data || isSyncBusy ? pillSubtitle : ""}</span>
                 </button>
             </Tooltip>
 
@@ -354,7 +440,9 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
 
                             <div className="grid grid-cols-2 gap-2 text-xs">
                                 <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2">
-                                    <div className="text-[11px] text-zinc-400">AI Scored / Active</div>
+                                    <div className="text-[11px] text-zinc-400">
+                                        AI Scored / Active
+                                    </div>
                                     <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-zinc-100">
                                         {data.jobs.ai_scored_count} / {data.jobs.active_count}
                                     </div>
@@ -399,12 +487,21 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                                 <div className="space-y-2 border-t border-zinc-800/80 pt-3">
                                     <button
                                         type="button"
-                                        disabled={syncing || cooldownRemaining > 0}
+                                        disabled={isSyncBusy || cooldownRemaining > 0}
                                         onClick={() => void handleTriggerSync()}
                                         className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-medium text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
-                                        <Play className="h-3.5 w-3.5" />
-                                        {getSyncButtonLabel(syncing, cooldownRemaining)}
+                                        {isSyncBusy ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                            <Play className="h-3.5 w-3.5" />
+                                        )}
+                                        {getSyncButtonLabel(
+                                            triggering,
+                                            isRunning,
+                                            elapsedRunSeconds,
+                                            cooldownRemaining,
+                                        )}
                                     </button>
                                     {syncFeedback && (
                                         <p className="text-center text-xs text-zinc-300">

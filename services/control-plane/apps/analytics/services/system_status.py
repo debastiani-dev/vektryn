@@ -9,7 +9,10 @@ from django.db.models import Exists, Max, OuterRef, Sum
 import redis
 
 from apps.analytics.models.analytics import CollectorRunLog, StackTrendDaily
-from apps.analytics.services.collector_trigger import get_collect_cooldown_remaining
+from apps.analytics.services.collector_trigger import (
+    get_collect_cooldown_remaining,
+    get_collect_running_state,
+)
 from apps.jobs.models.jobs import JobPosting
 from apps.matching.models.matching import MatchScore
 from apps.resumes.models.resumes import ResumeProfile
@@ -327,6 +330,8 @@ def build_system_status_payload(user) -> dict[str, Any]:
         dlq=dlq_health,
     )
 
+    is_running, running_started_at = get_collect_running_state(last_collect_at)
+
     return {
         "overall_status": overall_status,
         "last_collect_at": last_collect_at.isoformat() if last_collect_at else None,
@@ -337,6 +342,8 @@ def build_system_status_payload(user) -> dict[str, Any]:
         "dlq": dlq_health,
         "collect_trigger": {
             "can_trigger": bool(getattr(user, "is_staff", False)),
+            "is_running": is_running,
+            "running_started_at": running_started_at,
             "cooldown_remaining_seconds": get_collect_cooldown_remaining(),
         },
     }

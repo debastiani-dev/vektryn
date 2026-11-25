@@ -736,7 +736,11 @@ async def test_collector_pre_dedup_hash_parity_log_persistence_and_retention():
         )
 
     assert count == 1
-    assert any("INSERT INTO analytics_collectorrunlog" in s for s in executed_sql)
+    insert_queries = [
+        s for s in executed_sql if "INSERT INTO analytics_collectorrunlog" in s
+    ]
+    assert len(insert_queries) == 1
+    assert "uuid" not in insert_queries[0]
     assert any(
         "DELETE FROM analytics_collectorrunlog WHERE ran_at < %s" in s
         for s in executed_sql

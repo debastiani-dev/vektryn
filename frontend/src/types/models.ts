@@ -245,6 +245,8 @@ export interface PipelineStatusResponse {
     };
     collect_trigger: {
         can_trigger: boolean;
+        is_running?: boolean;
+        running_started_at?: string | null;
         cooldown_remaining_seconds: number;
     };
 }

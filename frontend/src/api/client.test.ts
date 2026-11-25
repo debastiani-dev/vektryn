@@ -206,7 +206,12 @@ describe("vektrynApi", () => {
                             latest_updated_at: "2026-11-25T01:00:00Z",
                         },
                         dlq: { status: "healthy", recent_24h_count: 0, total_count: 0 },
-                        collect_trigger: { can_trigger: true, cooldown_remaining_seconds: 0 },
+                        collect_trigger: {
+                            can_trigger: true,
+                            is_running: false,
+                            running_started_at: null,
+                            cooldown_remaining_seconds: 0,
+                        },
                     }),
                     { status: 200, headers: { "Content-Type": "application/json" } },
                 ),

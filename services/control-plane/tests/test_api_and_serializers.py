@@ -1772,6 +1772,18 @@ def test_system_collect_trigger_staff_gate_atomic_cooldown_and_rollback(settings
         assert ok_resp.status_code == 202
         assert ok_resp.json()["execution_id"] == "exec-123"
         assert ok_resp.json()["mode"] == "cloud_run_job"
+        assert collector_trigger.COLLECT_RUNNING_KEY in lock_state
+
+        fake_redis.get.side_effect = lambda key: lock_state.get(key)
+        is_running, started_at = collector_trigger.get_collect_running_state()
+        assert is_running is True
+        assert started_at is not None
+
+        # Once a CollectorRunLog lands after started_at, running marker auto-clears
+        is_running_after, _ = collector_trigger.get_collect_running_state(
+            datetime.now(UTC) + timedelta(seconds=5)
+        )
+        assert is_running_after is False
 
         # Second immediate click hits atomic SET NX EX cooldown -> 429 + Retry-After
         cooldown_resp = client.post(collect_url)
