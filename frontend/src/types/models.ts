@@ -158,3 +158,12 @@ export interface PaginatedResponse<T> {
     previous: string | null;
     results: T[];
 }
+
+export interface MatchScoreSummary {
+    strong_fit_count: number;
+    alert_threshold_count: number;
+}
+
+export interface MatchScoreListResponse extends PaginatedResponse<MatchScore> {
+    summary?: MatchScoreSummary;
+}

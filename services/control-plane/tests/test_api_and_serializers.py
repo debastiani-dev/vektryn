@@ -310,3 +310,91 @@ def test_control_plane_sentry_gated_by_dsn(monkeypatch):
             assert cp_telemetry.configure_sentry("vektryn-control-plane") is True
             mock_init.assert_called_once()
             mock_tag.assert_called_once_with("service", "vektryn-control-plane")
+
+
+@pytest.mark.django_db
+def test_matches_endpoint_returns_global_summary_totals_across_pages():
+    user = User.objects.create_user(username="heidi", password="pw")
+    other = User.objects.create_user(username="ivan", password="pw")
+
+    resume = ResumeProfile.objects.create(
+        user=user,
+        label="Primary Backend",
+        raw_text="Python Django Kafka",
+        content_hash="1" * 64,
+    )
+    other_resume = ResumeProfile.objects.create(
+        user=other,
+        label="Other Resume",
+        raw_text="Go Rust",
+        content_hash="2" * 64,
+    )
+
+    # Create 27 matches for user (> PAGE_SIZE=25) so pagination splits across 2 pages:
+    # 10 strong (fit_score=85), 8 alert-only (fit_score=75), 6 below threshold (fit_score=50),
+    # and 3 unevaluated (fit_score=None).
+    scores = [85] * 10 + [75] * 8 + [50] * 6 + [None] * 3
+    for idx, score in enumerate(scores):
+        job = JobPosting.objects.create(
+            ats_source=ATSSource.GREENHOUSE,
+            external_id=f"gh-page-{idx}",
+            content_hash=f"{idx:064x}",
+            title=f"Engineer {idx}",
+            company_name="Acme",
+            apply_url=f"https://example.com/jobs/{idx}",
+            raw_html_gcs_uri=f"file:///tmp/{idx}.html",
+            description_clean="Backend role.",
+        )
+        MatchScore.objects.create(
+            job_posting=job,
+            resume_profile=resume,
+            cosine_similarity=0.80,
+            fit_score=score,
+            resume_content_hash=resume.content_hash,
+        )
+
+    # Add a high-scoring match for another user to verify IDOR isolation in summary counts
+    other_job = JobPosting.objects.create(
+        ats_source=ATSSource.ASHBY,
+        external_id="ash-other-1",
+        content_hash="f" * 64,
+        title="Other Role",
+        company_name="OtherCo",
+        apply_url="https://example.com/jobs/other",
+        raw_html_gcs_uri="file:///tmp/other.html",
+        description_clean="Other role.",
+    )
+    MatchScore.objects.create(
+        job_posting=other_job,
+        resume_profile=other_resume,
+        cosine_similarity=0.95,
+        fit_score=95,
+        resume_content_hash=other_resume.content_hash,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    page1 = client.get("/api/v1/matches/?page=1")
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert body1["count"] == 27
+    assert len(body1["results"]) == 25
+    assert body1["summary"] == {"strong_fit_count": 10, "alert_threshold_count": 18}
+
+    # Page 2 has only 2 rows, yet summary must still report totals across all 27 matches
+    page2 = client.get("/api/v1/matches/?page=2")
+    assert page2.status_code == 200
+    body2 = page2.json()
+    assert len(body2["results"]) == 2
+    assert body2["summary"] == {"strong_fit_count": 10, "alert_threshold_count": 18}
+
+    # Filters apply consistently to both count and summary
+    filtered = client.get("/api/v1/matches/?min_fit_score=80")
+    assert filtered.status_code == 200
+    filtered_body = filtered.json()
+    assert filtered_body["count"] == 10
+    assert filtered_body["summary"] == {
+        "strong_fit_count": 10,
+        "alert_threshold_count": 10,
+    }
