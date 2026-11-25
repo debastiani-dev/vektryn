@@ -574,3 +574,73 @@ async def test_ingest_accepts_manual_source_and_lifecycle_skips_mailto(monkeypat
     assert closed_id is None
     mock_http.get.assert_not_awaited()
     assert "apply_url LIKE 'http://%'" in _FETCH_ACTIVE_SQL
+
+
+def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
+    job_uuid = uuid4()
+    resume_uuid = uuid4()
+    event = JobEnrichedEvent(
+        ats_source=ATSSource.MANUAL,
+        external_id="manual-revolut-1",
+        content_hash="b" * 64,
+        title="Software Engineer (Python)",
+        company_name="Revolut",
+        apply_url="https://revolut.example/jobs/1",
+        raw_html_gcs_uri="gs://bucket/manual.html",
+        location_raw="London, UK",
+        description_clean="Build Python distributed systems.",
+        seniority="senior",
+        contract_type="unknown",
+        region_eligibility=["europe", "emea"],
+        tech_stack=["python", "postgresql"],
+        embedding=[0.01] * EMBEDDING_DIMENSIONS,
+    )
+
+    fake_cursor = MagicMock()
+    fake_cursor.__enter__.return_value = fake_cursor
+    fake_cursor.fetchone.side_effect = [
+        (job_uuid,),
+        (uuid4(), None),
+    ]
+    fake_cursor.fetchall.return_value = [
+        (
+            resume_uuid,
+            42,
+            "Primary",
+            "Senior Python Engineer",
+            "hash" + "0" * 60,
+            ["python", "postgresql"],
+            ["senior"],
+            ["pj"],
+            ["brazil", "latam"],  # Does not overlap europe/emea
+            70,
+            0.73,
+        )
+    ]
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.cursor.return_value = fake_cursor
+
+    eval_result = MagicMock(
+        fit_score=78,
+        matched_skills=["python", "postgresql"],
+        missing_keywords=["go"],
+        talking_points=["Highlight distributed systems."],
+        gap_summary="Strong backend fit.",
+    )
+    fake_gemini = MagicMock()
+    fake_gemini.evaluate_resume_fit = AsyncMock(
+        return_value=(eval_result, "gemini-4-hydrogen")
+    )
+    fake_producer = MagicMock()
+
+    with (
+        patch("stream_edge.workers.matcher.psycopg.connect", return_value=fake_conn),
+        patch("stream_edge.workers.matcher.register_vector"),
+    ):
+        _upsert_job_and_score_sync(
+            enriched=event, gemini=fake_gemini, producer=fake_producer
+        )
+
+    fake_gemini.evaluate_resume_fit.assert_awaited_once()
+    fake_producer._publish_sync.assert_called_once()

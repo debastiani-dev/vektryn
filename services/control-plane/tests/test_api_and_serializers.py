@@ -817,6 +817,37 @@ def test_manual_import_html_json_ld_extraction_and_snapshot_cap():
             "https://linkedin.example/jobs/1",
         )
 
+    # Hosted ATS URLs (e.g. job-boards.greenhouse.io/canonical/...) resolve company from title or path slug
+    gh_html = """
+    <html>
+      <head>
+        <meta property="og:site_name" content="Job Boards" />
+        <title>Job Application for Software Developer (Backend SaaS) at Canonical</title>
+      </head>
+      <body>
+        <main>
+          <h1>Software Developer (Backend SaaS)</h1>
+          <p>Build scalable Python, Django, PostgreSQL, and Ubuntu fleet services with distributed remote teams.</p>
+        </main>
+      </body>
+    </html>
+    """
+    gh_extracted = extract_job_from_html(
+        gh_html, "https://job-boards.greenhouse.io/canonical/jobs/4647417?gh_src=abc"
+    )
+    assert gh_extracted.company_name == "Canonical"
+
+    slug_html = """
+    <html>
+      <head><title>Senior Backend Engineer</title></head>
+      <body><main><p>Build Python, Django, Kafka, and PostgreSQL cloud services for global engineering teams.</p></main></body>
+    </html>
+    """
+    slug_extracted = extract_job_from_html(
+        slug_html, "https://jobs.lever.co/stripe-payments/12345"
+    )
+    assert slug_extracted.company_name == "Stripe Payments"
+
 
 @pytest.mark.django_db
 def test_manual_import_endpoint_url_email_dedup_reactivate_and_guards(settings):

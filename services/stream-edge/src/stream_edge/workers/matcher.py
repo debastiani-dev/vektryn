@@ -27,6 +27,7 @@ from stream_edge.metrics import (
 )
 from stream_edge.telemetry import configure_tracing
 from vektryn_contracts import (
+    ATSSource,
     JobEnrichedEvent,
     JobMatchAlertEvent,
     JobRescoreEvent,
@@ -65,6 +66,7 @@ class _JobCandidate:
     contract_type: str
     region_eligibility: list[str]
     tech_stack: list[str]
+    ats_source: str = ""
 
 
 def _parse_json_list(raw: list[str] | str | None) -> list[str]:
@@ -328,7 +330,8 @@ def _score_and_persist_pair(
     producer: KafkaEventProducer,
     replace_evaluation: bool = False,
 ) -> None:
-    should_score = (
+    is_manual = job.ats_source == ATSSource.MANUAL.value
+    should_score = is_manual or (
         cosine_val >= settings.cosine_similarity_threshold
         and _matches_profile_constraints(
             seniority=job.seniority,
@@ -425,6 +428,7 @@ def _upsert_job_and_score_sync(
                 contract_type=enriched.contract_type.value,
                 region_eligibility=[r.value for r in enriched.region_eligibility],
                 tech_stack=enriched.tech_stack,
+                ats_source=enriched.ats_source.value,
             )
 
             cur.execute(
@@ -510,7 +514,8 @@ def _select_rescore_candidates(
                 j.contract_type,
                 j.region_eligibility,
                 j.tech_stack,
-                GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim
+                GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
+                j.ats_source
             FROM jobs_jobposting j
             LEFT JOIN matching_matchscore m
               ON m.job_posting_id = j.uuid
@@ -540,7 +545,8 @@ def _select_rescore_candidates(
             j.contract_type,
             j.region_eligibility,
             j.tech_stack,
-            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim
+            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
+            j.ats_source
         FROM jobs_jobposting j
         INNER JOIN matching_matchscore m
           ON m.job_posting_id = j.uuid
@@ -573,7 +579,8 @@ def _select_rescore_candidates(
             j.contract_type,
             j.region_eligibility,
             j.tech_stack,
-            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim
+            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
+            j.ats_source
         FROM jobs_jobposting j
         WHERE j.is_deleted = FALSE
           AND j.is_active = TRUE
@@ -656,18 +663,21 @@ def _rescore_resume_sync(
             )
 
             processed = 0
-            for (
-                job_uuid,
-                title,
-                company_name,
-                apply_url,
-                description_clean,
-                seniority,
-                contract_type,
-                region_eligibility,
-                tech_stack,
-                cosine_sim,
-            ) in candidates:
+            for row in candidates:
+                (
+                    job_uuid,
+                    title,
+                    company_name,
+                    apply_url,
+                    description_clean,
+                    seniority,
+                    contract_type,
+                    region_eligibility,
+                    tech_stack,
+                    cosine_sim,
+                    *rest,
+                ) = row
+                ats_source = str(rest[0]) if rest else ""
                 candidate = _JobCandidate(
                     uuid=job_uuid,
                     title=title,
@@ -678,6 +688,7 @@ def _rescore_resume_sync(
                     contract_type=contract_type,
                     region_eligibility=list(region_eligibility or []),
                     tech_stack=_parse_json_list(tech_stack),
+                    ats_source=ats_source,
                 )
                 _score_and_persist_pair(
                     cur,

@@ -155,7 +155,7 @@ export function GapAnalysisDrawer({
 
     const aiFitTooltip = hasAiScore
         ? "Stage 2 Gemini AI fit score (0–100%) evaluating tech stack, seniority, and experience alignment against your active resume."
-        : "Stage 1 vector match only. Roles below the semantic similarity threshold skip automatic Gemini scoring to save tokens.";
+        : "Stage 1 vector match only. Automated roles below the similarity threshold or outside your resume's targeting filters (seniority, contract, or region) skip automatic Gemini scoring to save tokens.";
     const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
     const alertTooltip = `Meets or exceeds your ${minAlertScore}% alert threshold for this resume profile.`;
 
