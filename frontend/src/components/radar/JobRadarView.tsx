@@ -720,6 +720,7 @@ function RadarKpiGrid({
     totalCount,
     strongCount,
     alertCount,
+    alertThresholdDisplay,
     savedCount,
 }: Readonly<{
     loading: boolean;
@@ -727,8 +728,18 @@ function RadarKpiGrid({
     totalCount: number;
     strongCount: number;
     alertCount: number;
+    alertThresholdDisplay: number | null;
     savedCount: number;
 }>) {
+    const alertTileLabel =
+        alertThresholdDisplay === null
+            ? "Alert Threshold"
+            : `Alert Threshold (${alertThresholdDisplay}%+)`;
+    const alertTileTooltip =
+        alertThresholdDisplay === null
+            ? "Roles meeting each resume profile's configured real-time match alert threshold"
+            : `Roles meeting your configured ${alertThresholdDisplay}%+ real-time match alert threshold`;
+
     return (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Tooltip
@@ -766,13 +777,10 @@ function RadarKpiGrid({
                 </div>
             </Tooltip>
 
-            <Tooltip
-                content="Roles meeting the 70%+ threshold used for real-time match alerts"
-                className="block"
-            >
+            <Tooltip content={alertTileTooltip} className="block">
                 <div className="rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
                     <p className="text-xs font-medium uppercase tracking-wider text-violet-300/80">
-                        Alert Threshold (70%+)
+                        {alertTileLabel}
                     </p>
                     <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-violet-300">
                         {loading ? "—" : alertCount}
@@ -979,7 +987,11 @@ export function JobRadarView() {
                 );
                 setAlertThresholdCount(
                     matchRes.summary?.alert_threshold_count ??
-                        matchRes.results.filter((m) => (m.fit_score ?? 0) >= 70).length,
+                        matchRes.results.filter(
+                            (m) =>
+                                (m.fit_score ?? -1) >=
+                                (m.resume_min_alert_score ?? DEFAULT_MIN_ALERT_SCORE),
+                        ).length,
                 );
                 setHasNext(Boolean(matchRes.next));
                 setHasPrevious(Boolean(matchRes.previous));
@@ -1181,7 +1193,23 @@ export function JobRadarView() {
 
     function resolveMinAlertScore(match: MatchScore | null): number {
         if (!match) return activeResumeMinAlertScore;
-        return minAlertByResumeId[match.resume_profile_uuid] ?? activeResumeMinAlertScore;
+        return (
+            match.resume_min_alert_score ??
+            minAlertByResumeId[match.resume_profile_uuid] ??
+            activeResumeMinAlertScore
+        );
+    }
+
+    let alertThresholdDisplay: number | null = null;
+    if (resumeFilter && minAlertByResumeId[resumeFilter] !== undefined) {
+        alertThresholdDisplay = minAlertByResumeId[resumeFilter];
+    } else if (resumes.length > 0) {
+        const distinctThresholds = new Set(resumes.map((r) => r.min_alert_score));
+        if (distinctThresholds.size === 1) {
+            alertThresholdDisplay = resumes[0].min_alert_score;
+        }
+    } else {
+        alertThresholdDisplay = DEFAULT_MIN_ALERT_SCORE;
     }
 
     const strongCount = strongFitCount;
@@ -1378,6 +1406,7 @@ export function JobRadarView() {
                     totalCount={totalCount}
                     strongCount={strongCount}
                     alertCount={alertCount}
+                    alertThresholdDisplay={alertThresholdDisplay}
                     savedCount={savedCount}
                 />
             </header>

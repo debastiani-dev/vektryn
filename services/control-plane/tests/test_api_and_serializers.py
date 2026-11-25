@@ -468,6 +468,19 @@ def test_matches_endpoint_returns_global_summary_totals_across_pages():
         "alert_threshold_count": 10,
     }
 
+    # alert_threshold_count dynamically tracks each resume's configured min_alert_score
+    resume.min_alert_score = 85
+    resume.save(update_fields=["min_alert_score", "modified_at"])
+    custom_threshold = client.get("/api/v1/matches/?page=1")
+    assert custom_threshold.status_code == 200
+    custom_body = custom_threshold.json()
+    assert custom_body["results"][0]["resume_min_alert_score"] == 85
+    assert custom_body["summary"] == {
+        "ai_scored_count": 24,
+        "strong_fit_count": 10,
+        "alert_threshold_count": 10,
+    }
+
 
 def test_rescore_publisher_raises_on_delivery_error_or_flush_timeout(settings):
     settings.KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"

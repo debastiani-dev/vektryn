@@ -12,6 +12,9 @@ class MatchScoreSerializer(serializers.ModelSerializer):
     resume_profile_label = serializers.CharField(
         source="resume_profile.label", read_only=True
     )
+    resume_min_alert_score = serializers.IntegerField(
+        source="resume_profile.min_alert_score", read_only=True
+    )
     is_stale = serializers.SerializerMethodField()
 
     class Meta:
@@ -21,6 +24,7 @@ class MatchScoreSerializer(serializers.ModelSerializer):
             "job_posting",
             "resume_profile_uuid",
             "resume_profile_label",
+            "resume_min_alert_score",
             "cosine_similarity",
             "fit_score",
             "matched_skills",
