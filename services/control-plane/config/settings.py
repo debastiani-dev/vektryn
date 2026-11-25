@@ -58,6 +58,10 @@ class ControlPlaneSettings(BaseSettings):
     copilot_gemini_timeout_ms: int = 25000
     copilot_rate_limit_max_requests: int = 15
     copilot_rate_limit_window_seconds: int = 300
+    auth_login_acct_max_failures: int = 5
+    auth_login_ip_max_failures: int = 20
+    auth_login_lockout_window_seconds: int = 900
+    auth_login_trusted_proxy_count: int = 1
     hybrid_search_min_similarity: float = 0.60
 
     stream_auth_secret: str = Field(
@@ -264,6 +268,10 @@ COPILOT_GEMINI_FALLBACK_MODEL = (
 COPILOT_GEMINI_TIMEOUT_MS = max(5000, int(env.copilot_gemini_timeout_ms))
 COPILOT_RATE_LIMIT_MAX_REQUESTS = max(1, int(env.copilot_rate_limit_max_requests))
 COPILOT_RATE_LIMIT_WINDOW_SECONDS = max(1, int(env.copilot_rate_limit_window_seconds))
+AUTH_LOGIN_ACCT_MAX_FAILURES = max(1, int(env.auth_login_acct_max_failures))
+AUTH_LOGIN_IP_MAX_FAILURES = max(1, int(env.auth_login_ip_max_failures))
+AUTH_LOGIN_LOCKOUT_WINDOW_SECONDS = max(1, int(env.auth_login_lockout_window_seconds))
+AUTH_LOGIN_TRUSTED_PROXY_COUNT = max(0, int(env.auth_login_trusted_proxy_count))
 HYBRID_SEARCH_MIN_SIMILARITY = env.hybrid_search_min_similarity
 
 STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
