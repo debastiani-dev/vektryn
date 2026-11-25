@@ -411,6 +411,7 @@ interface ImportBannerState {
     externalId?: string;
     startedAt?: number;
     job?: JobPostingSummary | null;
+    match?: MatchScore | null;
 }
 
 function formatElapsedDuration(elapsedSeconds: number): string {
@@ -429,7 +430,7 @@ function ImportStatusBanner({
     onDismiss,
 }: Readonly<{
     banner: ImportBannerState;
-    onViewJob: (job: JobPostingSummary) => void;
+    onViewJob: (job: JobPostingSummary, match?: MatchScore | null) => void;
     onRetryWait: () => void;
     onDismiss: () => void;
 }>) {
@@ -484,7 +485,7 @@ function ImportStatusBanner({
                     <button
                         type="button"
                         onClick={() => {
-                            if (banner.job) onViewJob(banner.job);
+                            if (banner.job) onViewJob(banner.job, banner.match);
                         }}
                         className="rounded-lg border border-emerald-500/35 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/25"
                     >
@@ -559,6 +560,37 @@ async function fetchImportedJobByExternalId(
     }
 }
 
+async function fetchImportedMatchByExternalId(externalId: string): Promise<MatchScore | null> {
+    try {
+        const res = await vektrynApi.listMatches(
+            `?external_id=${encodeURIComponent(externalId)}`,
+        );
+        return res.results[0] ?? null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchExistingImportedRecords(
+    jobUuid: string | null,
+    externalId: string,
+): Promise<{ job: JobPostingSummary | null; match: MatchScore | null }> {
+    const jobPromise = jobUuid
+        ? vektrynApi.getJob(jobUuid).catch(() => null)
+        : Promise.resolve(null);
+    const [job, match] = await Promise.all([
+        jobPromise,
+        fetchImportedMatchByExternalId(externalId),
+    ]);
+    return { job: job ?? match?.job_posting ?? null, match };
+}
+
+type ImportPersistedHandler = (
+    externalId: string,
+    persisted: JobPostingSummary,
+    match: MatchScore | null,
+) => void;
+
 function useCrossTabPendingImportSync(
     onSynced: (banner: ImportBannerState | null, cleared: boolean) => void,
 ) {
@@ -577,7 +609,7 @@ function useCrossTabPendingImportSync(
 class PendingImportPoller {
     private readonly externalId: string;
     private readonly startedAt: number;
-    private readonly onPersisted: (externalId: string, persisted: JobPostingSummary) => void;
+    private readonly onPersisted: ImportPersistedHandler;
     private readonly onTimeout: (externalId: string) => void;
     private cancelled = false;
     private inFlight = false;
@@ -587,7 +619,7 @@ class PendingImportPoller {
     constructor(
         externalId: string,
         startedAt: number,
-        onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
+        onPersisted: ImportPersistedHandler,
         onTimeout: (externalId: string) => void,
     ) {
         this.externalId = externalId;
@@ -625,12 +657,19 @@ class PendingImportPoller {
         this.inFlight = true;
         this.attempts += 1;
         const persisted = await fetchImportedJobByExternalId(this.externalId);
-        this.inFlight = false;
-        if (this.cancelled) return;
-        if (persisted) {
-            this.onPersisted(this.externalId, persisted);
+        if (this.cancelled) {
+            this.inFlight = false;
             return;
         }
+        if (persisted) {
+            const match = await fetchImportedMatchByExternalId(this.externalId);
+            this.inFlight = false;
+            if (!this.cancelled) {
+                this.onPersisted(this.externalId, persisted, match);
+            }
+            return;
+        }
+        this.inFlight = false;
         if (Date.now() - this.startedAt >= IMPORT_POLL_MAX_DURATION_MS) {
             this.onTimeout(this.externalId);
             return;
@@ -643,7 +682,7 @@ class PendingImportPoller {
 
 function useImportJobPolling(
     importBanner: ImportBannerState | null,
-    onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
+    onPersisted: ImportPersistedHandler,
     onTimeout: (externalId: string) => void,
 ) {
     useEffect(() => {
@@ -778,7 +817,12 @@ export function JobRadarView() {
         setSelectedJobMatch(match);
     }
 
-    function openImportedJobListing(job: JobPostingSummary) {
+    function openImportedJobListing(job: JobPostingSummary, match?: MatchScore | null) {
+        const resolvedMatch = match ?? matches.find((m) => m.job_posting.uuid === job.uuid) ?? null;
+        if (resolvedMatch) {
+            openJobListing(resolvedMatch);
+            return;
+        }
         setSelectedGapMatch(null);
         setSelectedJobMatch(null);
         setSelectedImportedJob(job);
@@ -886,7 +930,7 @@ export function JobRadarView() {
     }, [page, minScore, resumeFilter, evaluatedOnly, reloadTick]);
 
     const handleImportedPersisted = useCallback(
-        (externalId: string, persisted: JobPostingSummary) => {
+        (externalId: string, persisted: JobPostingSummary, match: MatchScore | null) => {
             clearPendingImport(externalId);
             setReloadTick((prev) => prev + 1);
             setImportBanner((prev) =>
@@ -897,6 +941,7 @@ export function JobRadarView() {
                           title: persisted.title,
                           company: persisted.company_name,
                           job: persisted,
+                          match,
                           message: "Enriched and scored — Job Radar has been refreshed.",
                       }
                     : prev,
@@ -978,20 +1023,17 @@ export function JobRadarView() {
 
         clearPendingImport(res.external_id);
         setReloadTick((prev) => prev + 1);
-        let existingJob: JobPostingSummary | null = null;
-        if (res.job_posting_uuid) {
-            try {
-                existingJob = await vektrynApi.getJob(res.job_posting_uuid);
-            } catch {
-                existingJob = null;
-            }
-        }
+        const { job: existingJob, match: existingMatch } = await fetchExistingImportedRecords(
+            res.job_posting_uuid,
+            res.external_id,
+        );
         setImportBanner({
             phase: res.status === "reactivated" ? "ready" : "info",
             title: res.title,
             company: res.company_name,
             externalId: res.external_id,
             job: existingJob,
+            match: existingMatch,
             message:
                 res.status === "reactivated"
                     ? "Previously closed role reactivated and refreshed in Job Radar."
