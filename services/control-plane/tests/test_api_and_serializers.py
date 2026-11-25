@@ -1,19 +1,21 @@
 from datetime import UTC, datetime, timedelta
-import socket
 from io import BytesIO
+import json
 from pathlib import Path
+import socket
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import connection
 import httpx
 import pytest
 from rest_framework.test import APIClient, APIRequestFactory
 
 from apps.jobs.models.jobs import JobPosting
-from apps.jobs.services import manual_import
+from apps.jobs.services import hybrid_search, manual_import
 from apps.jobs.services.manual_import import (
     MAX_SNAPSHOT_HTML_BYTES,
     ManualImportFetchError,
@@ -1214,3 +1216,327 @@ def test_matches_ordering_puts_null_fit_scores_and_null_posted_at_last():
         "scored-mid",
         "unscored-lo",
     ]
+
+
+def _unit_vec(
+    axis: int, weight: float = 1.0, secondary: tuple[int, float] | None = None
+) -> list[float]:
+    vec = [0.0] * EMBEDDING_DIMENSIONS
+    vec[axis] = weight
+    if secondary is not None:
+        vec[secondary[0]] = secondary[1]
+    return vec
+
+
+@pytest.mark.django_db
+def test_jobposting_search_vector_trigger_and_negation_exclusion():
+    user = User.objects.create_user(username="fts-trigger-user", password="pw")
+    orm_job = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE.value,
+        external_id="fts-orm-1",
+        title="Senior Python Backend Engineer",
+        company_name="Vektryn Labs",
+        apply_url="https://vektryn.example/jobs/1",
+        description_clean="Build distributed systems with DRF, KRaft, pgvector, and PJ contract.",
+        tech_stack=["python", "drf", "kraft", "pgvector"],
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+    orm_job.refresh_from_db()
+    assert orm_job.search_vector is not None
+
+    # Simulate stream-edge matcher-worker raw psycopg INSERT bypassing Django ORM
+    now = datetime.now(UTC)
+    raw_uuid = uuid4()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO jobs_jobposting (
+                uuid, created_at, modified_at, is_deleted,
+                ats_source, external_id, content_hash,
+                title, company_name, apply_url, raw_html_gcs_uri,
+                location_raw, description_clean,
+                seniority, contract_type, region_eligibility,
+                salary_currency, tech_stack, is_active
+            ) VALUES (
+                %s, %s, %s, FALSE,
+                %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s,
+                %s, %s, %s,
+                %s, %s::jsonb, TRUE
+            )
+            """,
+            [
+                raw_uuid,
+                now,
+                now,
+                ATSSource.GREENHOUSE.value,
+                "fts-raw-intern",
+                uuid4().hex,
+                "Python Backend Intern",
+                "StartupCo",
+                "https://startup.example/jobs/intern",
+                "",
+                "Remote",
+                "Entry-level Python and DRF internship role.",
+                SeniorityLevel.INTERN.value,
+                ContractType.CLT.value,
+                [RegionEligibility.BRAZIL.value],
+                "",
+                json.dumps(["python", "drf"]),
+            ],
+        )
+
+    raw_job = JobPosting.objects.get(uuid=raw_uuid)
+    assert raw_job.search_vector is not None
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    jobs_url = "/api/v1/jobs/"
+
+    with patch(
+        "apps.jobs.services.hybrid_search.embed_search_query", return_value=None
+    ):
+        resp_tokens = client.get(f"{jobs_url}?search=KRaft pgvector")
+        assert resp_tokens.status_code == 200
+        assert resp_tokens.json()["search_mode"] == "keyword"
+        assert [r["external_id"] for r in resp_tokens.json()["results"]] == [
+            "fts-orm-1"
+        ]
+
+        # Single english config prevents negation bypass (-interns excludes singular "intern")
+        resp_excl = client.get(f"{jobs_url}?search=python -interns")
+        assert resp_excl.status_code == 200
+        assert [r["external_id"] for r in resp_excl.json()["results"]] == ["fts-orm-1"]
+
+
+@pytest.mark.django_db
+def test_hybrid_search_rrf_on_jobs_and_matches_with_filters_and_ordering(settings):
+    settings.HYBRID_SEARCH_MIN_SIMILARITY = 0.60
+    user = User.objects.create_user(username="rrf-user", password="pw")
+    resume = ResumeProfile.objects.create(
+        user=user,
+        label="Backend",
+        raw_text="Python Django DRF Kafka",
+        content_hash=uuid4().hex,
+        extracted_skills=["python", "django", "drf"],
+    )
+
+    query_vec = _unit_vec(0, 1.0)
+    both_vec = _unit_vec(0, 1.0)  # cosine = 1.0
+    semantic_only_vec = _unit_vec(0, 0.95, (1, 0.31225))  # cosine ~= 0.95
+    orthogonal_vec = _unit_vec(2, 1.0)  # cosine = 0.0
+
+    job_both = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE.value,
+        external_id="rrf-both",
+        title="Senior DRF Backend Engineer",
+        company_name="AlphaCorp",
+        apply_url="https://alpha.example/jobs/both",
+        description_clean="Build DRF APIs and PostgreSQL services.",
+        seniority=SeniorityLevel.SENIOR.value,
+        contract_type=ContractType.PJ.value,
+        region_eligibility=[RegionEligibility.BRAZIL.value],
+        tech_stack=["python", "drf"],
+        embedding=both_vec,
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+    job_kw = JobPosting.objects.create(
+        ats_source=ATSSource.LEVER.value,
+        external_id="rrf-keyword",
+        title="DRF API Maintainer",
+        company_name="BetaCorp",
+        apply_url="https://beta.example/jobs/kw",
+        description_clean="Maintain legacy DRF endpoints.",
+        seniority=SeniorityLevel.MID.value,
+        contract_type=ContractType.CLT.value,
+        region_eligibility=[RegionEligibility.LATAM.value],
+        tech_stack=["python", "drf"],
+        embedding=orthogonal_vec,
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+    job_sem = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE.value,
+        external_id="rrf-semantic",
+        title="Distributed Platform Architect",
+        company_name="GammaCorp",
+        apply_url="https://gamma.example/jobs/sem",
+        description_clean="Design scalable REST microservices in Python.",
+        seniority=SeniorityLevel.SENIOR.value,
+        contract_type=ContractType.PJ.value,
+        region_eligibility=[RegionEligibility.BRAZIL.value],
+        tech_stack=["python", "kafka"],
+        embedding=semantic_only_vec,
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+    job_unrelated = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE.value,
+        external_id="rrf-unrelated",
+        title="iOS Swift Designer",
+        company_name="DeltaCorp",
+        apply_url="https://delta.example/jobs/ios",
+        description_clean="Craft mobile SwiftUI interfaces.",
+        seniority=SeniorityLevel.SENIOR.value,
+        contract_type=ContractType.PJ.value,
+        region_eligibility=[RegionEligibility.BRAZIL.value],
+        tech_stack=["swift"],
+        embedding=orthogonal_vec,
+        is_active=True,
+        content_hash=uuid4().hex,
+    )
+
+    now = datetime.now(UTC)
+    m_both = MatchScore.objects.create(
+        job_posting=job_both,
+        resume_profile=resume,
+        cosine_similarity=0.82,
+        fit_score=75,
+    )
+    m_kw = MatchScore.objects.create(
+        job_posting=job_kw,
+        resume_profile=resume,
+        cosine_similarity=0.70,
+        fit_score=92,
+    )
+    m_sem = MatchScore.objects.create(
+        job_posting=job_sem,
+        resume_profile=resume,
+        cosine_similarity=0.88,
+        fit_score=85,
+    )
+    m_unrelated = MatchScore.objects.create(
+        job_posting=job_unrelated,
+        resume_profile=resume,
+        cosine_similarity=0.40,
+        fit_score=30,
+    )
+    for idx, match_obj in enumerate([m_both, m_kw, m_sem, m_unrelated]):
+        MatchScore.objects.filter(pk=match_obj.pk).update(
+            created_at=now + timedelta(seconds=idx * 10)
+        )
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    jobs_url = "/api/v1/jobs/"
+    matches_url = "/api/v1/matches/"
+
+    with patch(
+        "apps.jobs.services.hybrid_search.embed_search_query", return_value=query_vec
+    ):
+        # /api/v1/jobs/: RRF boosts job matching BOTH keyword and semantic to #1; excludes unrelated
+        jobs_resp = client.get(f"{jobs_url}?search=DRF")
+        assert jobs_resp.status_code == 200
+        jobs_data = jobs_resp.json()
+        assert jobs_data["search_mode"] == "hybrid"
+        job_ids = [r["external_id"] for r in jobs_data["results"]]
+        assert job_ids[0] == "rrf-both"
+        assert set(job_ids) == {"rrf-both", "rrf-keyword", "rrf-semantic"}
+
+        # Composed structured filters on /api/v1/jobs/
+        filtered_jobs_resp = client.get(
+            f"{jobs_url}?search=DRF&seniority=senior&contract_type=pj&region=brazil&tech=python"
+        )
+        assert filtered_jobs_resp.status_code == 200
+        assert [r["external_id"] for r in filtered_jobs_resp.json()["results"]] == [
+            "rrf-both",
+            "rrf-semantic",
+        ]
+
+        # /api/v1/matches/: default search orders by -rrf_score (rrf-both beats higher fit_score rrf-keyword)
+        matches_resp = client.get(f"{matches_url}?search=DRF")
+        assert matches_resp.status_code == 200
+        matches_data = matches_resp.json()
+        assert matches_data["search_mode"] == "hybrid"
+        match_ids = [r["job_posting"]["external_id"] for r in matches_data["results"]]
+        assert match_ids[0] == "rrf-both"
+        assert set(match_ids) == {"rrf-both", "rrf-keyword", "rrf-semantic"}
+        assert matches_data["summary"] == {
+            "ai_scored_count": 3,
+            "strong_fit_count": 2,
+            "alert_threshold_count": 3,
+        }
+
+        # Explicit ?ordering=-created_at overrides RRF order while keeping hybrid filter
+        ordered_resp = client.get(f"{matches_url}?search=DRF&ordering=-created_at")
+        assert ordered_resp.status_code == 200
+        assert [
+            r["job_posting"]["external_id"] for r in ordered_resp.json()["results"]
+        ] == ["rrf-semantic", "rrf-keyword", "rrf-both"]
+
+        # Structured filters + min_fit_score compose cleanly on /api/v1/matches/
+        scoped_resp = client.get(
+            f"{matches_url}?search=DRF&seniority=senior&min_fit_score=80&ats_source=greenhouse"
+        )
+        assert scoped_resp.status_code == 200
+        assert [
+            r["job_posting"]["external_id"] for r in scoped_resp.json()["results"]
+        ] == ["rrf-semantic"]
+
+    # Gibberish query with orthogonal vector returns 0 results
+    with patch(
+        "apps.jobs.services.hybrid_search.embed_search_query",
+        return_value=_unit_vec(5, 1.0),
+    ):
+        gibberish_resp = client.get(f"{matches_url}?search=zzzznonexistenttoken")
+        assert gibberish_resp.status_code == 200
+        assert gibberish_resp.json()["count"] == 0
+        assert gibberish_resp.json()["results"] == []
+
+
+@pytest.mark.django_db
+def test_hybrid_search_embedding_cache_short_query_and_fallback(settings):
+    settings.GEMINI_API_KEY = "test-live-key"
+
+    # Single-character query skips Gemini completely
+    with patch("apps.jobs.services.hybrid_search.genai.Client") as mock_client_cls:
+        assert hybrid_search.embed_search_query("a") is None
+        mock_client_cls.assert_not_called()
+
+    # Redis cache stores embedding with 5-minute (300s) TTL and avoids repeat Gemini calls
+    fake_store: dict[str, str] = {}
+    fake_redis = MagicMock()
+    fake_redis.get.side_effect = lambda key: fake_store.get(key)
+
+    def _fake_set(key: str, val: str, ex: int | None = None) -> None:
+        assert ex == hybrid_search.EMBEDDING_CACHE_TTL_SECONDS
+        fake_store[key] = val
+
+    fake_redis.set.side_effect = _fake_set
+
+    expected_vec = _unit_vec(3, 1.0)
+    mock_embed_obj = MagicMock()
+    mock_embed_obj.values = expected_vec
+    mock_embed_res = MagicMock()
+    mock_embed_res.embeddings = [mock_embed_obj]
+    mock_client = MagicMock()
+    mock_client.models.embed_content.return_value = mock_embed_res
+
+    with (
+        patch(
+            "apps.jobs.services.hybrid_search._get_redis_client",
+            return_value=fake_redis,
+        ),
+        patch(
+            "apps.jobs.services.hybrid_search.genai.Client", return_value=mock_client
+        ),
+    ):
+        first = hybrid_search.embed_search_query("Distributed   Python")
+        second = hybrid_search.embed_search_query("distributed python")
+
+    assert first == expected_vec
+    assert second == expected_vec
+    assert mock_client.models.embed_content.call_count == 1
+
+    # Upstream Gemini error degrades cleanly to None (keyword fallback) without raising
+    mock_client.models.embed_content.side_effect = RuntimeError("timeout")
+    with (
+        patch("apps.jobs.services.hybrid_search._get_redis_client", return_value=None),
+        patch(
+            "apps.jobs.services.hybrid_search.genai.Client", return_value=mock_client
+        ),
+    ):
+        assert hybrid_search.embed_search_query("kafka streams") is None

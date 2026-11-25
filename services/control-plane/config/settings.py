@@ -53,6 +53,7 @@ class ControlPlaneSettings(BaseSettings):
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_scoring_model: str = "gemini-4-hydrogen"
     gemini_fallback_scoring_model: str = "gemini-3.5-flash-lite"
+    hybrid_search_min_similarity: float = 0.60
 
     stream_auth_secret: str = Field(
         default="",
@@ -242,6 +243,7 @@ GEMINI_API_KEY = env.gemini_api_key
 GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model
 GEMINI_SCORING_MODEL = env.gemini_scoring_model
 GEMINI_FALLBACK_SCORING_MODEL = env.gemini_fallback_scoring_model
+HYBRID_SEARCH_MIN_SIMILARITY = env.hybrid_search_min_similarity
 
 STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
 STREAM_EDGE_URL = env.stream_edge_url.strip().rstrip("/")
