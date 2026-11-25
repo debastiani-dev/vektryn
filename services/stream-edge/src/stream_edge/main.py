@@ -72,7 +72,7 @@ app.add_middleware(
 app.include_router(ingest_router)
 app.include_router(alerts_router)
 app.include_router(internal_router)
-configure_sentry("vektryn-stream-edge")
+configure_sentry("stream-edge", include_fastapi=True)
 
 
 @app.get("/health", tags=["health"])

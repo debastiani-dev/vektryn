@@ -63,6 +63,7 @@ locals {
     "vektryn-gemini-api-key",
     "vektryn-ingest-api-key",
     "vektryn-stream-auth-secret",
+    "vektryn-sentry-dsn",
   ]
   stream_edge_secrets = [
     "vektryn-database-url",
@@ -71,6 +72,7 @@ locals {
     "vektryn-gemini-api-key",
     "vektryn-ingest-api-key",
     "vektryn-stream-auth-secret",
+    "vektryn-sentry-dsn",
   ]
 }
 

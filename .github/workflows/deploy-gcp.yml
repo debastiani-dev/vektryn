@@ -115,12 +115,34 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
+      - name: Configure optional Sentry source-map upload
+        id: sentry_cfg
+        if: matrix.service == 'frontend'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+        run: |
+          if [ -n "${SENTRY_AUTH_TOKEN:-}" ] && [ -n "${SENTRY_ORG:-}" ] && [ -n "${SENTRY_PROJECT:-}" ]; then
+            echo "upload_sourcemaps=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload_sourcemaps=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
+          build-args: |
+            ${{ matrix.service == 'frontend' && format('VITE_SENTRY_DSN={0}', vars.VITE_SENTRY_DSN || '') || format('SENTRY_RELEASE={0}', github.sha) }}
+            ${{ matrix.service == 'frontend' && 'VITE_SENTRY_ENVIRONMENT=production' || '' }}
+            ${{ matrix.service == 'frontend' && format('VITE_SENTRY_RELEASE={0}', github.sha) || '' }}
+            ${{ matrix.service == 'frontend' && format('VITE_SENTRY_SOURCEMAPS={0}', steps.sentry_cfg.outputs.upload_sourcemaps || 'false') || '' }}
+            ${{ matrix.service == 'frontend' && format('SENTRY_ORG={0}', vars.SENTRY_ORG || '') || '' }}
+            ${{ matrix.service == 'frontend' && format('SENTRY_PROJECT={0}', vars.SENTRY_PROJECT || '') || '' }}
+          secrets: ${{ matrix.service == 'frontend' && steps.sentry_cfg.outputs.upload_sourcemaps == 'true' && format('sentry_auth_token={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
           tags: |
             ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ matrix.service }}:${{ github.sha }}
             ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ matrix.service }}:latest
@@ -294,10 +316,11 @@ jobs:
             --quiet \
             --ssh-key-expire-after=5m \
             --ssh-flag="-T" \
-            --command="bash -s -- '${{ env.REGION }}' '${REGISTRY}/stream-edge:latest'" <<'REMOTE_EOF'
+            --command="bash -s -- '${{ env.REGION }}' '${REGISTRY}/stream-edge:latest' '${{ vars.GCP_PROJECT_ID }}'" <<'REMOTE_EOF'
           set -euo pipefail
           REGION="$1"
           IMAGE_REF="$2"
+          PROJECT_ID="$3"
 
           DOCKER_CFG="$(mktemp -d)"
           trap 'sudo rm -rf "${DOCKER_CFG}"' EXIT
@@ -305,6 +328,54 @@ jobs:
           TOKEN="$(curl -sf -H "Metadata-Flavor: Google" \
             "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
             | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
+
+          SENTRY_DSN="$(curl -sf -H "Authorization: Bearer ${TOKEN}" \
+            "https://secretmanager.googleapis.com/v1/projects/${PROJECT_ID}/secrets/vektryn-sentry-dsn/versions/latest:access" \
+            | python3 -c "import base64,json,sys; print(base64.b64decode(json.load(sys.stdin)['payload']['data']).decode('utf-8').strip())" \
+            2>/dev/null || true)"
+          if [ -n "${SENTRY_DSN}" ]; then
+            echo "vektryn-data-node: SENTRY_DSN configured=yes"
+          else
+            echo "vektryn-data-node: SENTRY_DSN configured=no"
+          fi
+
+          sudo SENTRY_DSN_VAL="${SENTRY_DSN}" python3 - <<'PY_EOF'
+          import os
+          from pathlib import Path
+
+          env_path = Path("/opt/vektryn/.env")
+          tmp_path = Path("/opt/vektryn/.env.tmp")
+          existing_lines = (
+              env_path.read_text(encoding="utf-8").splitlines()
+              if env_path.exists()
+              else []
+          )
+          managed_keys = {
+              "SENTRY_DSN",
+              "SENTRY_ENVIRONMENT",
+              "SENTRY_TRACES_SAMPLE_RATE",
+              "SENTRY_RELEASE",
+          }
+          kept = [
+              line
+              for line in existing_lines
+              if line.split("=", 1)[0].strip() not in managed_keys
+          ]
+          kept.extend(
+              [
+                  f"SENTRY_DSN={os.environ.get('SENTRY_DSN_VAL', '')}",
+                  "SENTRY_ENVIRONMENT=production",
+                  "SENTRY_TRACES_SAMPLE_RATE=0.0",
+              ]
+          )
+          os.umask(0o077)
+          fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          with os.fdopen(fd, "w", encoding="utf-8") as fh:
+              fh.write("\n".join(kept) + "\n")
+          os.chmod(tmp_path, 0o600)
+          os.replace(tmp_path, env_path)
+          os.chmod(env_path, 0o600)
+          PY_EOF
 
           printf '%s' "${TOKEN}" | sudo DOCKER_CONFIG="${DOCKER_CFG}" \
             docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"

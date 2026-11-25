@@ -7,7 +7,33 @@ RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
 COPY . .
+ARG VITE_SENTRY_DSN=""
+ARG VITE_SENTRY_ENVIRONMENT="production"
+ARG VITE_SENTRY_RELEASE=""
+ARG VITE_SENTRY_SOURCEMAPS="false"
+ARG SENTRY_ORG=""
+ARG SENTRY_PROJECT=""
+ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN} \
+    VITE_SENTRY_ENVIRONMENT=${VITE_SENTRY_ENVIRONMENT} \
+    VITE_SENTRY_RELEASE=${VITE_SENTRY_RELEASE} \
+    VITE_SENTRY_SOURCEMAPS=${VITE_SENTRY_SOURCEMAPS}
 RUN npm run build
+RUN --mount=type=secret,id=sentry_auth_token,required=false <<'EOF'
+set -eu
+if [ "$VITE_SENTRY_SOURCEMAPS" = "true" ] \
+  && [ -s /run/secrets/sentry_auth_token ] \
+  && [ -n "$SENTRY_ORG" ] \
+  && [ -n "$SENTRY_PROJECT" ]; then
+  SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token)"
+  export SENTRY_AUTH_TOKEN
+  npx --yes @sentry/cli sourcemaps inject ./dist
+  npx --yes @sentry/cli sourcemaps upload ./dist \
+    --org="$SENTRY_ORG" \
+    --project="$SENTRY_PROJECT" \
+    --release="$VITE_SENTRY_RELEASE"
+fi
+find dist -name '*.map' -delete
+EOF
 
 FROM nginx:1.27-alpine
 ENV PORT=80 \

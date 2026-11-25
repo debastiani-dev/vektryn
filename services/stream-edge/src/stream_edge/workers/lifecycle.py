@@ -12,6 +12,11 @@ from stream_edge.clients.notifications import (
     prune_expired_notifications_sync,
 )
 from stream_edge.config import settings
+from stream_edge.telemetry import (
+    capture_worker_exception,
+    configure_sentry,
+    flush_sentry,
+)
 from vektryn_contracts import NotificationKind
 
 logger = logging.getLogger(__name__)
@@ -265,8 +270,19 @@ async def run_lifecycle_check(batch_size: int = 200) -> int:
         await asyncio.to_thread(_run_notification_retention_sync, now)
 
 
-if __name__ == "__main__":
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
     )
-    asyncio.run(run_lifecycle_check())
+    configure_sentry("vektryn-lifecycle")
+    try:
+        asyncio.run(run_lifecycle_check())
+    except Exception as exc:
+        capture_worker_exception(exc, worker="vektryn-lifecycle", topic="lifecycle")
+        raise
+    finally:
+        flush_sentry(timeout=5.0)
+
+
+if __name__ == "__main__":
+    main()

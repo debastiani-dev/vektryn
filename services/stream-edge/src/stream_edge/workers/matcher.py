@@ -22,7 +22,11 @@ from stream_edge.clients.notifications import (
     persist_pipeline_error_notifications,
 )
 from stream_edge.config import settings
-from stream_edge.telemetry import configure_sentry
+from stream_edge.telemetry import (
+    capture_worker_exception,
+    configure_sentry,
+    flush_sentry,
+)
 from vektryn_contracts import (
     ATSSource,
     JobEnrichedEvent,
@@ -944,7 +948,7 @@ def _rescore_resume_sync(
 
 
 async def run_matcher_worker() -> None:
-    configure_sentry("vektryn-matcher-worker")
+    configure_sentry("matcher-worker")
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     heartbeat = WorkerHeartbeat("matcher-worker")
@@ -1007,6 +1011,11 @@ async def run_matcher_worker() -> None:
                 )
             except Exception as exc:
                 logger.exception("Failed matching message; routing to DLQ: %s", exc)
+                capture_worker_exception(
+                    exc,
+                    worker="matcher-worker",
+                    topic=msg.topic(),
+                )
                 await producer.publish_dlq(msg=msg, error=exc)
                 await asyncio.to_thread(
                     persist_pipeline_error_notifications,
@@ -1022,6 +1031,7 @@ async def run_matcher_worker() -> None:
         await heartbeat.stop()
         await asyncio.to_thread(producer.flush, 5.0)
         await asyncio.to_thread(consumer.close)
+        flush_sentry(timeout=5.0)
 
 
 if __name__ == "__main__":

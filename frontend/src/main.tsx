@@ -2,16 +2,11 @@ import * as Sentry from "@sentry/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
+import { SentryErrorFallback } from "./components/layout/SentryErrorFallback.tsx";
 import "./index.css";
+import { initFrontendSentry } from "./utils/sentry.ts";
 
-const sentryDsn = import.meta.env.VITE_SENTRY_DSN?.trim();
-if (sentryDsn) {
-    Sentry.init({
-        dsn: sentryDsn,
-        environment: import.meta.env.MODE,
-        tracesSampleRate: 0.1,
-    });
-}
+initFrontendSentry();
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -20,6 +15,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
     <StrictMode>
-        <App />
+        <Sentry.ErrorBoundary fallback={() => <SentryErrorFallback />}>
+            <App />
+        </Sentry.ErrorBoundary>
     </StrictMode>,
 );
