@@ -680,4 +680,47 @@ describe("vektrynApi", () => {
         expect(dismissUrl).toBe("/api/v1/system/dlq/dismiss/");
         expect(dismissInit.method).toBe("POST");
     });
+
+    it("fetches personal analytics with days and resume_profile query params", async () => {
+        const fetchMock = vi.fn().mockResolvedValueOnce(
+            new Response(
+                JSON.stringify({
+                    window: { days: 90, label: "90d", resume_profile_uuid: "res-1" },
+                    funnel: {
+                        total_leads: 0,
+                        status_counts: {
+                            discovered: 0,
+                            saved: 0,
+                            applied: 0,
+                            screening: 0,
+                            interviewing: 0,
+                            offer: 0,
+                            rejected: 0,
+                            withdrawn: 0,
+                        },
+                        stages: [],
+                        applied_to_offer_pct: null,
+                        median_days_since_applied: null,
+                    },
+                    channels: { by_ats_source: [], by_contract_type: [] },
+                    skill_gaps: {
+                        high_fit_match_count: 0,
+                        missing_keywords: [],
+                        matched_skills: [],
+                    },
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } },
+            ),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const res = await vektrynApi.getPersonalAnalytics({
+            days: "90",
+            resumeProfileUuid: "res-1",
+        });
+        expect(res.window.days).toBe(90);
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
+            "/api/v1/analytics/personal/?days=90&resume_profile=res-1",
+        );
+    });
 });

@@ -476,3 +476,56 @@ export interface MatchArtifactGenerateResponse extends MatchArtifact {
     cached: boolean;
 }
 
+export type PersonalAnalyticsWindow = "30" | "90" | "all";
+
+export interface FunnelStageMetric {
+    key: "tracked" | "applied" | "screening" | "interviewing" | "offer";
+    label: string;
+    count: number;
+    conversion_from_previous_pct: number | null;
+}
+
+export interface PersonalFunnelMetrics {
+    total_leads: number;
+    status_counts: Record<LeadStatus, number>;
+    stages: FunnelStageMetric[];
+    applied_to_offer_pct: number | null;
+    median_days_since_applied: number | null;
+}
+
+export interface ChannelPerformanceMetric {
+    key: string;
+    total_leads: number;
+    applied_count: number;
+    response_count: number;
+    interview_count: number;
+    offer_count: number;
+    response_rate_pct: number | null;
+    interview_rate_pct: number | null;
+}
+
+export interface SkillGapMetric {
+    skill: string;
+    match_count: number;
+    pct_of_high_fit: number | null;
+    avg_fit_score: number | null;
+}
+
+export interface PersonalAnalyticsResponse {
+    window: {
+        days: number | null;
+        label: string;
+        resume_profile_uuid: string | null;
+    };
+    funnel: PersonalFunnelMetrics;
+    channels: {
+        by_ats_source: ChannelPerformanceMetric[];
+        by_contract_type: ChannelPerformanceMetric[];
+    };
+    skill_gaps: {
+        high_fit_match_count: number;
+        missing_keywords: SkillGapMetric[];
+        matched_skills: SkillGapMetric[];
+    };
+}
+
