@@ -84,6 +84,11 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
+        name  = "STREAM_EDGE_URL"
+        value = google_cloud_run_v2_service.stream_edge.uri
+      }
+
+      env {
         name = "SECRET_KEY"
         value_source {
           secret_key_ref {
@@ -128,6 +133,16 @@ resource "google_cloud_run_v2_service" "control_plane" {
         value_source {
           secret_key_ref {
             secret  = var.secret_ids["vektryn-gemini-api-key"]
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "INGEST_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-ingest-api-key"]
             version = "latest"
           }
         }

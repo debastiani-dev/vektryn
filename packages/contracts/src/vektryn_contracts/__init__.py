@@ -15,12 +15,15 @@ from vektryn_contracts.enums import (
 )
 from vektryn_contracts.events import (
     EMBEDDING_DIMENSIONS,
+    ApplyUrl,
     DeadLetterEvent,
     EventEnvelope,
     JobEnrichedEvent,
     JobMatchAlertEvent,
     JobRawEvent,
     JobRescoreEvent,
+    compute_job_content_hash,
+    validate_apply_url,
 )
 from vektryn_contracts.topics import (
     KafkaTopic,
@@ -34,6 +37,7 @@ __all__ = [
     "DEFAULT_STREAM_TOKEN_TTL_SECONDS",
     "EMBEDDING_DIMENSIONS",
     "ATSSource",
+    "ApplyUrl",
     "ContractType",
     "DeadLetterEvent",
     "EventEnvelope",
@@ -49,9 +53,11 @@ __all__ = [
     "SeniorityLevel",
     "TechCategory",
     "alert_partition_key",
+    "compute_job_content_hash",
     "dlq_partition_key",
     "job_partition_key",
     "rescore_partition_key",
     "sign_stream_token",
+    "validate_apply_url",
     "verify_stream_token",
 ]

@@ -19,7 +19,11 @@ from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
 from stream_edge.config import StreamEdgeSettings, settings as edge_settings
 from stream_edge.main import app
 from stream_edge.workers.dlq_replay import replay_dlq
-from stream_edge.workers.lifecycle import _MARK_CLOSED_SQL, _is_posting_closed
+from stream_edge.workers.lifecycle import (
+    _FETCH_ACTIVE_SQL,
+    _MARK_CLOSED_SQL,
+    _is_posting_closed,
+)
 from stream_edge.workers.matcher import (
     _rescore_resume_sync,
     _upsert_job_and_score_sync,
@@ -509,3 +513,64 @@ def test_matcher_rescore_force_watermark_and_consumer_poll_interval():
     passed_cfg = mock_cls.call_args.args[0]
     assert passed_cfg["max.poll.interval.ms"] == 600_000
     fake_consumer.subscribe.assert_called_once_with(["jobs.enriched", "jobs.rescore"])
+
+
+async def test_ingest_accepts_manual_source_and_lifecycle_skips_mailto(monkeypatch):
+    monkeypatch.setattr(edge_settings, "ingest_api_key", "")
+    fake_producer = MagicMock()
+    fake_producer.publish = AsyncMock()
+    fake_storage = MagicMock()
+    fake_storage.save_raw_html = AsyncMock(
+        return_value="gs://vektryn-snapshots/raw_html/manual/test.html"
+    )
+    app.state.kafka_producer = fake_producer
+    app.state.snapshot_storage = fake_storage
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        http_resp = await client.post(
+            "/ingest/jobs",
+            json={
+                "ats_source": "manual",
+                "external_id": "manual-abc123",
+                "title": "Staff Python Engineer",
+                "company_name": "Acme Cloud",
+                "apply_url": "https://acme.example/jobs/123",
+                "location_raw": "Remote - LATAM",
+                "raw_html": "<article><h1>Staff Python Engineer</h1></article>",
+                "description_clean": "Build distributed Python and Kafka pipelines.",
+            },
+        )
+        mailto_resp = await client.post(
+            "/ingest/jobs",
+            json={
+                "ats_source": "manual",
+                "external_id": "manual-email123",
+                "title": "Principal Backend Engineer",
+                "company_name": "ReferralCo",
+                "apply_url": "mailto:hiring@referralco.example",
+                "location_raw": "Remote",
+                "raw_html": "<article><p>Referral role</p></article>",
+                "description_clean": "Lead backend systems architecture.",
+            },
+        )
+
+    assert http_resp.status_code == 202
+    assert mailto_resp.status_code == 202
+    assert fake_producer.publish.await_count == 2
+    mailto_event = fake_producer.publish.await_args_list[1].kwargs["event"]
+    assert mailto_event.ats_source == ATSSource.MANUAL
+    assert mailto_event.apply_url == "mailto:hiring@referralco.example"
+
+    # Lifecycle probe must skip mailto: targets without issuing HTTP requests
+    mock_http = MagicMock()
+    mock_http.get = AsyncMock()
+    closed_id = await _is_posting_closed(
+        mock_http,
+        asyncio.Semaphore(1),
+        str(uuid4()),
+        "mailto:hiring@referralco.example",
+    )
+    assert closed_id is None
+    mock_http.get.assert_not_awaited()
+    assert "apply_url LIKE 'http://%'" in _FETCH_ACTIVE_SQL

@@ -24,6 +24,7 @@ _FETCH_ACTIVE_SQL = """
     FROM jobs_jobposting
     WHERE is_active = TRUE
       AND is_deleted = FALSE
+      AND (apply_url LIKE 'http://%' OR apply_url LIKE 'https://%')
     ORDER BY COALESCE(modified_at, created_at) ASC
     LIMIT %s
 """
@@ -43,6 +44,8 @@ async def _is_posting_closed(
     posting_uuid: str,
     apply_url: str,
 ) -> str | None:
+    if not apply_url.lower().startswith(("http://", "https://")):
+        return None
     async with semaphore:
         try:
             resp = await client.get(apply_url, follow_redirects=True)

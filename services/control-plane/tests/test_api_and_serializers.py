@@ -1,3 +1,4 @@
+import socket
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -6,10 +7,21 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+import httpx
 import pytest
 from rest_framework.test import APIClient, APIRequestFactory
 
 from apps.jobs.models.jobs import JobPosting
+from apps.jobs.services import manual_import
+from apps.jobs.services.manual_import import (
+    MAX_SNAPSHOT_HTML_BYTES,
+    ManualImportFetchError,
+    ManualImportRateLimitError,
+    ManualImportValidationError,
+    extract_job_from_html,
+    fetch_public_job_page,
+    validate_public_http_url,
+)
 from apps.matching.models.matching import MatchScore
 from apps.matching.serializers.matching import MatchScoreSerializer
 from apps.resumes.models.resumes import ResumeProfile
@@ -42,11 +54,12 @@ User = get_user_model()
 
 
 def test_settings_supports_secret_key_and_database_url(monkeypatch):
+    fake_pw = uuid4().hex
     monkeypatch.delenv("DJANGO_SECRET_KEY", raising=False)
     monkeypatch.setenv("SECRET_KEY", "alias-secret-key")
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql://clouduser:cloudpass@10.0.0.5:5433/vektryn_prod",
+        f"postgresql://clouduser:{fake_pw}@10.0.0.5:5433/vektryn_prod",
     )
 
     cfg = ControlPlaneSettings(_env_file=None)
@@ -55,7 +68,7 @@ def test_settings_supports_secret_key_and_database_url(monkeypatch):
     db_cfg = _build_database_config(cfg)
     assert db_cfg["NAME"] == "vektryn_prod"
     assert db_cfg["USER"] == "clouduser"
-    assert db_cfg["PASSWORD"] == "cloudpass"
+    assert db_cfg["PASSWORD"] == fake_pw
     assert db_cfg["HOST"] == "10.0.0.5"
     assert db_cfg["PORT"] == 5433
 
@@ -297,9 +310,10 @@ def test_auth_csrf_login_and_logout_flow():
 
 
 def test_database_url_sslmode_and_proxy_settings(monkeypatch):
+    fake_pw = uuid4().hex
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql://neonuser:neonpass@ep-demo.neon.tech:5432/vektryn?sslmode=require",
+        f"postgresql://neonuser:{fake_pw}@ep-demo.neon.tech:5432/vektryn?sslmode=require",
     )
     cfg = ControlPlaneSettings(_env_file=None)
     db_cfg = _build_database_config(cfg)
@@ -662,3 +676,330 @@ def test_resume_rescore_endpoint_validation_cooldown_broker_error_and_idor():
     client.force_authenticate(user=other)
     idor_resp = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
     assert idor_resp.status_code == 404
+
+
+def test_manual_import_ssrf_redirects_ipv6_and_sni():
+    blocked_urls = [
+        "http://127.0.0.1/admin",
+        "http://localhost/health",
+        "http://[::1]/secret",
+        "http://[::ffff:127.0.0.1]/secret",
+        "http://10.8.0.10/postgres",
+        "http://169.254.169.254/computeMetadata/v1/",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://192.168.1.50/internal",
+        "file:///etc/passwd",
+        "ftp://example.com/job.txt",
+        "https://example.com:5432/job",
+        "https://user:pass@example.com/job",
+    ]
+    for bad_url in blocked_urls:
+        with pytest.raises(ManualImportValidationError):
+            validate_public_http_url(bad_url)
+
+    # IPv6 literal bracketing + str sni_hostname
+    with patch(
+        "apps.jobs.services.manual_import.socket.getaddrinfo",
+        return_value=[
+            (
+                socket.AF_INET6,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("2606:2800:220:1:248:1893:25c8:1946", 443, 0, 0),
+            )
+        ],
+    ):
+        ipv6_target = validate_public_http_url("https://careers.acme.com/jobs/1")
+    assert ipv6_target.pinned_url == (
+        "https://[2606:2800:220:1:248:1893:25c8:1946]/jobs/1"
+    )
+    assert ipv6_target.host_header == "careers.acme.com"
+    assert isinstance(ipv6_target.ascii_host, str)
+    assert ipv6_target.ascii_host == "careers.acme.com"
+
+    # Relative Location redirect resolves against logical_url (not pinned IP) & preserves Host/SNI
+    captured_requests: list[httpx.Request] = []
+
+    def _redirect_handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"Location": "/jobs/final"})
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            text="<html><body><h1>Senior Python Engineer</h1></body></html>",
+        )
+
+    with (
+        patch(
+            "apps.jobs.services.manual_import.socket.getaddrinfo",
+            return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+            ],
+        ),
+        httpx.Client(
+            transport=httpx.MockTransport(_redirect_handler), follow_redirects=False
+        ) as mock_client,
+    ):
+        body, final_url = fetch_public_job_page(
+            "https://careers.acme.com/start", client=mock_client
+        )
+
+    assert final_url == "https://careers.acme.com/jobs/final"
+    assert "Senior Python Engineer" in body
+    assert len(captured_requests) == 2
+    assert str(captured_requests[0].url) == "https://93.184.216.34/start"
+    assert str(captured_requests[1].url) == "https://93.184.216.34/jobs/final"
+    assert captured_requests[1].headers["host"] == "careers.acme.com"
+    assert captured_requests[1].extensions.get("sni_hostname") == "careers.acme.com"
+
+    # Redirect pivoting to cloud metadata IP must be rejected with ManualImportValidationError
+    def _ssrf_redirect_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302,
+            headers={"Location": "http://169.254.169.254/computeMetadata/v1/"},
+        )
+
+    with (
+        patch(
+            "apps.jobs.services.manual_import.socket.getaddrinfo",
+            return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+            ],
+        ),
+        httpx.Client(
+            transport=httpx.MockTransport(_ssrf_redirect_handler),
+            follow_redirects=False,
+        ) as mock_client,
+    ):
+        with pytest.raises(ManualImportValidationError):
+            fetch_public_job_page("https://evil.example/job", client=mock_client)
+
+
+def test_manual_import_html_json_ld_extraction_and_snapshot_cap():
+    bloat = "A" * (MAX_SNAPSHOT_HTML_BYTES + 20_000)
+    html_doc = f"""
+    <html>
+      <head>
+        <title>Fallback Title</title>
+        <style>.hero {{ color: red; }}</style>
+        <script type="application/ld+json">
+          {{
+            "@context": "https://schema.org",
+            "@type": "JobPosting",
+            "title": "Staff Backend Engineer",
+            "hiringOrganization": {{"@type": "Organization", "name": "CloudNova"}},
+            "jobLocationType": "TELECOMMUTE",
+            "jobLocation": {{"@type": "Place", "address": {{"addressCountry": "Brazil"}}}},
+            "datePosted": "2026-11-20T12:00:00Z",
+            "description": "<p>Build distributed Python, Django, PostgreSQL, and Kafka services at scale across LATAM teams.</p>"
+          }}
+        </script>
+        <script>alert("xss");</script>
+      </head>
+      <body><main>{bloat}</main></body>
+    </html>
+    """
+    extracted = extract_job_from_html(html_doc, "https://cloudnova.example/careers/42")
+    assert extracted.title == "Staff Backend Engineer"
+    assert extracted.company_name == "CloudNova"
+    assert extracted.location_raw == "Remote · Brazil"
+    assert "PostgreSQL" in extracted.description_clean
+    assert extracted.posted_at is not None
+    assert "<script" not in extracted.raw_html_snapshot.lower()
+    assert "<style" not in extracted.raw_html_snapshot.lower()
+    assert len(extracted.raw_html_snapshot.encode("utf-8")) <= MAX_SNAPSHOT_HTML_BYTES
+
+    with pytest.raises(ManualImportFetchError):
+        extract_job_from_html(
+            "<html><body><p>Sign in to view this job</p></body></html>",
+            "https://linkedin.example/jobs/1",
+        )
+
+
+@pytest.mark.django_db
+def test_manual_import_endpoint_url_email_dedup_reactivate_and_guards(settings):
+    settings.STREAM_EDGE_URL = "http://stream-edge:8001"
+    settings.INGEST_API_KEY = "edge-ingest-secret"
+
+    user = User.objects.create_user(username="importer", password="pw")
+    client = APIClient()
+
+    # Unauthenticated request rejected
+    unauth = client.post(
+        "/api/v1/jobs/import/", {"url": "https://acme.example/jobs/1"}, format="json"
+    )
+    assert unauth.status_code == 403
+
+    client.force_authenticate(user=user)
+
+    # SSRF private IP rejected with 400
+    ssrf_resp = client.post(
+        "/api/v1/jobs/import/",
+        {"url": "http://10.8.0.10:5432/internal"},
+        format="json",
+    )
+    assert ssrf_resp.status_code == 400
+
+    # Blocked/unparseable external page returns 422
+    with patch(
+        "apps.jobs.services.manual_import.fetch_public_job_page",
+        side_effect=ManualImportFetchError("HTTP 999 blocked"),
+    ):
+        blocked_resp = client.post(
+            "/api/v1/jobs/import/",
+            {"url": "https://linkedin.example/jobs/view/123"},
+            format="json",
+        )
+    assert blocked_resp.status_code == 422
+
+    # Rate limit returns 429 + Retry-After
+    with patch(
+        "apps.jobs.services.manual_import.enforce_import_rate_limit",
+        side_effect=ManualImportRateLimitError(retry_after=120),
+    ):
+        rl_resp = client.post(
+            "/api/v1/jobs/import/",
+            {"url": "https://acme.example/jobs/1"},
+            format="json",
+        )
+    assert rl_resp.status_code == 429
+    assert rl_resp["Retry-After"] == "120"
+
+    # Manual Entry with plain email normalizes to mailto:, synthesizes HTML, forwards with API key
+    forwarded_calls: list[dict] = []
+
+    def _fake_forward(self, **kwargs):
+        forwarded_calls.append(kwargs)
+        return {"event_id": str(uuid4()), "content_hash": "a" * 64}
+
+    description_text = (
+        "Seeking a Senior Python & Django backend engineer to design event-driven "
+        "Kafka pipelines, pgvector semantic search, and Cloud Run services."
+    )
+    with patch.object(
+        manual_import.ManualJobImportService,
+        "_forward_to_stream_edge",
+        autospec=True,
+        side_effect=_fake_forward,
+    ):
+        email_resp = client.post(
+            "/api/v1/jobs/import/",
+            {
+                "title": "Senior Python Engineer",
+                "company_name": "ReferralCorp",
+                "apply_url": "Hiring@ReferralCorp.COM",
+                "location_raw": "Remote - Brazil",
+                "description": description_text,
+            },
+            format="json",
+        )
+
+    assert email_resp.status_code == 202
+    email_body = email_resp.json()
+    assert email_body["status"] == "queued"
+    assert email_body["ats_source"] == "manual"
+    assert email_body["apply_url"] == "mailto:Hiring@referralcorp.com"
+    assert email_body["external_id"].startswith("manual-")
+    assert len(forwarded_calls) == 1
+    assert forwarded_calls[0]["apply_url"] == "mailto:Hiring@referralcorp.com"
+    assert "<article" in forwarded_calls[0]["raw_html"]
+
+    # Persist the manual mailto job and verify serializers, external_id filters, dedup, and reactivation
+    manual_job = JobPosting.objects.create(
+        ats_source=ATSSource.MANUAL,
+        external_id=email_body["external_id"],
+        content_hash=manual_import.compute_job_content_hash(
+            ATSSource.MANUAL,
+            "Senior Python Engineer",
+            "ReferralCorp",
+            description_text,
+        ),
+        title="Senior Python Engineer",
+        company_name="ReferralCorp",
+        apply_url="mailto:Hiring@referralcorp.com",
+        raw_html_gcs_uri="gs://vektryn-snapshots/raw_html/manual/test.html",
+        location_raw="Remote - Brazil",
+        description_clean=description_text,
+    )
+    resume = ResumeProfile.objects.create(
+        user=user,
+        label="Backend",
+        raw_text="Python Django Kafka",
+        content_hash="9" * 64,
+        embedding=[0.01] * EMBEDDING_DIMENSIONS,
+    )
+    MatchScore.objects.create(
+        job_posting=manual_job,
+        resume_profile=resume,
+        cosine_similarity=0.88,
+        fit_score=90,
+        resume_content_hash=resume.content_hash,
+    )
+    lead = create_lead(user=user, validated_data={"job_posting": manual_job})
+    assert (
+        ApplicationLeadSerializer(lead).data["apply_url"]
+        == "mailto:Hiring@referralcorp.com"
+    )
+
+    # O(1) external_id filters on /api/v1/jobs/ and /api/v1/matches/
+    jobs_lookup = client.get(
+        f"/api/v1/jobs/?ats_source=manual&external_id={manual_job.external_id}"
+    )
+    assert jobs_lookup.status_code == 200
+    assert jobs_lookup.json()["count"] == 1
+    assert (
+        jobs_lookup.json()["results"][0]["apply_url"]
+        == "mailto:Hiring@referralcorp.com"
+    )
+
+    matches_lookup = client.get(
+        f"/api/v1/matches/?external_id={manual_job.external_id}"
+    )
+    assert matches_lookup.status_code == 200
+    assert matches_lookup.json()["count"] == 1
+    assert (
+        matches_lookup.json()["results"][0]["job_posting"]["apply_url"]
+        == "mailto:Hiring@referralcorp.com"
+    )
+
+    # Re-importing identical active manual job returns 200 already_exists without forwarding
+    dup_resp = client.post(
+        "/api/v1/jobs/import/",
+        {
+            "title": "Senior Python Engineer",
+            "company_name": "ReferralCorp",
+            "apply_url": "mailto:Hiring@referralcorp.com",
+            "description": description_text,
+        },
+        format="json",
+    )
+    assert dup_resp.status_code == 200
+    assert dup_resp.json()["status"] == "already_exists"
+    assert dup_resp.json()["job_posting_uuid"] == str(manual_job.uuid)
+
+    # Soft-deleting + closing the job and re-importing reactivates directly via all_objects
+    manual_job.is_active = False
+    manual_job.is_deleted = True
+    manual_job.save(update_fields=["is_active", "is_deleted"])
+
+    with patch(
+        "apps.jobs.services.manual_import.publish_rescore_event", return_value=True
+    ):
+        reactivate_resp = client.post(
+            "/api/v1/jobs/import/",
+            {
+                "title": "Senior Python Engineer",
+                "company_name": "ReferralCorp",
+                "apply_url": "Hiring@ReferralCorp.COM",
+                "description": description_text,
+            },
+            format="json",
+        )
+    assert reactivate_resp.status_code == 200
+    assert reactivate_resp.json()["status"] == "reactivated"
+    manual_job.refresh_from_db()
+    assert manual_job.is_active is True
+    assert manual_job.is_deleted is False
+    assert manual_job.closed_at is None

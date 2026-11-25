@@ -6,6 +6,7 @@ import {
     CheckCircle2,
     Clock,
     ExternalLink,
+    Mail,
     MessageSquareQuote,
     RefreshCw,
     Sparkles,
@@ -16,6 +17,8 @@ import { useEffect } from "react";
 import type { MatchScore } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
+    formatApplyLinkLabel,
+    formatApplyLinkTooltip,
     formatAtsSource,
     formatContractType,
     formatExactDate,
@@ -24,6 +27,7 @@ import {
     formatScoreLabel,
     formatSeniority,
     isAlertMatch,
+    isMailtoUrl,
     scoreBadgeStyle,
     scoreVisualTheme,
 } from "../../utils/format";
@@ -36,6 +40,76 @@ interface GapAnalysisDrawerProps {
     saved: boolean;
     onClose: () => void;
     onSaveLead: (match: MatchScore) => void;
+}
+
+interface GapDrawerFooterProps {
+    applyUrl: string;
+    saving: boolean;
+    saved: boolean;
+    onSaveLead: () => void;
+}
+
+function getSaveButtonLabel(saved: boolean, saving: boolean): string {
+    if (saved) return "Saved in Pipeline";
+    if (saving) return "Saving...";
+    return "Save to Tracker";
+}
+
+function GapDrawerFooter({
+    applyUrl,
+    saving,
+    saved,
+    onSaveLead,
+}: Readonly<GapDrawerFooterProps>) {
+    const isEmailApply = isMailtoUrl(applyUrl);
+    const saveTooltip = saved
+        ? "This role is already saved in your Pipeline Tracker"
+        : "Save this role to your Pipeline Tracker";
+
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
+            <Tooltip content={saveTooltip}>
+                <button
+                    type="button"
+                    disabled={saving || saved}
+                    onClick={onSaveLead}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-5 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${
+                        saved
+                            ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
+                            : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
+                    }`}
+                >
+                    {saved ? (
+                        <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+                    ) : (
+                        <BookmarkPlus className="h-4 w-4 text-violet-400" />
+                    )}
+                    {getSaveButtonLabel(saved, saving)}
+                </button>
+            </Tooltip>
+
+            <Tooltip
+                content={formatApplyLinkTooltip(
+                    applyUrl,
+                    "Open the job application page in a new tab",
+                )}
+            >
+                <a
+                    href={applyUrl}
+                    target={isEmailApply ? undefined : "_blank"}
+                    rel={isEmailApply ? undefined : "noreferrer"}
+                    className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
+                >
+                    {formatApplyLinkLabel(applyUrl, "Open Original Posting")}{" "}
+                    {isEmailApply ? (
+                        <Mail className="h-4 w-4" />
+                    ) : (
+                        <ExternalLink className="h-4 w-4" />
+                    )}
+                </a>
+            </Tooltip>
+        </div>
+    );
 }
 
 export function GapAnalysisDrawer({
@@ -79,20 +153,11 @@ export function GapAnalysisDrawer({
     const postedExact = formatExactDate(job.posted_at);
     const postedTooltip = postedExact ? `Posted on ${postedExact}` : "Posting date";
 
-    let saveButtonLabel = "Save to Tracker";
-    if (saved) {
-        saveButtonLabel = "Saved in Pipeline";
-    } else if (saving) {
-        saveButtonLabel = "Saving...";
-    }
     const aiFitTooltip = hasAiScore
         ? "Stage 2 Gemini AI fit score (0–100%) evaluating tech stack, seniority, and experience alignment against your active resume."
         : "Stage 1 vector match only. Roles below the semantic similarity threshold skip automatic Gemini scoring to save tokens.";
     const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
     const alertTooltip = `Meets or exceeds your ${minAlertScore}% alert threshold for this resume profile.`;
-    const saveTooltip = saved
-        ? "This role is already saved in your Pipeline Tracker"
-        : "Save this role to your Pipeline Tracker";
 
     return (
         <div className="fixed inset-0 z-50 flex justify-end">
@@ -339,37 +404,12 @@ export function GapAnalysisDrawer({
                     </section>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
-                    <Tooltip content={saveTooltip}>
-                        <button
-                            type="button"
-                            disabled={saving || saved}
-                            onClick={() => onSaveLead(match)}
-                            className={`inline-flex items-center gap-2 rounded-xl border px-5 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${saved
-                                    ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
-                                    : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
-                                }`}
-                        >
-                            {saved ? (
-                                <BookmarkCheck className="h-4 w-4 text-emerald-400" />
-                            ) : (
-                                <BookmarkPlus className="h-4 w-4 text-violet-400" />
-                            )}
-                            {saveButtonLabel}
-                        </button>
-                    </Tooltip>
-
-                    <Tooltip content="Open the job application page in a new tab">
-                        <a
-                            href={job.apply_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
-                        >
-                            Open Original Posting <ExternalLink className="h-4 w-4" />
-                        </a>
-                    </Tooltip>
-                </div>
+                <GapDrawerFooter
+                    applyUrl={job.apply_url}
+                    saving={saving}
+                    saved={saved}
+                    onSaveLead={() => onSaveLead(match)}
+                />
             </dialog>
         </div>
     );

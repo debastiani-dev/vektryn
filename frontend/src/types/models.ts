@@ -177,3 +177,24 @@ export interface RescoreResponse {
     force: boolean;
 }
 
+export interface ManualJobImportInput {
+    url?: string;
+    title?: string;
+    company_name?: string;
+    apply_url?: string;
+    location_raw?: string;
+    description?: string;
+}
+
+export interface ManualJobImportResponse {
+    status: "queued" | "already_exists" | "reactivated";
+    ats_source: string;
+    external_id: string;
+    content_hash: string;
+    title: string;
+    company_name: string;
+    apply_url: string;
+    event_id: string | null;
+    job_posting_uuid: string | null;
+}
+

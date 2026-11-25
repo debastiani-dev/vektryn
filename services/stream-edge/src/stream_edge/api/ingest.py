@@ -1,10 +1,9 @@
 from datetime import datetime
-import hashlib
 import hmac
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 
 from stream_edge.clients.gcs import SnapshotStorageClient
 from stream_edge.clients.kafka import KafkaEventProducer
@@ -12,8 +11,10 @@ from stream_edge.config import settings
 from stream_edge.metrics import INGEST_JOBS_TOTAL
 from vektryn_contracts import (
     ATSSource,
+    ApplyUrl,
     JobRawEvent,
     KafkaTopic,
+    compute_job_content_hash,
     job_partition_key,
 )
 
@@ -25,7 +26,7 @@ class IngestJobRequest(BaseModel):
     external_id: str = Field(min_length=1, max_length=128)
     title: str = Field(min_length=1, max_length=255)
     company_name: str = Field(min_length=1, max_length=180)
-    apply_url: HttpUrl
+    apply_url: ApplyUrl
     location_raw: str = Field(default="", max_length=255)
     raw_html: str = Field(min_length=1)
     description_clean: str = Field(min_length=1)
@@ -55,15 +56,12 @@ def _compute_content_hash(
     company_name: str,
     description_clean: str,
 ) -> str:
-    canonical = "|".join(
-        [
-            ats_source.value,
-            " ".join(title.lower().split()),
-            " ".join(company_name.lower().split()),
-            " ".join(description_clean.lower().split()),
-        ]
+    return compute_job_content_hash(
+        ats_source=ats_source,
+        title=title,
+        company_name=company_name,
+        description_clean=description_clean,
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def get_producer(request: Request) -> KafkaEventProducer:

@@ -1,6 +1,11 @@
-import { BellRing, ExternalLink, X } from "lucide-react";
+import { BellRing, ExternalLink, Mail, X } from "lucide-react";
 import type { LiveMatchAlert } from "../../types/models";
-import { scoreBadgeStyle } from "../../utils/format";
+import {
+    formatApplyLinkLabel,
+    formatApplyLinkTooltip,
+    isMailtoUrl,
+    scoreBadgeStyle,
+} from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
 
 interface LiveAlertBannerProps {
@@ -68,14 +73,19 @@ export function LiveAlertBanner({ alerts, onDismiss }: Readonly<LiveAlertBannerP
                         </div>
 
                         <div className="mt-3 flex items-center justify-end gap-2 border-t border-zinc-800/80 pt-3">
-                            <Tooltip content="Open original job posting in a new tab">
+                            <Tooltip content={formatApplyLinkTooltip(alert.apply_url)}>
                                 <a
                                     href={alert.apply_url}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                    target={isMailtoUrl(alert.apply_url) ? undefined : "_blank"}
+                                    rel={isMailtoUrl(alert.apply_url) ? undefined : "noreferrer"}
                                     className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                                 >
-                                    Apply Now <ExternalLink className="h-3.5 w-3.5" />
+                                    {formatApplyLinkLabel(alert.apply_url, "Apply Now")}{" "}
+                                    {isMailtoUrl(alert.apply_url) ? (
+                                        <Mail className="h-3.5 w-3.5" />
+                                    ) : (
+                                        <ExternalLink className="h-3.5 w-3.5" />
+                                    )}
                                 </a>
                             </Tooltip>
                         </div>

@@ -4,10 +4,14 @@ import {
     BookmarkCheck,
     BookmarkPlus,
     Building2,
+    CheckCircle2,
     ChevronDown,
     Clock,
     ExternalLink,
+    Loader2,
+    Mail,
     MapPin,
+    Plus,
     RefreshCw,
     RotateCcw,
     Search,
@@ -15,11 +19,18 @@ import {
     Sparkles,
     X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchAllPagesWithCount, vektrynApi } from "../../api/client";
-import type { MatchScore, ResumeProfile } from "../../types/models";
+import type {
+    JobPostingSummary,
+    ManualJobImportResponse,
+    MatchScore,
+    ResumeProfile,
+} from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
+    formatApplyLinkLabel,
+    formatApplyLinkTooltip,
     formatAtsSource,
     formatContractType,
     formatExactDate,
@@ -28,11 +39,13 @@ import {
     formatSeniority,
     formatVectorSimilarity,
     isAlertMatch,
+    isMailtoUrl,
     scoreVisualTheme,
 } from "../../utils/format";
 import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
 import { GapAnalysisDrawer } from "./GapAnalysisDrawer";
+import { ImportJobModal } from "./ImportJobModal";
 import { JobPostingDrawer } from "./JobPostingDrawer";
 
 function extractJobPostingId(jobPosting: unknown): string | null {
@@ -363,19 +376,220 @@ function RadarMatchCard({
                         </button>
                     </Tooltip>
 
-                    <Tooltip content="Open original job posting in a new tab">
+                    <Tooltip content={formatApplyLinkTooltip(job.apply_url)}>
                         <a
                             href={job.apply_url}
-                            target="_blank"
-                            rel="noreferrer"
+                            target={isMailtoUrl(job.apply_url) ? undefined : "_blank"}
+                            rel={isMailtoUrl(job.apply_url) ? undefined : "noreferrer"}
                             className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
                         >
-                            Apply <ExternalLink className="h-4 w-4" />
+                            {formatApplyLinkLabel(job.apply_url, "Apply")}{" "}
+                            {isMailtoUrl(job.apply_url) ? (
+                                <Mail className="h-4 w-4" />
+                            ) : (
+                                <ExternalLink className="h-4 w-4" />
+                            )}
                         </a>
                     </Tooltip>
                 </div>
             </div>
         </article>
+    );
+}
+
+interface ImportBannerState {
+    phase: "queued" | "ready" | "info";
+    title: string;
+    company: string;
+    message: string;
+    externalId?: string;
+    job?: JobPostingSummary | null;
+}
+
+function ImportStatusBanner({
+    banner,
+    onViewJob,
+    onDismiss,
+}: Readonly<{
+    banner: ImportBannerState;
+    onViewJob: (job: JobPostingSummary) => void;
+    onDismiss: () => void;
+}>) {
+    const isReady = banner.phase === "ready";
+    return (
+        <div
+            className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-5 py-3.5 text-sm ${
+                isReady
+                    ? "border-emerald-500/30 bg-emerald-950/20 text-emerald-200"
+                    : "border-violet-500/30 bg-violet-950/20 text-violet-200"
+            }`}
+        >
+            <div className="flex items-center gap-3 min-w-0">
+                {banner.phase === "queued" ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-violet-300" />
+                ) : (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                )}
+                <p className="truncate">
+                    <span className="font-semibold text-zinc-100">{banner.title}</span>{" "}
+                    <span className="text-zinc-400">@ {banner.company}</span>
+                    <span className="mx-2 text-zinc-600">·</span>
+                    <span>{banner.message}</span>
+                </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+                {banner.job && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (banner.job) onViewJob(banner.job);
+                        }}
+                        className="rounded-lg border border-emerald-500/35 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/25"
+                    >
+                        View Job
+                    </button>
+                )}
+                <button
+                    type="button"
+                    onClick={onDismiss}
+                    aria-label="Dismiss import status"
+                    className="rounded-lg p-1 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function useImportJobPolling(
+    importBanner: ImportBannerState | null,
+    onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
+    onTimeout: (externalId: string) => void,
+) {
+    useEffect(() => {
+        if (importBanner?.phase !== "queued" || !importBanner.externalId) {
+            return;
+        }
+        const targetExternalId = importBanner.externalId;
+        let cancelled = false;
+        let timerId: number | undefined;
+        let attempts = 0;
+
+        async function pollImportedJob() {
+            attempts += 1;
+            try {
+                const res = await vektrynApi.listJobs(
+                    `?ats_source=manual&external_id=${encodeURIComponent(targetExternalId)}`,
+                );
+                if (cancelled) return;
+                const persisted = res.results[0];
+                if (persisted) {
+                    onPersisted(targetExternalId, persisted);
+                    return;
+                }
+            } catch {
+                // Ignore transient poll errors and retry until max attempts
+            }
+
+            if (cancelled) return;
+            if (attempts >= 10) {
+                onTimeout(targetExternalId);
+                return;
+            }
+            timerId = window.setTimeout(() => void pollImportedJob(), 3000);
+        }
+
+        timerId = window.setTimeout(() => void pollImportedJob(), 2500);
+        return () => {
+            cancelled = true;
+            if (timerId !== undefined) {
+                window.clearTimeout(timerId);
+            }
+        };
+    }, [importBanner?.phase, importBanner?.externalId, onPersisted, onTimeout]);
+}
+
+function RadarKpiGrid({
+    loading,
+    aiScoredCount,
+    totalCount,
+    strongCount,
+    alertCount,
+    savedCount,
+}: Readonly<{
+    loading: boolean;
+    aiScoredCount: number;
+    totalCount: number;
+    strongCount: number;
+    alertCount: number;
+    savedCount: number;
+}>) {
+    return (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Tooltip
+                content="Active job matches evaluated by Stage 2 Gemini AI scoring (out of all active vector matches)"
+                className="block"
+            >
+                <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                        AI Scored
+                    </p>
+                    <div className="mt-2 flex items-baseline gap-2">
+                        <p className="font-mono text-2xl font-semibold tabular-nums text-zinc-100">
+                            {loading ? "—" : aiScoredCount}
+                        </p>
+                        {!loading && (
+                            <span className="font-mono text-xs tabular-nums text-zinc-500">
+                                of {totalCount} active
+                            </span>
+                        )}
+                    </div>
+                </div>
+            </Tooltip>
+
+            <Tooltip
+                content="High-confidence matches with an AI fit score of 80% or higher"
+                className="block"
+            >
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                    <p className="text-xs font-medium uppercase tracking-wider text-emerald-300/80">
+                        Strong Fit (80%+)
+                    </p>
+                    <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-emerald-300">
+                        {loading ? "—" : strongCount}
+                    </p>
+                </div>
+            </Tooltip>
+
+            <Tooltip
+                content="Roles meeting the 70%+ threshold used for real-time match alerts"
+                className="block"
+            >
+                <div className="rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                    <p className="text-xs font-medium uppercase tracking-wider text-violet-300/80">
+                        Alert Threshold (70%+)
+                    </p>
+                    <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-violet-300">
+                        {loading ? "—" : alertCount}
+                    </p>
+                </div>
+            </Tooltip>
+
+            <Tooltip
+                content="Matched roles currently tracked in your Pipeline Tracker"
+                className="block"
+            >
+                <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                        Saved in Pipeline
+                    </p>
+                    <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-sky-300">
+                        {loading ? "—" : savedCount}
+                    </p>
+                </div>
+            </Tooltip>
+        </div>
     );
 }
 
@@ -396,18 +610,30 @@ export function JobRadarView() {
     const [searchTerm, setSearchTerm] = useState("");
     const [minScore, setMinScore] = useState<number>(0);
     const [selectedJobMatch, setSelectedJobMatch] = useState<MatchScore | null>(null);
+    const [selectedImportedJob, setSelectedImportedJob] = useState<JobPostingSummary | null>(null);
     const [selectedGapMatch, setSelectedGapMatch] = useState<MatchScore | null>(null);
+    const [importModalOpen, setImportModalOpen] = useState(false);
+    const [reloadTick, setReloadTick] = useState(0);
+    const [importBanner, setImportBanner] = useState<ImportBannerState | null>(null);
     const [savedLeadsByJobId, setSavedLeadsByJobId] = useState<Record<string, string>>({});
     const [savedTotalCount, setSavedTotalCount] = useState(0);
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
 
     function openJobListing(match: MatchScore) {
         setSelectedGapMatch(null);
+        setSelectedImportedJob(null);
         setSelectedJobMatch(match);
+    }
+
+    function openImportedJobListing(job: JobPostingSummary) {
+        setSelectedGapMatch(null);
+        setSelectedJobMatch(null);
+        setSelectedImportedJob(job);
     }
 
     function openGapDetails(match: MatchScore) {
         setSelectedJobMatch(null);
+        setSelectedImportedJob(null);
         setSelectedGapMatch(match);
     }
 
@@ -504,7 +730,75 @@ export function JobRadarView() {
         return () => {
             cancelled = true;
         };
-    }, [page, minScore, resumeFilter, evaluatedOnly]);
+    }, [page, minScore, resumeFilter, evaluatedOnly, reloadTick]);
+
+    const handleImportedPersisted = useCallback(
+        (externalId: string, persisted: JobPostingSummary) => {
+            setReloadTick((prev) => prev + 1);
+            setImportBanner((prev) =>
+                prev && prev.externalId === externalId
+                    ? {
+                          ...prev,
+                          phase: "ready",
+                          title: persisted.title,
+                          company: persisted.company_name,
+                          job: persisted,
+                          message: "Enriched and scored — Job Radar has been refreshed.",
+                      }
+                    : prev,
+            );
+        },
+        [],
+    );
+
+    const handleImportedTimeout = useCallback((externalId: string) => {
+        setImportBanner((prev) =>
+            prev && prev.externalId === externalId
+                ? {
+                      ...prev,
+                      phase: "info",
+                      message:
+                          "Still processing in the background — refresh Job Radar shortly to see the scored role.",
+                  }
+                : prev,
+        );
+    }, []);
+
+    useImportJobPolling(importBanner, handleImportedPersisted, handleImportedTimeout);
+
+    async function handleJobImported(res: ManualJobImportResponse) {
+        if (res.status === "queued") {
+            setImportBanner({
+                phase: "queued",
+                title: res.title,
+                company: res.company_name,
+                externalId: res.external_id,
+                message: "Queued for AI enrichment, embedding, and active-resume scoring...",
+            });
+            return;
+        }
+
+        setReloadTick((prev) => prev + 1);
+        let existingJob: JobPostingSummary | null = null;
+        if (res.job_posting_uuid) {
+            try {
+                existingJob = await vektrynApi.getJob(res.job_posting_uuid);
+            } catch {
+                existingJob = null;
+            }
+        }
+        setImportBanner({
+            phase: res.status === "reactivated" ? "ready" : "info",
+            title: res.title,
+            company: res.company_name,
+            externalId: res.external_id,
+            job: existingJob,
+            message:
+                res.status === "reactivated"
+                    ? "Previously closed role reactivated and refreshed in Job Radar."
+                    : "This role is already active in Vektryn.",
+        });
+    }
 
     async function handleToggleSaveLead(match: MatchScore) {
         const jobId = match.job_posting.uuid;
@@ -650,80 +944,51 @@ export function JobRadarView() {
         );
     }
 
+    const activeDrawerJob = selectedJobMatch?.job_posting ?? selectedImportedJob;
+    const isActiveDrawerJobSaved = activeDrawerJob
+        ? Boolean(savedLeadsByJobId[activeDrawerJob.uuid])
+        : false;
+
     return (
         <div className="space-y-8">
             <header className="space-y-6">
-                <div className="flex flex-col gap-1">
-                    <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Job Radar</h1>
-                    <p className="text-sm text-zinc-400">
-                        Semantic vector similarity and AI gap scoring across active engineering roles.
-                    </p>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <Tooltip
-                        content="Active job matches evaluated by Stage 2 Gemini AI scoring (out of all active vector matches)"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-                                AI Scored
-                            </p>
-                            <div className="mt-2 flex items-baseline gap-2">
-                                <p className="font-mono text-2xl font-semibold tabular-nums text-zinc-100">
-                                    {loading ? "—" : aiScoredCount}
-                                </p>
-                                {!loading && (
-                                    <span className="font-mono text-xs tabular-nums text-zinc-500">
-                                        of {totalCount} active
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                    </Tooltip>
-
-                    <Tooltip
-                        content="High-confidence matches with an AI fit score of 80% or higher"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-emerald-300/80">
-                                Strong Fit (80%+)
-                            </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-emerald-300">
-                                {loading ? "—" : strongCount}
-                            </p>
-                        </div>
-                    </Tooltip>
-
-                    <Tooltip
-                        content="Roles meeting the 70%+ threshold used for real-time match alerts"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-violet-300/80">
-                                Alert Threshold (70%+)
-                            </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-violet-300">
-                                {loading ? "—" : alertCount}
-                            </p>
-                        </div>
-                    </Tooltip>
-
-                    <Tooltip
-                        content="Matched roles currently tracked in your Pipeline Tracker"
-                        className="block"
-                    >
-                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
-                            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
-                                Saved in Pipeline
-                            </p>
-                            <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-sky-300">
-                                {loading ? "—" : savedCount}
-                            </p>
-                        </div>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="flex flex-col gap-1">
+                        <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+                            Job Radar
+                        </h1>
+                        <p className="text-sm text-zinc-400">
+                            Semantic vector similarity and AI gap scoring across active engineering roles.
+                        </p>
+                    </div>
+                    <Tooltip content="Import an external job posting by URL or pasted description">
+                        <button
+                            type="button"
+                            onClick={() => setImportModalOpen(true)}
+                            className="inline-flex items-center justify-center gap-2 self-start rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 sm:self-auto"
+                        >
+                            <Plus className="h-4 w-4" />
+                            Import Job
+                        </button>
                     </Tooltip>
                 </div>
+
+                {importBanner && (
+                    <ImportStatusBanner
+                        banner={importBanner}
+                        onViewJob={openImportedJobListing}
+                        onDismiss={() => setImportBanner(null)}
+                    />
+                )}
+
+                <RadarKpiGrid
+                    loading={loading}
+                    aiScoredCount={aiScoredCount}
+                    totalCount={totalCount}
+                    strongCount={strongCount}
+                    alertCount={alertCount}
+                    savedCount={savedCount}
+                />
             </header>
 
             <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-4">
@@ -843,17 +1108,16 @@ export function JobRadarView() {
             />
 
             <JobPostingDrawer
-                jobPreview={selectedJobMatch?.job_posting ?? null}
+                jobPreview={activeDrawerJob}
                 match={selectedJobMatch}
                 saving={
                     selectedJobMatch ? savingJobId === selectedJobMatch.job_posting.uuid : false
                 }
-                saved={
-                    selectedJobMatch
-                        ? Boolean(savedLeadsByJobId[selectedJobMatch.job_posting.uuid])
-                        : false
-                }
-                onClose={() => setSelectedJobMatch(null)}
+                saved={isActiveDrawerJobSaved}
+                onClose={() => {
+                    setSelectedJobMatch(null);
+                    setSelectedImportedJob(null);
+                }}
                 onSaveLead={
                     selectedJobMatch
                         ? () => void handleToggleSaveLead(selectedJobMatch)
@@ -877,6 +1141,12 @@ export function JobRadarView() {
                 }
                 onClose={() => setSelectedGapMatch(null)}
                 onSaveLead={(m) => void handleToggleSaveLead(m)}
+            />
+
+            <ImportJobModal
+                open={importModalOpen}
+                onClose={() => setImportModalOpen(false)}
+                onImported={(res) => void handleJobImported(res)}
             />
         </div>
     );

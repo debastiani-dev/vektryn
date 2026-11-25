@@ -9,7 +9,7 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(
         source="job_posting.company_name", read_only=True
     )
-    apply_url = serializers.URLField(source="job_posting.apply_url", read_only=True)
+    apply_url = serializers.CharField(source="job_posting.apply_url", read_only=True)
     ats_source = serializers.CharField(source="job_posting.ats_source", read_only=True)
 
     class Meta:

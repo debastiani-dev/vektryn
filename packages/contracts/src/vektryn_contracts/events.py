@@ -1,13 +1,17 @@
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+import hashlib
+import re
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
     HttpUrl,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -21,6 +25,53 @@ from vektryn_contracts.enums import (
 )
 
 EMBEDDING_DIMENSIONS = 768
+_HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
+_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+)
+
+
+def validate_apply_url(value: Any) -> str:
+    raw = str(value).strip()
+    if not raw:
+        raise ValueError("apply_url must not be empty")
+    if len(raw) > 512:
+        raise ValueError("apply_url must be at most 512 characters")
+    if any(ch in raw for ch in ("\r", "\n", "\x00")):
+        raise ValueError("apply_url contains invalid control characters")
+
+    if raw.lower().startswith("mailto:"):
+        address = raw[7:].strip()
+        if not address or "?" in address or not _EMAIL_RE.match(address):
+            raise ValueError("apply_url must be a valid mailto: email address")
+        local_part, domain = address.rsplit("@", 1)
+        return f"mailto:{local_part}@{domain.lower()}"
+
+    validated = _HTTP_URL_ADAPTER.validate_python(raw)
+    return str(validated)
+
+
+ApplyUrl = Annotated[str, AfterValidator(validate_apply_url)]
+
+
+def compute_job_content_hash(
+    ats_source: ATSSource | str,
+    title: str,
+    company_name: str,
+    description_clean: str,
+) -> str:
+    source_value = (
+        ats_source.value if isinstance(ats_source, ATSSource) else str(ats_source)
+    )
+    canonical = "|".join(
+        [
+            source_value.strip().lower(),
+            " ".join(title.lower().split()),
+            " ".join(company_name.lower().split()),
+            " ".join(description_clean.lower().split()),
+        ]
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class EventEnvelope(BaseModel):
@@ -43,7 +94,7 @@ class JobRawEvent(EventEnvelope):
     content_hash: str = Field(min_length=64, max_length=64)
     title: str = Field(min_length=1, max_length=255)
     company_name: str = Field(min_length=1, max_length=180)
-    apply_url: HttpUrl
+    apply_url: ApplyUrl
     raw_html_gcs_uri: str = Field(min_length=1, max_length=512)
     location_raw: str = Field(default="", max_length=255)
     description_clean: str = Field(min_length=1)
@@ -111,7 +162,7 @@ class JobMatchAlertEvent(EventEnvelope):
     cosine_similarity: float = Field(ge=0.0, le=1.0)
     matched_skills: list[str] = Field(default_factory=list)
     missing_keywords: list[str] = Field(default_factory=list)
-    apply_url: HttpUrl
+    apply_url: ApplyUrl
 
 
 class DeadLetterEvent(EventEnvelope):

@@ -3,8 +3,11 @@ import type {
     ContractType,
     CurrentUser,
     JobPostingDetail,
+    JobPostingSummary,
     LeadPriority,
     LeadStatus,
+    ManualJobImportInput,
+    ManualJobImportResponse,
     MatchScoreListResponse,
     PaginatedResponse,
     RescoreResponse,
@@ -15,7 +18,7 @@ import type {
 
 function getCookie(name: string): string {
     if (typeof document === "undefined") return "";
-    const match = document.cookie.match(new RegExp(`(^| )${name}=([^;]+)`));
+    const match = new RegExp(`(^| )${name}=([^;]+)`).exec(document.cookie);
     return match ? decodeURIComponent(match[2]) : "";
 }
 
@@ -131,8 +134,17 @@ export const vektrynApi = {
 
     getCurrentUser: () => apiFetch<CurrentUser>("/api/v1/auth/me/"),
 
+    listJobs: (params = "") =>
+        apiFetch<PaginatedResponse<JobPostingSummary>>(`/api/v1/jobs/${params}`),
+
     getJob: (uuid: string) =>
         apiFetch<JobPostingDetail>(`/api/v1/jobs/${encodeURIComponent(uuid)}/`),
+
+    importJob: (payload: ManualJobImportInput) =>
+        apiFetch<ManualJobImportResponse>("/api/v1/jobs/import/", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        }),
 
     listResumes: (params = "") =>
         apiFetch<PaginatedResponse<ResumeProfile>>(`/api/v1/resumes/${params}`),

@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from enum import StrEnum
 import os
 from pathlib import Path
@@ -59,6 +60,8 @@ class ControlPlaneSettings(BaseSettings):
             "STREAM_AUTH_SECRET", "DJANGO_SECRET_KEY", "SECRET_KEY"
         ),
     )
+    stream_edge_url: str = ""
+    ingest_api_key: str = ""
     storage_backend: str = ""
     local_storage_dir: Path = REPO_ROOT / ".local_storage"
     gcs_resumes_bucket: str = Field(
@@ -67,58 +70,71 @@ class ControlPlaneSettings(BaseSettings):
     )
 
 
+def _pick_db_field(
+    *,
+    env_has_database_url: bool,
+    env_var: str,
+    parsed_value: object,
+    fallback: object,
+) -> object:
+    if not env_has_database_url and os.environ.get(env_var):
+        return fallback
+    return parsed_value or fallback
+
+
 def _build_database_config(settings: ControlPlaneSettings) -> dict[str, object]:
-    if settings.database_url.strip():
-        parsed = urlparse(settings.database_url.strip())
-        env_has_database_url = bool(os.environ.get("DATABASE_URL", "").strip())
-        host = (
-            settings.postgres_host
-            if not env_has_database_url and os.environ.get("POSTGRES_HOST")
-            else (parsed.hostname or settings.postgres_host)
-        )
-        port = (
-            settings.postgres_port
-            if not env_has_database_url and os.environ.get("POSTGRES_PORT")
-            else (parsed.port or settings.postgres_port)
-        )
-        name = (
-            settings.postgres_db
-            if not env_has_database_url and os.environ.get("POSTGRES_DB")
-            else (parsed.path.lstrip("/") or settings.postgres_db)
-        )
-        user = (
-            settings.postgres_user
-            if not env_has_database_url and os.environ.get("POSTGRES_USER")
-            else (unquote(parsed.username or "") or settings.postgres_user)
-        )
-        password = (
-            settings.postgres_password
-            if not env_has_database_url and os.environ.get("POSTGRES_PASSWORD")
-            else (unquote(parsed.password or "") or settings.postgres_password)
-        )
-        db_config: dict[str, object] = {
+    if not settings.database_url.strip():
+        return {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": name,
-            "USER": user,
-            "PASSWORD": password,
-            "HOST": host,
-            "PORT": port,
+            "NAME": settings.postgres_db,
+            "USER": settings.postgres_user,
+            "PASSWORD": settings.postgres_password,
+            "HOST": settings.postgres_host,
+            "PORT": settings.postgres_port,
             "CONN_MAX_AGE": 60,
         }
-        query_params = parse_qs(parsed.query)
-        sslmode = query_params.get("sslmode", [None])[0]
-        if sslmode:
-            db_config["OPTIONS"] = {"sslmode": sslmode}
-        return db_config
-    return {
+
+    parsed = urlparse(settings.database_url.strip())
+    env_has_database_url = bool(os.environ.get("DATABASE_URL", "").strip())
+    db_config: dict[str, object] = {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": settings.postgres_db,
-        "USER": settings.postgres_user,
-        "PASSWORD": settings.postgres_password,
-        "HOST": settings.postgres_host,
-        "PORT": settings.postgres_port,
+        "NAME": _pick_db_field(
+            env_has_database_url=env_has_database_url,
+            env_var="POSTGRES_DB",
+            parsed_value=parsed.path.lstrip("/"),
+            fallback=settings.postgres_db,
+        ),
+        "USER": _pick_db_field(
+            env_has_database_url=env_has_database_url,
+            env_var="POSTGRES_USER",
+            parsed_value=unquote(parsed.username or ""),
+            fallback=settings.postgres_user,
+        ),
+        "PASSWORD": _pick_db_field(
+            env_has_database_url=env_has_database_url,
+            env_var="POSTGRES_PASSWORD",
+            parsed_value=unquote(parsed.password or ""),
+            fallback=settings.postgres_password,
+        ),
+        "HOST": _pick_db_field(
+            env_has_database_url=env_has_database_url,
+            env_var="POSTGRES_HOST",
+            parsed_value=parsed.hostname,
+            fallback=settings.postgres_host,
+        ),
+        "PORT": _pick_db_field(
+            env_has_database_url=env_has_database_url,
+            env_var="POSTGRES_PORT",
+            parsed_value=parsed.port,
+            fallback=settings.postgres_port,
+        ),
         "CONN_MAX_AGE": 60,
     }
+    query_params = parse_qs(parsed.query)
+    sslmode = query_params.get("sslmode", [None])[0]
+    if sslmode:
+        db_config["OPTIONS"] = {"sslmode": sslmode}
+    return db_config
 
 
 env = ControlPlaneSettings()
@@ -228,6 +244,8 @@ GEMINI_SCORING_MODEL = env.gemini_scoring_model
 GEMINI_FALLBACK_SCORING_MODEL = env.gemini_fallback_scoring_model
 
 STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
+STREAM_EDGE_URL = env.stream_edge_url.strip().rstrip("/")
+INGEST_API_KEY = env.ingest_api_key.strip()
 STORAGE_BACKEND = env.storage_backend.strip().lower()
 LOCAL_STORAGE_DIR = env.local_storage_dir
 GCS_RESUMES_BUCKET = env.gcs_resumes_bucket.strip()
@@ -256,7 +274,7 @@ REST_FRAMEWORK = {
 }
 
 
-def _choices(enum_cls: type[StrEnum]) -> list[tuple[str, str]]:
+def _choices(enum_cls: Iterable[StrEnum]) -> list[tuple[str, str]]:
     return [
         (member.value, member.name.replace("_", " ").title()) for member in enum_cls
     ]

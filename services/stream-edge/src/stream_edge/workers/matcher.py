@@ -170,6 +170,7 @@ def _upsert_job_posting(
         )
         ON CONFLICT (ats_source, external_id) DO UPDATE SET
             modified_at = EXCLUDED.modified_at,
+            is_deleted = FALSE,
             content_hash = EXCLUDED.content_hash,
             title = EXCLUDED.title,
             company_name = EXCLUDED.company_name,
@@ -187,6 +188,7 @@ def _upsert_job_posting(
             tech_stack = EXCLUDED.tech_stack,
             embedding = EXCLUDED.embedding,
             is_active = TRUE,
+            closed_at = NULL,
             posted_at = COALESCE(EXCLUDED.posted_at, jobs_jobposting.posted_at)
         RETURNING uuid
         """,

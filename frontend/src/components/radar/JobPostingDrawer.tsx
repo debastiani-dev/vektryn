@@ -9,6 +9,7 @@ import {
     Globe2,
     Hash,
     Layers,
+    Mail,
     MapPin,
     Sparkles,
     X,
@@ -22,6 +23,8 @@ import type {
     SeniorityLevel,
 } from "../../types/models";
 import {
+    formatApplyLinkLabel,
+    formatApplyLinkTooltip,
     formatAtsSource,
     formatContractType,
     formatExactDate,
@@ -29,6 +32,7 @@ import {
     formatRelativeTime,
     formatSalaryRange,
     formatSeniority,
+    isMailtoUrl,
 } from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -73,6 +77,177 @@ function DescriptionSkeleton() {
             <div className="pt-2 h-4 w-full rounded bg-zinc-800/70" />
             <div className="h-4 w-10/12 rounded bg-zinc-800/70" />
             <div className="h-4 w-4/5 rounded bg-zinc-800/60" />
+        </div>
+    );
+}
+
+function formatPostedDisplay(postedAt: string | null | undefined): string {
+    const postedAge = formatRelativeTime(postedAt ?? null);
+    const postedExact = formatExactDate(postedAt ?? null);
+    if (postedExact && postedAge) {
+        return `${postedExact} (${postedAge})`;
+    }
+    return postedExact ?? "Unknown";
+}
+
+function getSaveButtonLabel(saved: boolean, saving: boolean): string {
+    if (saved) return "Saved in Pipeline";
+    if (saving) return "Saving...";
+    return "Save to Tracker";
+}
+
+function JobDescriptionBody({
+    loadingDetail,
+    detailError,
+    descriptionClean,
+}: Readonly<{
+    loadingDetail: boolean;
+    detailError: string | null;
+    descriptionClean: string;
+}>) {
+    if (loadingDetail) {
+        return <DescriptionSkeleton />;
+    }
+    if (detailError) {
+        return (
+            <div className="rounded-xl border border-red-500/30 bg-red-950/20 px-4 py-3 text-sm text-red-300">
+                {detailError}
+            </div>
+        );
+    }
+    const cleanedText = descriptionClean.trim();
+    if (!cleanedText) {
+        return (
+            <p className="text-sm text-zinc-500">
+                No full job description text is stored for this posting. Use &ldquo;Open Original Posting&rdquo; below to read the source listing.
+            </p>
+        );
+    }
+    return (
+        <div className="whitespace-pre-wrap break-words text-sm leading-7 text-zinc-300">
+            {cleanedText}
+        </div>
+    );
+}
+
+function JobTechStackSection({
+    techStack,
+    matchedSet,
+}: Readonly<{
+    techStack: string[];
+    matchedSet: Set<string>;
+}>) {
+    if (techStack.length === 0) {
+        return null;
+    }
+    return (
+        <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+            <h3 className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
+                <Layers className="h-4 w-4 text-violet-400" />
+                Tech Stack ({techStack.length})
+            </h3>
+            <div className="flex flex-wrap gap-2">
+                {techStack.map((tag) => {
+                    const isMatched = matchedSet.has(tag.toLowerCase());
+                    const tagTooltip = isMatched
+                        ? `${tag} — matches your resume profile`
+                        : `${tag} — listed in job requirements`;
+                    return (
+                        <Tooltip key={tag} content={tagTooltip}>
+                            <span
+                                className={`rounded-lg border px-3 py-1 font-mono text-xs ${
+                                    isMatched
+                                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                        : "border-zinc-800 bg-zinc-800/75 text-zinc-300"
+                                }`}
+                            >
+                                {tag}
+                            </span>
+                        </Tooltip>
+                    );
+                })}
+            </div>
+        </section>
+    );
+}
+
+function JobDrawerFooter({
+    applyUrl,
+    saving,
+    saved,
+    onSaveLead,
+    onOpenGapDetails,
+}: Readonly<{
+    applyUrl: string;
+    saving: boolean;
+    saved: boolean;
+    onSaveLead?: () => void;
+    onOpenGapDetails?: () => void;
+}>) {
+    const isEmailApply = isMailtoUrl(applyUrl);
+    const saveTooltip = saved
+        ? "This role is already saved in your Pipeline Tracker"
+        : "Save this role to your Pipeline Tracker";
+
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
+            <div className="flex flex-wrap items-center gap-3">
+                {onSaveLead && (
+                    <Tooltip content={saveTooltip}>
+                        <button
+                            type="button"
+                            disabled={saving || saved}
+                            onClick={onSaveLead}
+                            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${
+                                saved
+                                    ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
+                                    : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
+                            }`}
+                        >
+                            {saved ? (
+                                <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+                            ) : (
+                                <BookmarkPlus className="h-4 w-4 text-violet-400" />
+                            )}
+                            {getSaveButtonLabel(saved, saving)}
+                        </button>
+                    </Tooltip>
+                )}
+
+                {onOpenGapDetails && (
+                    <Tooltip content="Switch to AI skill gap analysis and talking points">
+                        <button
+                            type="button"
+                            onClick={onOpenGapDetails}
+                            className="inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                        >
+                            <Sparkles className="h-4 w-4 text-violet-400" />
+                            Gap Details
+                        </button>
+                    </Tooltip>
+                )}
+            </div>
+
+            <Tooltip
+                content={formatApplyLinkTooltip(
+                    applyUrl,
+                    "Open the job application page in a new tab",
+                )}
+            >
+                <a
+                    href={applyUrl}
+                    target={isEmailApply ? undefined : "_blank"}
+                    rel={isEmailApply ? undefined : "noreferrer"}
+                    className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
+                >
+                    {formatApplyLinkLabel(applyUrl, "Open Original Posting")}{" "}
+                    {isEmailApply ? (
+                        <Mail className="h-4 w-4" />
+                    ) : (
+                        <ExternalLink className="h-4 w-4" />
+                    )}
+                </a>
+            </Tooltip>
         </div>
     );
 }
@@ -154,56 +329,13 @@ export function JobPostingDrawer({
         job.salary_currency ?? null,
         job.salary_period ?? null,
     );
-    const postedAge = formatRelativeTime(job.posted_at ?? null);
-    const postedExact = formatExactDate(job.posted_at ?? null);
-    let postedDisplay = "Unknown";
-    if (postedExact && postedAge) {
-        postedDisplay = `${postedExact} (${postedAge})`;
-    } else if (postedExact) {
-        postedDisplay = postedExact;
-    }
+    const postedDisplay = formatPostedDisplay(job.posted_at);
     const ingestedExact = formatExactDate(detail?.created_at ?? job.created_at ?? null);
     const closedExact = formatExactDate(detail?.closed_at ?? null);
     const externalId = detail?.external_id ?? job.external_id ?? null;
     const matchedSet = new Set(
         (match?.matched_skills ?? []).map((skill) => skill.toLowerCase()),
     );
-
-    let saveButtonLabel = "Save to Tracker";
-    if (saved) {
-        saveButtonLabel = "Saved in Pipeline";
-    } else if (saving) {
-        saveButtonLabel = "Saving...";
-    }
-    const saveTooltip = saved
-        ? "This role is already saved in your Pipeline Tracker"
-        : "Save this role to your Pipeline Tracker";
-
-    function renderDescriptionBody() {
-        if (loadingDetail) {
-            return <DescriptionSkeleton />;
-        }
-        if (detailError) {
-            return (
-                <div className="rounded-xl border border-red-500/30 bg-red-950/20 px-4 py-3 text-sm text-red-300">
-                    {detailError}
-                </div>
-            );
-        }
-        const cleanedText = detail?.description_clean.trim() ?? "";
-        if (!cleanedText) {
-            return (
-                <p className="text-sm text-zinc-500">
-                    No full job description text is stored for this posting. Use &ldquo;Open Original Posting&rdquo; below to read the source listing.
-                </p>
-            );
-        }
-        return (
-            <div className="whitespace-pre-wrap break-words text-sm leading-7 text-zinc-300">
-                {cleanedText}
-            </div>
-        );
-    }
 
     return (
         <div className="fixed inset-0 z-50 flex justify-end">
@@ -392,92 +524,28 @@ export function JobPostingDrawer({
                         </div>
                     </section>
 
-                    {techStack.length > 0 && (
-                        <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                            <h3 className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
-                                <Layers className="h-4 w-4 text-violet-400" />
-                                Tech Stack ({techStack.length})
-                            </h3>
-                            <div className="flex flex-wrap gap-2">
-                                {techStack.map((tag) => {
-                                    const isMatched = matchedSet.has(tag.toLowerCase());
-                                    const tagTooltip = isMatched
-                                        ? `${tag} — matches your resume profile`
-                                        : `${tag} — listed in job requirements`;
-                                    return (
-                                        <Tooltip key={tag} content={tagTooltip}>
-                                            <span
-                                                className={`rounded-lg border px-3 py-1 font-mono text-xs ${isMatched
-                                                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                                                        : "border-zinc-800 bg-zinc-800/75 text-zinc-300"
-                                                    }`}
-                                            >
-                                                {tag}
-                                            </span>
-                                        </Tooltip>
-                                    );
-                                })}
-                            </div>
-                        </section>
-                    )}
+                    <JobTechStackSection techStack={techStack} matchedSet={matchedSet} />
 
                     <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
                         <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
                             <FileText className="h-4 w-4 text-violet-400" />
                             Full Job Description
                         </h3>
-                        {renderDescriptionBody()}
+                        <JobDescriptionBody
+                            loadingDetail={loadingDetail}
+                            detailError={detailError}
+                            descriptionClean={detail?.description_clean ?? ""}
+                        />
                     </section>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
-                    <div className="flex flex-wrap items-center gap-3">
-                        {onSaveLead && (
-                            <Tooltip content={saveTooltip}>
-                                <button
-                                    type="button"
-                                    disabled={saving || saved}
-                                    onClick={onSaveLead}
-                                    className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${saved
-                                            ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
-                                            : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
-                                        }`}
-                                >
-                                    {saved ? (
-                                        <BookmarkCheck className="h-4 w-4 text-emerald-400" />
-                                    ) : (
-                                        <BookmarkPlus className="h-4 w-4 text-violet-400" />
-                                    )}
-                                    {saveButtonLabel}
-                                </button>
-                            </Tooltip>
-                        )}
-
-                        {onOpenGapDetails && (
-                            <Tooltip content="Switch to AI skill gap analysis and talking points">
-                                <button
-                                    type="button"
-                                    onClick={onOpenGapDetails}
-                                    className="inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
-                                >
-                                    <Sparkles className="h-4 w-4 text-violet-400" />
-                                    Gap Details
-                                </button>
-                            </Tooltip>
-                        )}
-                    </div>
-
-                    <Tooltip content="Open the job application page in a new tab">
-                        <a
-                            href={job.apply_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
-                        >
-                            Open Original Posting <ExternalLink className="h-4 w-4" />
-                        </a>
-                    </Tooltip>
-                </div>
+                <JobDrawerFooter
+                    applyUrl={job.apply_url}
+                    saving={saving}
+                    saved={saved}
+                    onSaveLead={onSaveLead}
+                    onOpenGapDetails={onOpenGapDetails}
+                />
             </dialog>
         </div>
     );
