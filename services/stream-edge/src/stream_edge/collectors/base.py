@@ -44,20 +44,23 @@ class BaseATSCollector(ABC):
         raise NotImplementedError
 
 
-async def push_jobs_to_edge(
+async def push_jobs_with_stats(
     *,
     http_client: httpx.AsyncClient,
     edge_base_url: str,
     jobs: list[CollectedJob],
     ingest_api_key: str | None = None,
-) -> int:
+) -> dict[str, tuple[int, int]]:
+    """Pushes collected jobs and returns {ats_source: (accepted_count, error_count)}."""
     endpoint = f"{edge_base_url.rstrip('/')}/ingest/jobs"
     api_key = (
         ingest_api_key if ingest_api_key is not None else settings.ingest_api_key
     ).strip()
     headers = {"X-Ingest-API-Key": api_key} if api_key else {}
-    accepted = 0
+    counts: dict[str, tuple[int, int]] = {}
     for job in jobs:
+        source_key = job.ats_source.value
+        accepted, errors = counts.get(source_key, (0, 0))
         try:
             resp = await http_client.post(
                 endpoint,
@@ -66,12 +69,29 @@ async def push_jobs_to_edge(
                 timeout=15.0,
             )
             resp.raise_for_status()
-            accepted += 1
+            counts[source_key] = (accepted + 1, errors)
         except httpx.HTTPError as exc:
+            counts[source_key] = (accepted, errors + 1)
             logger.warning(
                 "Failed pushing %s:%s to edge: %s",
-                job.ats_source.value,
+                source_key,
                 job.external_id,
                 exc,
             )
-    return accepted
+    return counts
+
+
+async def push_jobs_to_edge(
+    *,
+    http_client: httpx.AsyncClient,
+    edge_base_url: str,
+    jobs: list[CollectedJob],
+    ingest_api_key: str | None = None,
+) -> int:
+    stats = await push_jobs_with_stats(
+        http_client=http_client,
+        edge_base_url=edge_base_url,
+        jobs=jobs,
+        ingest_api_key=ingest_api_key,
+    )
+    return sum(accepted for accepted, _ in stats.values())

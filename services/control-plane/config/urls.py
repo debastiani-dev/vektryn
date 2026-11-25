@@ -4,6 +4,10 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.analytics.views.system import (
+    system_status_view,
+    trigger_collector_sync_view,
+)
 from apps.base.views.auth import (
     csrf_cookie_view,
     current_user_view,
@@ -41,4 +45,10 @@ urlpatterns = [
     path("api/v1/matches/", include("apps.matching.urls")),
     path("api/v1/leads/", include("apps.tracker.urls")),
     path("api/v1/analytics/", include("apps.analytics.urls")),
+    path("api/v1/system/status/", system_status_view, name="api-system-status"),
+    path(
+        "api/v1/system/collect/",
+        trigger_collector_sync_view,
+        name="api-system-collect",
+    ),
 ]

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -16,6 +17,12 @@ from stream_edge.clients.kafka import (
 )
 from stream_edge.collectors.ats_boards import BreezyCollector
 from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
+from stream_edge.collectors.run import (
+    SourceRunMetrics,
+    compute_collected_job_hash,
+    partition_new_and_deduped_jobs,
+    persist_collector_run_logs_sync,
+)
 from stream_edge.config import StreamEdgeSettings, settings as edge_settings
 from stream_edge.main import app
 from stream_edge.workers.dlq_replay import replay_dlq
@@ -33,6 +40,7 @@ from vektryn_contracts import (
     DeadLetterEvent,
     EMBEDDING_DIMENSIONS,
     JobEnrichedEvent,
+    compute_job_content_hash,
     JobRescoreEvent,
     KafkaTopic,
     sign_stream_token,
@@ -644,3 +652,127 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
 
     fake_gemini.evaluate_resume_fit.assert_awaited_once()
     fake_producer._publish_sync.assert_called_once()
+
+
+async def test_collector_pre_dedup_hash_parity_log_persistence_and_retention():
+    job_new = CollectedJob(
+        ats_source=ATSSource.GREENHOUSE,
+        external_id="gh-new",
+        title="Senior Python Engineer",
+        company_name="Acme",
+        apply_url="https://acme.example/new",
+        raw_html="<p>Build Kafka pipelines</p>",
+        description_clean="Build Kafka pipelines",
+    )
+    job_db_dup = CollectedJob(
+        ats_source=ATSSource.GREENHOUSE,
+        external_id="gh-db",
+        title="Staff Backend Engineer",
+        company_name="Beta",
+        apply_url="https://beta.example/dup",
+        raw_html="<p>Django systems</p>",
+        description_clean="Django systems",
+    )
+    job_redis_dup = CollectedJob(
+        ats_source=ATSSource.REMOTIVE,
+        external_id="rem-1",
+        title="Platform Engineer",
+        company_name="Gamma",
+        apply_url="https://gamma.example/rem",
+        raw_html="<p>PostgreSQL ops</p>",
+        description_clean="PostgreSQL ops",
+    )
+
+    # Verify exact parity with shared contract compute_job_content_hash
+    assert compute_collected_job_hash(job_new) == compute_job_content_hash(
+        ats_source=job_new.ats_source,
+        title=job_new.title,
+        company_name=job_new.company_name,
+        description_clean=job_new.description_clean,
+    )
+
+    db_hash = compute_collected_job_hash(job_db_dup)
+    redis_hash = compute_collected_job_hash(job_redis_dup)
+
+    with (
+        patch(
+            "stream_edge.collectors.run._find_existing_active_hashes_sync",
+            return_value={db_hash},
+        ),
+        patch(
+            "stream_edge.collectors.run._find_redis_claimed_hashes",
+            new=AsyncMock(return_value={redis_hash}),
+        ),
+    ):
+        to_ingest, deduped = await partition_new_and_deduped_jobs(
+            [job_new, job_db_dup, job_redis_dup, job_new]
+        )
+
+    assert [j.external_id for j in to_ingest] == ["gh-new"]
+    assert [j.external_id for j in deduped] == ["gh-db", "rem-1", "gh-new"]
+
+    # Verify bulk INSERT + 90-day retention sweep SQL
+    executed_sql: list[str] = []
+    fake_cursor = MagicMock()
+    fake_cursor.__enter__.return_value = fake_cursor
+    fake_cursor.executemany.side_effect = lambda sql, rows: executed_sql.append(sql)
+    fake_cursor.execute.side_effect = lambda sql, params=None: executed_sql.append(sql)
+    fake_conn = MagicMock()
+    fake_conn.__enter__.return_value = fake_conn
+    fake_conn.cursor.return_value = fake_cursor
+
+    with patch("stream_edge.collectors.run.psycopg.connect", return_value=fake_conn):
+        count = persist_collector_run_logs_sync(
+            {
+                "greenhouse": SourceRunMetrics(
+                    fetched_count=12,
+                    ingested_count=3,
+                    deduped_count=9,
+                    error_count=0,
+                    duration_ms=850,
+                )
+            },
+            datetime.now(UTC),
+        )
+
+    assert count == 1
+    assert any("INSERT INTO analytics_collectorrunlog" in s for s in executed_sql)
+    assert any(
+        "DELETE FROM analytics_collectorrunlog WHERE ran_at < %s" in s
+        for s in executed_sql
+    )
+    fake_conn.commit.assert_called_once()
+
+
+async def test_internal_collect_endpoint_auth_subprocess_and_single_flight(monkeypatch):
+    monkeypatch.setattr(edge_settings, "ingest_api_key", "edge-secret-key")
+    app.state.active_collect_proc = None
+
+    fake_proc = MagicMock(pid=43210, returncode=None)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        unauth = await client.post("/internal/collect")
+        assert unauth.status_code == 401
+
+        with patch(
+            "stream_edge.api.internal.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=fake_proc),
+        ) as mock_spawn:
+            ok = await client.post(
+                "/internal/collect",
+                headers={"X-Ingest-API-Key": "edge-secret-key"},
+            )
+            assert ok.status_code == 202
+            assert ok.json() == {"status": "queued", "pid": 43210}
+            mock_spawn.assert_awaited_once()
+
+            # Concurrent call while process is still active returns 409 Conflict
+            conflict = await client.post(
+                "/internal/collect",
+                headers={"X-Ingest-API-Key": "edge-secret-key"},
+            )
+            assert conflict.status_code == 409
+
+    app.state.active_collect_proc = None

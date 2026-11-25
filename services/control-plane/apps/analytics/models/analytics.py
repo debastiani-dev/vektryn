@@ -1,7 +1,7 @@
 from django.db import models
 
 from apps.base.models.base_model import TimestampsOnlyBaseModel, enum_choices
-from vektryn_contracts.enums import TechCategory
+from vektryn_contracts.enums import ATSSource, TechCategory
 
 
 class StackTrendDaily(TimestampsOnlyBaseModel):
@@ -39,3 +39,31 @@ class StackTrendDaily(TimestampsOnlyBaseModel):
 
     def __str__(self) -> str:
         return f"{self.bucket_date} | {self.tag} ({self.mention_count})"
+
+
+class CollectorRunLog(TimestampsOnlyBaseModel):
+    source = models.CharField(
+        max_length=32,
+        choices=enum_choices(ATSSource),
+    )
+    fetched_count = models.PositiveIntegerField(default=0)
+    ingested_count = models.PositiveIntegerField(default=0)
+    deduped_count = models.PositiveIntegerField(default=0)
+    error_count = models.PositiveIntegerField(default=0)
+    duration_ms = models.PositiveIntegerField(default=0)
+    ran_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        ordering = ["-ran_at", "source"]
+        indexes = [
+            models.Index(
+                fields=["source", "-ran_at"],
+                name="idx_collector_run_source_ran",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.source} @ {self.ran_at:%Y-%m-%d %H:%M} "
+            f"(in={self.ingested_count}, dup={self.deduped_count}, err={self.error_count})"
+        )

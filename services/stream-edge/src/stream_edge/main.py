@@ -12,6 +12,7 @@ from prometheus_client import make_asgi_app
 
 from stream_edge.api.alerts_sse import router as alerts_router
 from stream_edge.api.ingest import router as ingest_router
+from stream_edge.api.internal import router as internal_router
 from stream_edge.clients.gcs import SnapshotStorageClient
 from stream_edge.clients.kafka import KafkaEventProducer
 from stream_edge.config import settings
@@ -84,6 +85,7 @@ app.add_middleware(
 
 app.include_router(ingest_router)
 app.include_router(alerts_router)
+app.include_router(internal_router)
 _configure_telemetry(app)
 
 

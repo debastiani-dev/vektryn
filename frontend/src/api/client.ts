@@ -10,10 +10,12 @@ import type {
     ManualJobImportResponse,
     MatchScoreListResponse,
     PaginatedResponse,
+    PipelineStatusResponse,
     RescoreResponse,
     ResumeProfile,
     SeniorityLevel,
     StackTrendDaily,
+    TriggerCollectResponse,
 } from "../types/models";
 
 function getCookie(name: string): string {
@@ -206,4 +208,11 @@ export const vektrynApi = {
 
     listTrends: (params = "") =>
         apiFetch<PaginatedResponse<StackTrendDaily>>(`/api/v1/analytics/trends/${params}`),
+
+    getSystemStatus: () => apiFetch<PipelineStatusResponse>("/api/v1/system/status/"),
+
+    triggerCollectorSync: () =>
+        apiFetch<TriggerCollectResponse>("/api/v1/system/collect/", {
+            method: "POST",
+        }),
 };

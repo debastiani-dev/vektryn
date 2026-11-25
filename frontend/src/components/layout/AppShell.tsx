@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { CurrentUser, LiveMatchAlert } from "../../types/models";
 import { Tooltip } from "../ui/Tooltip";
 import { LiveAlertBanner } from "./LiveAlertBanner";
+import { PipelineStatusPopover } from "./PipelineStatusPopover";
 
 export type ActiveTab = "radar" | "tracker" | "analytics" | "resumes";
 
@@ -108,6 +109,8 @@ export function AppShell({
                     </div>
 
                     <div className="flex items-center gap-3">
+                        <PipelineStatusPopover isStaff={Boolean(user?.is_staff)} />
+
                         <Tooltip content={streamTooltip} side="bottom">
                             <div
                                 className={`inline-flex items-center gap-2.5 rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset ${sseConnected

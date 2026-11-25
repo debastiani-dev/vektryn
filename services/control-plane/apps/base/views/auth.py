@@ -10,13 +10,14 @@ from rest_framework.response import Response
 from vektryn_contracts import sign_stream_token
 
 
-def _serialize_user_session(user) -> dict[str, str]:
+def _serialize_user_session(user) -> dict[str, str | bool]:
     user_id = str(user.id)
     stream_token = sign_stream_token(user_id, settings.STREAM_AUTH_SECRET)
     return {
         "id": user_id,
         "username": user.get_username(),
         "email": getattr(user, "email", ""),
+        "is_staff": bool(getattr(user, "is_staff", False)),
         "stream_token": stream_token,
     }
 

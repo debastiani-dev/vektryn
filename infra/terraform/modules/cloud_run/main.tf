@@ -89,6 +89,21 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
+        name  = "GCP_PROJECT_ID"
+        value = var.project_id
+      }
+
+      env {
+        name  = "GCP_REGION"
+        value = var.region
+      }
+
+      env {
+        name  = "COLLECTOR_JOB_NAME"
+        value = google_cloud_run_v2_job.scheduled_workers["collect"].name
+      }
+
+      env {
         name = "SECRET_KEY"
         value_source {
           secret_key_ref {
@@ -479,6 +494,14 @@ resource "google_cloud_run_v2_job_iam_member" "scheduler_invokers" {
   name     = each.value.name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${var.scheduler_sa_email}"
+}
+
+resource "google_cloud_run_v2_job_iam_member" "control_plane_collect_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_job.scheduled_workers["collect"].name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.control_plane_sa_email}"
 }
 
 resource "google_cloud_scheduler_job" "scheduled_worker_triggers" {
