@@ -82,6 +82,8 @@ export interface MatchScore {
     missing_keywords: string[];
     talking_points: string[];
     gap_summary: string;
+    fit_highlights?: string[];
+    watchout_note?: string;
     scoring_model: string;
     is_stale?: boolean;
     alert_sent_at?: string | null;

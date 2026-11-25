@@ -431,6 +431,8 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
         missing_keywords=["kafka"],
         talking_points=["Highlight Django scale."],
         gap_summary="Strong fit.",
+        fit_highlights=["Direct Python/Django ownership."],
+        watchout_note="",
     )
     fake_gemini = MagicMock()
     fake_gemini.evaluate_resume_fit = AsyncMock(
@@ -638,6 +640,8 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
         missing_keywords=["go"],
         talking_points=["Highlight distributed systems."],
         gap_summary="Strong backend fit.",
+        fit_highlights=["Strong PostgreSQL and distributed systems background."],
+        watchout_note="Go is not listed on your resume.",
     )
     fake_gemini = MagicMock()
     fake_gemini.evaluate_resume_fit = AsyncMock(
@@ -806,6 +810,11 @@ async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused
                         "Your React and TypeScript background aligns directly with this role's "
                         "core product engineering scope."
                     ),
+                    "fit_highlights": [
+                        "Direct ownership of React UI architecture and component systems.",
+                        "Strong TypeScript tooling experience matching the target stack.",
+                    ],
+                    "watchout_note": "GraphQL query tuning is not explicitly highlighted on your resume.",
                 }
             ),
             "gemini-4-hydrogen",
@@ -827,7 +836,10 @@ async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused
     assert captured["operation"] == "evaluate_fit"
     assert model_used == "gemini-4-hydrogen"
     assert evaluation.fit_score == 86
+    assert len(evaluation.fit_highlights) == 2
+    assert evaluation.watchout_note.startswith("GraphQL")
     assert "core backend/architecture overlap" not in prompt
     assert "actual engineering discipline" in prompt
-    assert "strongest reasons to apply" in prompt
+    assert "fit_highlights:" in prompt
+    assert "watchout_note:" in prompt
     assert "TARGET ROLE: Staff Frontend Engineer @ Acme" in prompt

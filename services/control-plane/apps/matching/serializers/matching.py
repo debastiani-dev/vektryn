@@ -31,6 +31,8 @@ class MatchScoreSerializer(serializers.ModelSerializer):
             "missing_keywords",
             "talking_points",
             "gap_summary",
+            "fit_highlights",
+            "watchout_note",
             "scoring_model",
             "is_stale",
             "alert_sent_at",
