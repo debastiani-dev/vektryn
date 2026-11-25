@@ -848,6 +848,71 @@ def test_manual_import_html_json_ld_extraction_and_snapshot_cap():
     )
     assert slug_extracted.company_name == "Stripe Payments"
 
+    # Generalized LinkedIn URL canonicalization (currentJobId -> /jobs/view/<id>/) and company extraction
+    assert (
+        manual_import.normalize_import_url(
+            "https://www.linkedin.com/jobs/collections/recommended/?currentJobId=4493044423&trk=abc"
+        )
+        == "https://www.linkedin.com/jobs/view/4493044423/"
+    )
+    assert (
+        manual_import.normalize_import_url(
+            "https://br.linkedin.com/jobs/search/?currentJobId=987654321"
+        )
+        == "https://www.linkedin.com/jobs/view/987654321/"
+    )
+
+    li_pt_html = """
+    <html>
+      <head>
+        <meta property="og:site_name" content="LinkedIn" />
+        <title>Acme Labs está contratando Desenvolvedor Fullstack em Brasil | LinkedIn</title>
+      </head>
+      <body><main><p>Desenvolvimento backend Python, Django, PostgreSQL e serviços distribuídos em nuvem.</p></main></body>
+    </html>
+    """
+    li_pt = extract_job_from_html(
+        li_pt_html,
+        "https://br.linkedin.com/jobs/view/desenvolvedor-fullstack-at-acme-labs-4493044423",
+    )
+    assert li_pt.company_name == "Acme Labs"
+
+    li_slug_only = extract_job_from_html(
+        "<html><head><title>Software Engineer | LinkedIn</title></head>"
+        "<body><main><p>Build Python, Kafka, and distributed PostgreSQL systems with global engineering teams.</p></main></body></html>",
+        "https://de.linkedin.com/jobs/view/software-engineer-at-mercado-livre-123456789",
+    )
+    assert li_slug_only.company_name == "Mercado Livre"
+
+    # LinkedIn authwall redirect raises ManualImportFetchError (422) instead of importing login text
+    def _authwall_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/jobs/view/"):
+            return httpx.Response(
+                302, headers={"Location": "https://www.linkedin.com/authwall?trk=gf"}
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/html"},
+            text="<html><body><main>Join LinkedIn to continue viewing jobs and profiles across our network today.</main></body></html>",
+        )
+
+    with (
+        patch(
+            "apps.jobs.services.manual_import.socket.getaddrinfo",
+            return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+            ],
+        ),
+        httpx.Client(
+            transport=httpx.MockTransport(_authwall_handler), follow_redirects=False
+        ) as mock_client,
+    ):
+        with pytest.raises(ManualImportFetchError, match="sign-in wall"):
+            fetch_public_job_page(
+                "https://www.linkedin.com/jobs/collections/recommended/?currentJobId=4493044423",
+                client=mock_client,
+            )
+
 
 @pytest.mark.django_db
 def test_manual_import_endpoint_url_email_dedup_reactivate_and_guards(settings):

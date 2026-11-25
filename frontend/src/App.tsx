@@ -8,6 +8,7 @@ import { ResumesView } from "./components/resumes/ResumesView";
 import { PipelineTrackerView } from "./components/tracker/PipelineTrackerView";
 import { useAlertStream } from "./hooks/useAlertStream";
 import type { CurrentUser } from "./types/models";
+import { clearPendingImport } from "./utils/pendingImportStorage";
 
 export function App() {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
@@ -45,6 +46,7 @@ export function App() {
         } catch {
             // Clear local session regardless of server response
         } finally {
+            clearPendingImport();
             setUser(null);
             setActiveTab("radar");
         }

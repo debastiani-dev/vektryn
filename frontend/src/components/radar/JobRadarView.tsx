@@ -42,6 +42,12 @@ import {
     isMailtoUrl,
     scoreVisualTheme,
 } from "../../utils/format";
+import {
+    clearPendingImport,
+    loadPendingImport,
+    PENDING_IMPORT_STORAGE_KEY,
+    savePendingImport,
+} from "../../utils/pendingImportStorage";
 import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
 import { GapAnalysisDrawer } from "./GapAnalysisDrawer";
@@ -403,19 +409,50 @@ interface ImportBannerState {
     company: string;
     message: string;
     externalId?: string;
+    startedAt?: number;
     job?: JobPostingSummary | null;
+}
+
+function formatElapsedDuration(elapsedSeconds: number): string {
+    if (elapsedSeconds < 60) {
+        return `${elapsedSeconds}s`;
+    }
+    const mins = Math.floor(elapsedSeconds / 60);
+    const secs = elapsedSeconds % 60;
+    return `${mins}m ${secs}s`;
 }
 
 function ImportStatusBanner({
     banner,
     onViewJob,
+    onRetryWait,
     onDismiss,
 }: Readonly<{
     banner: ImportBannerState;
     onViewJob: (job: JobPostingSummary) => void;
+    onRetryWait: () => void;
     onDismiss: () => void;
 }>) {
+    const [nowMs, setNowMs] = useState(() => Date.now());
+
+    useEffect(() => {
+        if (banner.phase !== "queued" || !banner.startedAt) {
+            return;
+        }
+        const intervalId = window.setInterval(() => {
+            setNowMs(Date.now());
+        }, 1000);
+        return () => window.clearInterval(intervalId);
+    }, [banner.phase, banner.startedAt]);
+
     const isReady = banner.phase === "ready";
+    const isQueued = banner.phase === "queued";
+    const elapsedSeconds =
+        isQueued && banner.startedAt
+            ? Math.max(0, Math.floor((nowMs - banner.startedAt) / 1000))
+            : 0;
+    const canResumeWait = banner.phase === "info" && Boolean(banner.externalId) && !banner.job;
+
     return (
         <div
             className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-5 py-3.5 text-sm ${
@@ -425,7 +462,7 @@ function ImportStatusBanner({
             }`}
         >
             <div className="flex items-center gap-3 min-w-0">
-                {banner.phase === "queued" ? (
+                {isQueued ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-violet-300" />
                 ) : (
                     <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
@@ -435,6 +472,11 @@ function ImportStatusBanner({
                     <span className="text-zinc-400">@ {banner.company}</span>
                     <span className="mx-2 text-zinc-600">·</span>
                     <span>{banner.message}</span>
+                    {isQueued && elapsedSeconds > 0 && (
+                        <span className="ml-2 font-mono text-xs tabular-nums text-violet-300/80">
+                            ({formatElapsedDuration(elapsedSeconds)})
+                        </span>
+                    )}
                 </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -447,6 +489,15 @@ function ImportStatusBanner({
                         className="rounded-lg border border-emerald-500/35 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/25"
                     >
                         View Job
+                    </button>
+                )}
+                {canResumeWait && (
+                    <button
+                        type="button"
+                        onClick={onRetryWait}
+                        className="rounded-lg border border-violet-500/35 bg-violet-500/15 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/25"
+                    >
+                        Keep Waiting
                     </button>
                 )}
                 <button
@@ -462,6 +513,134 @@ function ImportStatusBanner({
     );
 }
 
+const IMPORT_POLL_FAST_ATTEMPTS = 12;
+const IMPORT_POLL_FAST_INTERVAL_MS = 2500;
+const IMPORT_POLL_STEADY_INTERVAL_MS = 5000;
+const IMPORT_POLL_MAX_DURATION_MS = 10 * 60 * 1000; // 10 minutes safety cap
+
+function restorePendingImportBanner(): ImportBannerState | null {
+    const pending = loadPendingImport();
+    if (!pending) {
+        return null;
+    }
+    return {
+        phase: "queued",
+        title: pending.title,
+        company: pending.company,
+        externalId: pending.externalId,
+        startedAt: pending.startedAt,
+        message: "Importing — waiting for AI enrichment and scoring to finish...",
+    };
+}
+
+function computeNextPollDelayMs(attempts: number): number {
+    return attempts < IMPORT_POLL_FAST_ATTEMPTS
+        ? IMPORT_POLL_FAST_INTERVAL_MS
+        : IMPORT_POLL_STEADY_INTERVAL_MS;
+}
+
+function computeInitialPollDelayMs(startedAt: number): number {
+    return Date.now() - startedAt >= IMPORT_POLL_FAST_INTERVAL_MS
+        ? 0
+        : IMPORT_POLL_FAST_INTERVAL_MS;
+}
+
+async function fetchImportedJobByExternalId(
+    externalId: string,
+): Promise<JobPostingSummary | null> {
+    try {
+        const res = await vektrynApi.listJobs(
+            `?ats_source=manual&external_id=${encodeURIComponent(externalId)}`,
+        );
+        return res.results[0] ?? null;
+    } catch {
+        // Ignore transient poll errors and keep waiting
+        return null;
+    }
+}
+
+function useCrossTabPendingImportSync(
+    onSynced: (banner: ImportBannerState | null, cleared: boolean) => void,
+) {
+    useEffect(() => {
+        function handleStorageSync(event: StorageEvent) {
+            if (event.key !== PENDING_IMPORT_STORAGE_KEY) {
+                return;
+            }
+            onSynced(restorePendingImportBanner(), event.newValue === null);
+        }
+        window.addEventListener("storage", handleStorageSync);
+        return () => window.removeEventListener("storage", handleStorageSync);
+    }, [onSynced]);
+}
+
+class PendingImportPoller {
+    private readonly externalId: string;
+    private readonly startedAt: number;
+    private readonly onPersisted: (externalId: string, persisted: JobPostingSummary) => void;
+    private readonly onTimeout: (externalId: string) => void;
+    private cancelled = false;
+    private inFlight = false;
+    private timerId: number | undefined;
+    private attempts = 0;
+
+    constructor(
+        externalId: string,
+        startedAt: number,
+        onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
+        onTimeout: (externalId: string) => void,
+    ) {
+        this.externalId = externalId;
+        this.startedAt = startedAt;
+        this.onPersisted = onPersisted;
+        this.onTimeout = onTimeout;
+    }
+
+    start(): void {
+        document.addEventListener("visibilitychange", this.handleVisibilityChange);
+        this.schedule(computeInitialPollDelayMs(this.startedAt));
+    }
+
+    stop(): void {
+        this.cancelled = true;
+        document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+        window.clearTimeout(this.timerId);
+    }
+
+    private readonly handleVisibilityChange = (): void => {
+        if (!document.hidden && !this.inFlight && this.timerId === undefined) {
+            this.schedule(0);
+        }
+    };
+
+    private schedule(delayMs: number): void {
+        if (this.cancelled) return;
+        window.clearTimeout(this.timerId);
+        this.timerId = window.setTimeout(() => void this.poll(), delayMs);
+    }
+
+    private async poll(): Promise<void> {
+        this.timerId = undefined;
+        if (this.cancelled || this.inFlight) return;
+        this.inFlight = true;
+        this.attempts += 1;
+        const persisted = await fetchImportedJobByExternalId(this.externalId);
+        this.inFlight = false;
+        if (this.cancelled) return;
+        if (persisted) {
+            this.onPersisted(this.externalId, persisted);
+            return;
+        }
+        if (Date.now() - this.startedAt >= IMPORT_POLL_MAX_DURATION_MS) {
+            this.onTimeout(this.externalId);
+            return;
+        }
+        if (!document.hidden) {
+            this.schedule(computeNextPollDelayMs(this.attempts));
+        }
+    }
+}
+
 function useImportJobPolling(
     importBanner: ImportBannerState | null,
     onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
@@ -471,43 +650,15 @@ function useImportJobPolling(
         if (importBanner?.phase !== "queued" || !importBanner.externalId) {
             return;
         }
-        const targetExternalId = importBanner.externalId;
-        let cancelled = false;
-        let timerId: number | undefined;
-        let attempts = 0;
-
-        async function pollImportedJob() {
-            attempts += 1;
-            try {
-                const res = await vektrynApi.listJobs(
-                    `?ats_source=manual&external_id=${encodeURIComponent(targetExternalId)}`,
-                );
-                if (cancelled) return;
-                const persisted = res.results[0];
-                if (persisted) {
-                    onPersisted(targetExternalId, persisted);
-                    return;
-                }
-            } catch {
-                // Ignore transient poll errors and retry until max attempts
-            }
-
-            if (cancelled) return;
-            if (attempts >= 10) {
-                onTimeout(targetExternalId);
-                return;
-            }
-            timerId = window.setTimeout(() => void pollImportedJob(), 3000);
-        }
-
-        timerId = window.setTimeout(() => void pollImportedJob(), 2500);
-        return () => {
-            cancelled = true;
-            if (timerId !== undefined) {
-                window.clearTimeout(timerId);
-            }
-        };
-    }, [importBanner?.phase, importBanner?.externalId, onPersisted, onTimeout]);
+        const poller = new PendingImportPoller(
+            importBanner.externalId,
+            importBanner.startedAt ?? Date.now(),
+            onPersisted,
+            onTimeout,
+        );
+        poller.start();
+        return () => poller.stop();
+    }, [importBanner?.phase, importBanner?.externalId, importBanner?.startedAt, onPersisted, onTimeout]);
 }
 
 function RadarKpiGrid({
@@ -614,7 +765,9 @@ export function JobRadarView() {
     const [selectedGapMatch, setSelectedGapMatch] = useState<MatchScore | null>(null);
     const [importModalOpen, setImportModalOpen] = useState(false);
     const [reloadTick, setReloadTick] = useState(0);
-    const [importBanner, setImportBanner] = useState<ImportBannerState | null>(null);
+    const [importBanner, setImportBanner] = useState<ImportBannerState | null>(() =>
+        restorePendingImportBanner(),
+    );
     const [savedLeadsByJobId, setSavedLeadsByJobId] = useState<Record<string, string>>({});
     const [savedTotalCount, setSavedTotalCount] = useState(0);
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
@@ -734,6 +887,7 @@ export function JobRadarView() {
 
     const handleImportedPersisted = useCallback(
         (externalId: string, persisted: JobPostingSummary) => {
+            clearPendingImport(externalId);
             setReloadTick((prev) => prev + 1);
             setImportBanner((prev) =>
                 prev && prev.externalId === externalId
@@ -757,27 +911,72 @@ export function JobRadarView() {
                 ? {
                       ...prev,
                       phase: "info",
-                      message:
-                          "Still processing in the background — refresh Job Radar shortly to see the scored role.",
+                      message: "Taking longer than expected in the worker queue.",
                   }
                 : prev,
         );
     }, []);
 
+    const handleResumeImportWait = useCallback(() => {
+        setImportBanner((prev) => {
+            if (!prev?.externalId) {
+                return prev;
+            }
+            const restartedAt = Date.now();
+            savePendingImport({
+                externalId: prev.externalId,
+                title: prev.title,
+                company: prev.company,
+                startedAt: restartedAt,
+            });
+            return {
+                ...prev,
+                phase: "queued",
+                startedAt: restartedAt,
+                message: "Waiting for AI enrichment and scoring to finish...",
+            };
+        });
+    }, []);
+
+    const handleDismissImportBanner = useCallback(() => {
+        clearPendingImport();
+        setImportBanner(null);
+    }, []);
+
+    const handleCrossTabSync = useCallback(
+        (banner: ImportBannerState | null, cleared: boolean) => {
+            setImportBanner(banner);
+            if (cleared) {
+                setReloadTick((prev) => prev + 1);
+            }
+        },
+        [],
+    );
+
+    useCrossTabPendingImportSync(handleCrossTabSync);
     useImportJobPolling(importBanner, handleImportedPersisted, handleImportedTimeout);
 
     async function handleJobImported(res: ManualJobImportResponse) {
         if (res.status === "queued") {
+            const startedAt = Date.now();
+            savePendingImport({
+                externalId: res.external_id,
+                title: res.title,
+                company: res.company_name,
+                startedAt,
+            });
             setImportBanner({
                 phase: "queued",
                 title: res.title,
                 company: res.company_name,
                 externalId: res.external_id,
-                message: "Queued for AI enrichment, embedding, and active-resume scoring...",
+                startedAt,
+                message: "Importing — waiting for AI enrichment and scoring to finish...",
             });
             return;
         }
 
+        clearPendingImport(res.external_id);
         setReloadTick((prev) => prev + 1);
         let existingJob: JobPostingSummary | null = null;
         if (res.job_posting_uuid) {
@@ -977,7 +1176,8 @@ export function JobRadarView() {
                     <ImportStatusBanner
                         banner={importBanner}
                         onViewJob={openImportedJobListing}
-                        onDismiss={() => setImportBanner(null)}
+                        onRetryWait={handleResumeImportWait}
+                        onDismiss={handleDismissImportBanner}
                     />
                 )}
 
