@@ -363,6 +363,26 @@ def test_matches_endpoint_returns_global_summary_totals_across_pages():
             resume_content_hash=resume.content_hash,
         )
 
+    # Add an inactive job with a high score for the same user; excluded by default
+    inactive_job = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE,
+        external_id="gh-inactive-1",
+        content_hash="e" * 64,
+        title="Closed Role",
+        company_name="Acme",
+        apply_url="https://example.com/jobs/closed",
+        raw_html_gcs_uri="file:///tmp/closed.html",
+        description_clean="Closed role.",
+        is_active=False,
+    )
+    MatchScore.objects.create(
+        job_posting=inactive_job,
+        resume_profile=resume,
+        cosine_similarity=0.92,
+        fit_score=92,
+        resume_content_hash=resume.content_hash,
+    )
+
     # Add a high-scoring match for another user to verify IDOR isolation in summary counts
     other_job = JobPosting.objects.create(
         ats_source=ATSSource.ASHBY,
@@ -390,14 +410,33 @@ def test_matches_endpoint_returns_global_summary_totals_across_pages():
     body1 = page1.json()
     assert body1["count"] == 27
     assert len(body1["results"]) == 25
-    assert body1["summary"] == {"strong_fit_count": 10, "alert_threshold_count": 18}
+    assert body1["summary"] == {
+        "ai_scored_count": 24,
+        "strong_fit_count": 10,
+        "alert_threshold_count": 18,
+    }
 
-    # Page 2 has only 2 rows, yet summary must still report totals across all 27 matches
+    # Page 2 has only 2 rows, yet summary must still report totals across all 27 active matches
     page2 = client.get("/api/v1/matches/?page=2")
     assert page2.status_code == 200
     body2 = page2.json()
     assert len(body2["results"]) == 2
-    assert body2["summary"] == {"strong_fit_count": 10, "alert_threshold_count": 18}
+    assert body2["summary"] == {
+        "ai_scored_count": 24,
+        "strong_fit_count": 10,
+        "alert_threshold_count": 18,
+    }
+
+    # Explicit include_inactive=true surfaces closed roles in count and summary
+    with_inactive = client.get("/api/v1/matches/?include_inactive=true")
+    assert with_inactive.status_code == 200
+    with_inactive_body = with_inactive.json()
+    assert with_inactive_body["count"] == 28
+    assert with_inactive_body["summary"] == {
+        "ai_scored_count": 25,
+        "strong_fit_count": 11,
+        "alert_threshold_count": 19,
+    }
 
     # Filters apply consistently to both count and summary
     filtered = client.get("/api/v1/matches/?min_fit_score=80")
@@ -405,6 +444,7 @@ def test_matches_endpoint_returns_global_summary_totals_across_pages():
     filtered_body = filtered.json()
     assert filtered_body["count"] == 10
     assert filtered_body["summary"] == {
+        "ai_scored_count": 10,
         "strong_fit_count": 10,
         "alert_threshold_count": 10,
     }
