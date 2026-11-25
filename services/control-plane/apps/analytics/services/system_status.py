@@ -24,18 +24,6 @@ from apps.analytics.services.kafka_probe import (
     close_consumer_safely as _close_consumer_safely,
     close_redis_safely as _close_redis_safely,
 )
-from apps.analytics.services.dlq_inspector import (
-    MAX_DLQ_INSPECT_LIMIT,
-    count_unresolved_recent_dlq_messages,
-)
-from apps.analytics.services.kafka_probe import (
-    DLQ_CACHE_KEY,
-    KAFKA_PROBE_GROUP_ID,
-    KAFKA_PROBE_TIMEOUT_SECONDS,
-    build_kafka_probe_config as _build_kafka_probe_config,
-    close_consumer_safely as _close_consumer_safely,
-    close_redis_safely as _close_redis_safely,
-)
 from apps.jobs.models.jobs import JobPosting
 from apps.matching.models.matching import MatchScore
 from apps.resumes.models.resumes import ResumeProfile
@@ -144,38 +132,54 @@ def _probe_kafka_dlq_health() -> dict[str, Any]:
         _close_consumer_safely(consumer)
 
 
+def _read_cached_dlq_health(client: redis.Redis | None) -> dict[str, Any] | None:
+    if client is None:
+        return None
+    try:
+        cached = client.get(DLQ_CACHE_KEY)
+        if not isinstance(cached, str) or not cached:
+            return None
+        parsed = json.loads(cached)
+        if isinstance(parsed, dict) and "status" in parsed:
+            return parsed
+    except Exception as exc:
+        logger.debug("Failed reading cached DLQ health: %s", exc)
+    return None
+
+
+def _refine_dlq_health_with_resolutions(health: dict[str, Any]) -> None:
+    raw_recent = int(health.get("recent_24h_count") or 0)
+    if raw_recent <= 0 or health.get("status") == "unavailable":
+        return
+    unresolved = _count_unresolved_recent_dlq(
+        since_dt=datetime.now(UTC) - timedelta(hours=DLQ_LOOKBACK_HOURS),
+        raw_recent_count=raw_recent,
+    )
+    if unresolved is not None:
+        health["recent_24h_count"] = unresolved
+        health["status"] = "warning" if unresolved > 0 else "healthy"
+
+
+def _cache_dlq_health(client: redis.Redis | None, health: dict[str, Any]) -> None:
+    if client is None:
+        return
+    try:
+        client.set(DLQ_CACHE_KEY, json.dumps(health), ex=DLQ_CACHE_TTL_SECONDS)
+    except Exception as exc:
+        logger.debug("Failed caching DLQ health: %s", exc)
+
+
 def get_dlq_health() -> dict[str, Any]:
     client = _get_redis_client()
     try:
-        if client is not None:
-            try:
-                cached = client.get(DLQ_CACHE_KEY)
-                if isinstance(cached, str) and cached:
-                    parsed = json.loads(cached)
-                    if isinstance(parsed, dict) and "status" in parsed:
-                        return parsed
-            except Exception as exc:
-                logger.debug("Failed reading cached DLQ health: %s", exc)
+        cached = _read_cached_dlq_health(client)
+        if cached is not None:
+            return cached
 
         health = _probe_kafka_dlq_health()
-        if (
-            client is not None
-            and (health.get("recent_24h_count") or 0) > 0
-            and health.get("status") != "unavailable"
-        ):
-            unresolved = _count_unresolved_recent_dlq(
-                since_dt=datetime.now(UTC) - timedelta(hours=DLQ_LOOKBACK_HOURS),
-                raw_recent_count=int(health["recent_24h_count"]),
-            )
-            if unresolved is not None:
-                health["recent_24h_count"] = unresolved
-                health["status"] = "warning" if unresolved > 0 else "healthy"
-
         if client is not None:
-            try:
-                client.set(DLQ_CACHE_KEY, json.dumps(health), ex=DLQ_CACHE_TTL_SECONDS)
-            except Exception as exc:
-                logger.debug("Failed caching DLQ health: %s", exc)
+            _refine_dlq_health_with_resolutions(health)
+            _cache_dlq_health(client, health)
         return health
     finally:
         _close_redis_safely(client)
