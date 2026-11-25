@@ -20,7 +20,13 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { fetchAllPages, vektrynApi } from "../../api/client";
 import { NOTIFICATIONS_REFRESH_EVENT } from "../../hooks/useNotifications";
-import type { ApplicationLead, LeadPriority, LeadStatus, MatchScore } from "../../types/models";
+import type {
+    ApplicationLead,
+    CopilotTone,
+    LeadPriority,
+    LeadStatus,
+    MatchScore,
+} from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
     formatApplyLinkTooltip,
@@ -750,7 +756,13 @@ function PipelineSkeleton() {
     );
 }
 
-export function PipelineTrackerView() {
+interface PipelineTrackerViewProps {
+    defaultCopilotTone?: CopilotTone;
+}
+
+export function PipelineTrackerView({
+    defaultCopilotTone,
+}: Readonly<PipelineTrackerViewProps> = {}) {
     const [leads, setLeads] = useState<ApplicationLead[]>([]);
     const [matchesByJobId, setMatchesByJobId] = useState<Record<string, MatchScore>>({});
     const [loading, setLoading] = useState(true);
@@ -1177,6 +1189,7 @@ export function PipelineTrackerView() {
 
             <GapAnalysisDrawer
                 match={selectedGapMatch}
+                defaultCopilotTone={defaultCopilotTone}
                 saving={false}
                 saved
                 onClose={() => setSelectedGapMatch(null)}

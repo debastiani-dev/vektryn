@@ -22,6 +22,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAllPagesWithCount, vektrynApi } from "../../api/client";
 import type {
+    CopilotTone,
     HybridSearchMode,
     JobPostingSummary,
     ManualJobImportResponse,
@@ -932,11 +933,13 @@ function buildMatchesQueryParams(opts: {
 interface JobRadarViewProps {
     initialSearch?: string;
     onConsumeInitialSearch?: () => void;
+    defaultCopilotTone?: CopilotTone;
 }
 
 export function JobRadarView({
     initialSearch = "",
     onConsumeInitialSearch,
+    defaultCopilotTone,
 }: Readonly<JobRadarViewProps> = {}) {
     const trimmedInitialSearch = initialSearch.trim();
     const [matches, setMatches] = useState<MatchScore[]>([]);
@@ -1841,6 +1844,7 @@ export function JobRadarView({
             <GapAnalysisDrawer
                 match={selectedGapMatch}
                 minAlertScore={resolveMinAlertScore(selectedGapMatch)}
+                defaultCopilotTone={defaultCopilotTone}
                 saving={
                     selectedGapMatch ? savingJobId === selectedGapMatch.job_posting.uuid : false
                 }

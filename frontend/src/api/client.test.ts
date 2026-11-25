@@ -842,4 +842,131 @@ describe("vektrynApi", () => {
             unregister();
         }
     });
+
+    it("manages self-service profile, deactivation, and staff user CRUD endpoints", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=profile-csrf" });
+        const sampleProfile = {
+            id: "1",
+            username: "rafa",
+            email: "rafa@example.com",
+            is_staff: true,
+            is_superuser: true,
+            display_name: "Rafa",
+            timezone: "America/Sao_Paulo",
+            preferred_currency: "BRL",
+            default_copilot_tone: "technical",
+            linkedin_url: "https://linkedin.com/in/rafa",
+            github_url: "https://github.com/debastiani-dev",
+            portfolio_url: "",
+            created_at: "2026-11-25T00:00:00Z",
+            modified_at: "2026-11-25T00:00:00Z",
+        };
+        const sampleManaged = {
+            id: 2,
+            username: "alice",
+            email: "alice@example.com",
+            is_active: true,
+            is_staff: false,
+            is_superuser: false,
+            date_joined: "2026-11-25T00:00:00Z",
+            last_login: null,
+            profile: {
+                display_name: "Alice",
+                timezone: "UTC",
+                preferred_currency: "USD",
+                default_copilot_tone: "balanced",
+                linkedin_url: "",
+                github_url: "",
+                portfolio_url: "",
+            },
+        };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(sampleProfile), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ ...sampleProfile, display_name: "Rafa D." }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ detail: "Account deactivated successfully." }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        count: 1,
+                        next: null,
+                        previous: null,
+                        results: [sampleManaged],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(sampleManaged), {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ ...sampleManaged, is_staff: true }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ ...sampleManaged, is_active: false }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const prof = await vektrynApi.getUserProfile();
+        expect(prof.timezone).toBe("America/Sao_Paulo");
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/auth/profile/");
+
+        const patched = await vektrynApi.updateUserProfile({ display_name: "Rafa D." });
+        expect(patched.display_name).toBe("Rafa D.");
+        expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe("PATCH");
+
+        const deact = await vektrynApi.deactivateAccount("Secret!2026");
+        expect(deact.detail).toContain("deactivated");
+        expect((fetchMock.mock.calls[2] as [string])[0]).toBe("/api/v1/auth/deactivate/");
+
+        const listed = await vektrynApi.listUsers({
+            search: "alice",
+            is_active: "true",
+            is_staff: "false",
+            page: 2,
+        });
+        expect(listed.results).toHaveLength(1);
+        expect((fetchMock.mock.calls[3] as [string])[0]).toBe(
+            "/api/v1/users/?search=alice&is_active=true&is_staff=false&page=2",
+        );
+
+        const created = await vektrynApi.createUser({
+            username: "alice",
+            password: "SafePassword!2026",
+        });
+        expect(created.id).toBe(2);
+        expect((fetchMock.mock.calls[4] as [string, RequestInit])[1].method).toBe("POST");
+
+        const updated = await vektrynApi.updateUser(2, { is_staff: true });
+        expect(updated.is_staff).toBe(true);
+        expect((fetchMock.mock.calls[5] as [string])[0]).toBe("/api/v1/users/2/");
+
+        const deactivated = await vektrynApi.deactivateUser(2);
+        expect(deactivated.is_active).toBe(false);
+        expect((fetchMock.mock.calls[6] as [string, RequestInit])[1].method).toBe("DELETE");
+    });
 });

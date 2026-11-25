@@ -3,18 +3,20 @@ import {
     ChevronDown,
     FileText,
     Kanban,
-    KeyRound,
     LogOut,
     Radar,
     User,
+    UserCog,
+    Users,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import type { CurrentUser, LiveMatchAlert } from "../../types/models";
+import type { CurrentUser, LiveMatchAlert, UserProfileDetail } from "../../types/models";
 import { Tooltip } from "../ui/Tooltip";
-import { AccountSecurityModal } from "./AccountSecurityModal";
+import { AccountSettingsModal } from "./AccountSettingsModal";
 import { LiveAlertBanner } from "./LiveAlertBanner";
 import { NotificationCenter, type NotificationCenterProps } from "./NotificationCenter";
 import { PipelineStatusPopover } from "./PipelineStatusPopover";
+import { UserManagementModal } from "./UserManagementModal";
 
 export type ActiveTab = "radar" | "tracker" | "analytics" | "resumes";
 
@@ -22,6 +24,8 @@ interface AppShellProps {
     activeTab: ActiveTab;
     onSelectTab: (tab: ActiveTab) => void;
     user: CurrentUser | null;
+    onUserProfileSaved: (profile: UserProfileDetail) => void;
+    onAccountDeactivated: () => void;
     onLogout: () => void;
     sseConnected: boolean;
     alerts: LiveMatchAlert[];
@@ -64,13 +68,15 @@ const NAV_ITEMS: Array<{
 
 interface UserAccountMenuProps {
     user: CurrentUser;
-    onOpenSecurity: () => void;
+    onOpenSettings: () => void;
+    onOpenUserManagement: () => void;
     onLogout: () => void;
 }
 
 function UserAccountMenu({
     user,
-    onOpenSecurity,
+    onOpenSettings,
+    onOpenUserManagement,
     onLogout,
 }: Readonly<UserAccountMenuProps>) {
     const [menuOpen, setMenuOpen] = useState(false);
@@ -98,6 +104,8 @@ function UserAccountMenu({
         };
     }, [menuOpen]);
 
+    const displayLabel = user.profile?.display_name || user.username;
+
     return (
         <div ref={menuRef} className="relative">
             <button
@@ -108,7 +116,7 @@ function UserAccountMenu({
                 className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 py-1.5 pr-2.5 pl-3 text-xs text-zinc-200 transition hover:border-zinc-700 hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
             >
                 <User className="h-3.5 w-3.5 text-zinc-400" />
-                <span className="max-w-28 truncate font-medium">{user.username}</span>
+                <span className="max-w-32 truncate font-medium">{displayLabel}</span>
                 <ChevronDown
                     className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${
                         menuOpen ? "rotate-180" : ""
@@ -124,7 +132,7 @@ function UserAccountMenu({
                     <div className="border-b border-zinc-800/80 px-3 py-2">
                         <div className="flex items-center gap-2">
                             <span className="truncate text-xs font-semibold text-zinc-100">
-                                {user.username}
+                                {displayLabel}
                             </span>
                             {user.is_staff && (
                                 <span className="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300 ring-1 ring-violet-500/30">
@@ -132,6 +140,11 @@ function UserAccountMenu({
                                 </span>
                             )}
                         </div>
+                        {user.profile?.display_name && (
+                            <p className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
+                                @{user.username}
+                            </p>
+                        )}
                         {user.email && (
                             <p className="mt-0.5 truncate text-[11px] text-zinc-500">
                                 {user.email}
@@ -139,19 +152,34 @@ function UserAccountMenu({
                         )}
                     </div>
 
-                    <div className="py-1">
+                    <div className="space-y-0.5 py-1">
                         <button
                             type="button"
                             role="menuitem"
                             onClick={() => {
                                 setMenuOpen(false);
-                                onOpenSecurity();
+                                onOpenSettings();
                             }}
                             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 hover:text-white"
                         >
-                            <KeyRound className="h-3.5 w-3.5 text-violet-400" />
-                            <span>Account &amp; Security</span>
+                            <UserCog className="h-3.5 w-3.5 text-violet-400" />
+                            <span>Account Settings</span>
                         </button>
+
+                        {user.is_staff && (
+                            <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                    setMenuOpen(false);
+                                    onOpenUserManagement();
+                                }}
+                                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 hover:text-white"
+                            >
+                                <Users className="h-3.5 w-3.5 text-violet-400" />
+                                <span>Manage Users</span>
+                            </button>
+                        )}
                     </div>
 
                     <div className="border-t border-zinc-800/80 pt-1">
@@ -178,6 +206,8 @@ export function AppShell({
     activeTab,
     onSelectTab,
     user,
+    onUserProfileSaved,
+    onAccountDeactivated,
     onLogout,
     sseConnected,
     alerts,
@@ -185,7 +215,8 @@ export function AppShell({
     notificationCenter,
     children,
 }: Readonly<AppShellProps>) {
-    const [securityModalOpen, setSecurityModalOpen] = useState(false);
+    const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+    const [userMgmtModalOpen, setUserMgmtModalOpen] = useState(false);
 
     const streamTooltip = sseConnected
         ? "Connected to real-time signed SSE match alert stream"
@@ -266,7 +297,8 @@ export function AppShell({
                         {user && (
                             <UserAccountMenu
                                 user={user}
-                                onOpenSecurity={() => setSecurityModalOpen(true)}
+                                onOpenSettings={() => setSettingsModalOpen(true)}
+                                onOpenUserManagement={() => setUserMgmtModalOpen(true)}
                                 onLogout={onLogout}
                             />
                         )}
@@ -281,10 +313,23 @@ export function AppShell({
             </main>
 
             {user && (
-                <AccountSecurityModal
-                    open={securityModalOpen}
+                <AccountSettingsModal
+                    open={settingsModalOpen}
                     user={user}
-                    onClose={() => setSecurityModalOpen(false)}
+                    onClose={() => setSettingsModalOpen(false)}
+                    onProfileSaved={onUserProfileSaved}
+                    onAccountDeactivated={() => {
+                        setSettingsModalOpen(false);
+                        onAccountDeactivated();
+                    }}
+                />
+            )}
+
+            {user?.is_staff && (
+                <UserManagementModal
+                    open={userMgmtModalOpen}
+                    currentUser={user}
+                    onClose={() => setUserMgmtModalOpen(false)}
                 />
             )}
         </div>

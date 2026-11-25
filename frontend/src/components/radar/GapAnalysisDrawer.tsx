@@ -15,7 +15,7 @@ import {
     XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { MatchScore } from "../../types/models";
+import type { CopilotTone, MatchScore } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
     formatApplyLinkLabel,
@@ -39,6 +39,7 @@ import { CopilotPanel } from "./CopilotPanel";
 interface GapAnalysisDrawerProps {
     match: MatchScore | null;
     minAlertScore?: number;
+    defaultCopilotTone?: CopilotTone;
     saving: boolean;
     saved: boolean;
     onClose: () => void;
@@ -353,6 +354,7 @@ function GapAnalysisTabContent({
 function GapAnalysisDrawerContent({
     match,
     minAlertScore,
+    defaultCopilotTone,
     saving,
     saved,
     onClose,
@@ -360,6 +362,7 @@ function GapAnalysisDrawerContent({
 }: Readonly<{
     match: MatchScore;
     minAlertScore?: number;
+    defaultCopilotTone?: CopilotTone;
     saving: boolean;
     saved: boolean;
     onClose: () => void;
@@ -551,7 +554,11 @@ function GapAnalysisDrawerContent({
 
                 <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-7">
                     {activeTab === "copilot" ? (
-                        <CopilotPanel key={match.uuid} match={match} />
+                        <CopilotPanel
+                            key={match.uuid}
+                            match={match}
+                            defaultTone={defaultCopilotTone}
+                        />
                     ) : (
                         <GapAnalysisTabContent
                             match={match}
@@ -578,6 +585,7 @@ function GapAnalysisDrawerContent({
 export function GapAnalysisDrawer({
     match,
     minAlertScore,
+    defaultCopilotTone,
     saving,
     saved,
     onClose,
@@ -603,6 +611,7 @@ export function GapAnalysisDrawer({
             key={match.uuid}
             match={match}
             minAlertScore={minAlertScore}
+            defaultCopilotTone={defaultCopilotTone}
             saving={saving}
             saved={saved}
             onClose={onClose}

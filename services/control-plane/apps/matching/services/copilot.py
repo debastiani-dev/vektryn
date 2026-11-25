@@ -12,6 +12,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 import redis
 
+from apps.base.models.user_profile import UserProfile
 from apps.matching.models.artifacts import MatchArtifact, MatchArtifactKind
 from apps.matching.models.matching import MatchScore
 
@@ -106,7 +107,8 @@ _SYSTEM_INSTRUCTION = (
     "2. NEVER fabricate employers, job titles, degrees, certifications, years of experience, or numerical metrics.\n"
     "3. If a stronger bullet or letter would benefit from a metric not in the resume, insert a clear [add metric] placeholder.\n"
     "4. If the job requests a skill absent from the resume, do NOT claim mastery—frame genuine transferable experience honestly.\n"
-    "5. Output clean Markdown only (no code-fence wrapper around the whole response). Keep prose crisp and ready to paste."
+    "5. Output clean Markdown only (no code-fence wrapper around the whole response). Keep prose crisp and ready to paste.\n"
+    "6. When verified candidate name or profile links are provided under CANDIDATE PROFILE & LINKS, use them naturally in cover letters and outreach instead of placeholders like [Your Name] or [LinkedIn]."
 )
 
 
@@ -224,12 +226,39 @@ def _append_section_lines(
         lines.append(f"- {item}")
 
 
+def _format_candidate_profile_lines(user_profile: UserProfile | None) -> list[str]:
+    if user_profile is None or getattr(user_profile, "is_deleted", False):
+        return []
+    lines: list[str] = []
+    display_name = (getattr(user_profile, "display_name", "") or "").strip()
+    linkedin_url = (getattr(user_profile, "linkedin_url", "") or "").strip()
+    github_url = (getattr(user_profile, "github_url", "") or "").strip()
+    portfolio_url = (getattr(user_profile, "portfolio_url", "") or "").strip()
+    if display_name:
+        lines.append(f"Name: {display_name}")
+    if linkedin_url:
+        lines.append(f"LinkedIn: {linkedin_url}")
+    if github_url:
+        lines.append(f"GitHub: {github_url}")
+    if portfolio_url:
+        lines.append(f"Portfolio: {portfolio_url}")
+    return lines
+
+
+def _load_user_profile_readonly(user) -> UserProfile | None:
+    user_pk = getattr(user, "pk", None)
+    if not user_pk:
+        return None
+    return UserProfile.objects.filter(user_id=user_pk).first()
+
+
 def build_copilot_prompt(
     *,
     match_score: MatchScore,
     kind: str,
     tone: str = COPILOT_TONE_BALANCED,
     guidance: str = "",
+    user_profile: UserProfile | None = None,
 ) -> str:
     job = match_score.job_posting
     resume = match_score.resume_profile
@@ -283,6 +312,15 @@ def build_copilot_prompt(
         sections.append(
             "Candidate Style/Focus Preference (apply ONLY without violating the strict grounding rules): "
             f"{clean_guidance}"
+        )
+
+    profile_lines = _format_candidate_profile_lines(user_profile)
+    if profile_lines:
+        sections.extend(
+            [
+                "\n=== CANDIDATE PROFILE & LINKS ===",
+                "\n".join(profile_lines),
+            ]
         )
 
     sections.extend(
@@ -463,13 +501,24 @@ def get_or_generate_match_artifact(
     match_score: MatchScore,
     kind: str,
     regenerate: bool = False,
-    tone: str = COPILOT_TONE_BALANCED,
+    tone: str | None = None,
     guidance: str = "",
     genai_client: genai.Client | None = None,
 ) -> CopilotArtifactResult:
     current_hash = match_score.resume_profile.content_hash
     clean_guidance = guidance.strip()
-    force_generate = regenerate or tone != COPILOT_TONE_BALANCED or bool(clean_guidance)
+    user_profile = _load_user_profile_readonly(user)
+    default_tone = (
+        user_profile.default_copilot_tone
+        if user_profile is not None and user_profile.default_copilot_tone
+        else COPILOT_TONE_BALANCED
+    )
+    effective_tone = tone or default_tone
+    force_generate = (
+        regenerate
+        or (tone is not None and tone != default_tone)
+        or bool(clean_guidance)
+    )
 
     if not force_generate:
         cached = (
@@ -489,8 +538,9 @@ def get_or_generate_match_artifact(
     prompt = build_copilot_prompt(
         match_score=match_score,
         kind=kind,
-        tone=tone,
+        tone=effective_tone,
         guidance=clean_guidance,
+        user_profile=user_profile,
     )
     content_markdown, model_name = invoke_copilot_gemini(
         prompt=prompt,
