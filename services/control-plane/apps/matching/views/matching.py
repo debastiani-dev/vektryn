@@ -1,6 +1,7 @@
 from django.db.models import Count, F, Q
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import viewsets
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
@@ -12,8 +13,18 @@ from apps.jobs.services.hybrid_search import (
 )
 from apps.jobs.services.triage import apply_triage_filters
 from apps.matching.filters.matching import MatchScoreFilter
+from apps.matching.models.artifacts import MatchArtifact
 from apps.matching.models.matching import MatchScore
+from apps.matching.serializers.artifacts import (
+    MatchArtifactGenerateSerializer,
+    MatchArtifactSerializer,
+)
 from apps.matching.serializers.matching import MatchScoreSerializer
+from apps.matching.services.copilot import (
+    CopilotRateLimitError,
+    CopilotUnavailableError,
+    get_or_generate_match_artifact,
+)
 
 
 class NullsLastOrderingFilter(OrderingFilter):
@@ -130,3 +141,49 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = self.get_serializer(ordered_qs, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["get", "post"], url_path="artifacts")
+    def artifacts(self, request, uuid=None):
+        match_score = self.get_object()
+
+        if request.method == "GET":
+            queryset = (
+                MatchArtifact.objects.select_related("match_score__resume_profile")
+                .filter(user=request.user, match_score=match_score)
+                .order_by("-created_at")
+            )
+            serializer = MatchArtifactSerializer(queryset, many=True)
+            return Response({"results": serializer.data})
+
+        input_serializer = MatchArtifactGenerateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        data = input_serializer.validated_data
+
+        try:
+            result = get_or_generate_match_artifact(
+                user=request.user,
+                match_score=match_score,
+                kind=data["kind"],
+                regenerate=data.get("regenerate", False),
+                tone=data.get("tone", "balanced"),
+                guidance=data.get("guidance", ""),
+            )
+        except CopilotRateLimitError as exc:
+            return Response(
+                {
+                    "detail": str(exc),
+                    "retry_after_seconds": exc.retry_after_seconds,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+                headers={"Retry-After": str(exc.retry_after_seconds)},
+            )
+        except CopilotUnavailableError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        payload = MatchArtifactSerializer(result.artifact).data
+        payload["cached"] = result.cached
+        http_status = status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+        return Response(payload, status=http_status)
