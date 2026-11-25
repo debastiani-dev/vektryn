@@ -2,6 +2,7 @@ import type {
     ApplicationLead,
     ContractType,
     CurrentUser,
+    DismissedJob,
     JobPostingDetail,
     JobPostingSummary,
     LeadPriority,
@@ -10,6 +11,7 @@ import type {
     ManualJobImportResponse,
     MatchScore,
     MatchScoreListResponse,
+    MutedCompany,
     NotificationActionResponse,
     NotificationListResponse,
     PaginatedResponse,
@@ -174,6 +176,34 @@ export const vektrynApi = {
 
     deleteSavedFilter: (uuid: string) =>
         apiFetch<void>(`/api/v1/jobs/filters/${encodeURIComponent(uuid)}/`, {
+            method: "DELETE",
+        }),
+
+    listDismissedJobs: (page = 1) =>
+        apiFetch<PaginatedResponse<DismissedJob>>(`/api/v1/jobs/dismissed/?page=${page}`),
+
+    dismissJob: (jobPostingUuid: string) =>
+        apiFetch<DismissedJob>("/api/v1/jobs/dismissed/", {
+            method: "POST",
+            body: JSON.stringify({ job_posting: jobPostingUuid }),
+        }),
+
+    restoreDismissedJob: (uuid: string) =>
+        apiFetch<void>(`/api/v1/jobs/dismissed/${encodeURIComponent(uuid)}/`, {
+            method: "DELETE",
+        }),
+
+    listMutedCompanies: (page = 1) =>
+        apiFetch<PaginatedResponse<MutedCompany>>(`/api/v1/jobs/muted-companies/?page=${page}`),
+
+    muteCompany: (companyName: string) =>
+        apiFetch<MutedCompany>("/api/v1/jobs/muted-companies/", {
+            method: "POST",
+            body: JSON.stringify({ company_name: companyName }),
+        }),
+
+    unmuteCompany: (uuid: string) =>
+        apiFetch<void>(`/api/v1/jobs/muted-companies/${encodeURIComponent(uuid)}/`, {
             method: "DELETE",
         }),
 

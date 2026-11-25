@@ -2,18 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
     hydrateRadarStateFromPreset,
     isPresetActive,
+    normalizeCompanyName,
     serializeRadarStateToPreset,
 } from "./savedFilters";
 
 describe("savedFilters helpers", () => {
     const resumes = [{ uuid: "resume-a" }, { uuid: "resume-b" }];
 
-    it("serializes only active non-default radar filter fields", () => {
+    it("serializes only active non-default radar filter fields including triage flags", () => {
         const serialized = serializeRadarStateToPreset({
             searchTerm: "  python kafka  ",
             resumeFilter: "resume-a",
             minScore: 80,
             evaluatedOnly: true,
+            untrackedOnly: true,
+            hideDismissed: false,
+            hideMuted: true,
             metadataFilters: {
                 seniority: "senior",
                 contractType: "pj",
@@ -28,6 +32,8 @@ describe("savedFilters helpers", () => {
             resume_profile: "resume-a",
             min_score: 80,
             evaluated_only: true,
+            untracked_only: true,
+            hide_dismissed: false,
             seniority: "senior",
             contract_type: "pj",
             region: "brazil",
@@ -50,9 +56,12 @@ describe("savedFilters helpers", () => {
         expect(hydrated.metadataFilters.seniority).toBe("staff");
         expect(hydrated.minScore).toBe(70);
         expect(hydrated.sortBy).toBe("newest");
+        expect(hydrated.untrackedOnly).toBe(false);
+        expect(hydrated.hideDismissed).toBe(true);
+        expect(hydrated.hideMuted).toBe(true);
     });
 
-    it("matches active preset state accurately", () => {
+    it("matches legacy presets without triage keys against default triage state", () => {
         const state = hydrateRadarStateFromPreset(
             { search: "django", region: "latam", evaluated_only: true },
             resumes,
@@ -60,6 +69,17 @@ describe("savedFilters helpers", () => {
         expect(
             isPresetActive(state, { search: "django", region: "latam", evaluated_only: true }, resumes),
         ).toBe(true);
+        expect(
+            isPresetActive(
+                { ...state, untrackedOnly: true },
+                { search: "django", region: "latam", evaluated_only: true },
+                resumes,
+            ),
+        ).toBe(false);
         expect(isPresetActive(state, { search: "rust", region: "latam" }, resumes)).toBe(false);
+    });
+
+    it("normalizes company names identically to backend whitespace collapsing", () => {
+        expect(normalizeCompanyName("\t  Acme   Staffing \n")).toBe("acme staffing");
     });
 });

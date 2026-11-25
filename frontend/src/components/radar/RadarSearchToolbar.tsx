@@ -1,4 +1,13 @@
-import { ArrowUpDown, ChevronDown, Loader2, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import {
+    ArrowUpDown,
+    ChevronDown,
+    EyeOff,
+    Loader2,
+    Search,
+    SlidersHorizontal,
+    Sparkles,
+    X,
+} from "lucide-react";
 import type { HybridSearchMode, ResumeProfile } from "../../types/models";
 import {
     type ActiveFilterChipKey,
@@ -44,6 +53,10 @@ interface RadarSearchToolbarProps {
     resumeFilter: string;
     minScore: number;
     evaluatedOnly: boolean;
+    untrackedOnly: boolean;
+    hideDismissed: boolean;
+    hideMuted: boolean;
+    hiddenMutedCount: number;
     sortBy: RadarSortOption;
     metadataFilters: RadarMetadataFilters;
     filtersOpen: boolean;
@@ -52,6 +65,8 @@ interface RadarSearchToolbarProps {
     onCommitSearch: () => void;
     onClearSearch: () => void;
     onToggleEvaluatedOnly: () => void;
+    onToggleUntrackedOnly: () => void;
+    onOpenTriageModal: () => void;
     onToggleFiltersOpen: () => void;
     onSortChange: (value: RadarSortOption) => void;
     onResumeChange: (value: string) => void;
@@ -72,6 +87,10 @@ export function RadarSearchToolbar({
     resumeFilter,
     minScore,
     evaluatedOnly,
+    untrackedOnly,
+    hideDismissed,
+    hideMuted,
+    hiddenMutedCount,
     sortBy,
     metadataFilters,
     filtersOpen,
@@ -80,6 +99,8 @@ export function RadarSearchToolbar({
     onCommitSearch,
     onClearSearch,
     onToggleEvaluatedOnly,
+    onToggleUntrackedOnly,
+    onOpenTriageModal,
     onToggleFiltersOpen,
     onSortChange,
     onResumeChange,
@@ -102,6 +123,10 @@ export function RadarSearchToolbar({
         minScore,
         metadataFilters,
     });
+    const roleUnit = totalCount === 1 ? "role" : "roles";
+    const statusSummary = loading
+        ? "Updating results..."
+        : `Showing ${shownCount} of ${totalCount} ${roleUnit}`;
 
     return (
         <section
@@ -161,6 +186,41 @@ export function RadarSearchToolbar({
                             }`}
                         >
                             AI Scored Only
+                        </button>
+                    </Tooltip>
+
+                    <Tooltip content="Hide roles already tracked in your Pipeline Tracker (including saved, applied, and interviewing leads)">
+                        <button
+                            type="button"
+                            aria-pressed={untrackedOnly}
+                            onClick={onToggleUntrackedOnly}
+                            className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                untrackedOnly
+                                    ? "border-violet-500/45 bg-violet-500/15 text-violet-200"
+                                    : "border-zinc-800 bg-zinc-950/80 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
+                            }`}
+                        >
+                            Unapplied Only
+                        </button>
+                    </Tooltip>
+
+                    <Tooltip content="Manage hidden roles, muted companies, and feed visibility">
+                        <button
+                            type="button"
+                            onClick={onOpenTriageModal}
+                            className={`inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                !hideDismissed || !hideMuted
+                                    ? "border-amber-500/45 bg-amber-500/15 text-amber-200"
+                                    : "border-zinc-800 bg-zinc-950/80 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
+                            }`}
+                        >
+                            <EyeOff className="h-3.5 w-3.5" />
+                            <span>Hidden &amp; Muted</span>
+                            {hiddenMutedCount > 0 && (
+                                <span className="rounded-md bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] leading-none tabular-nums text-zinc-200">
+                                    {hiddenMutedCount}
+                                </span>
+                            )}
                         </button>
                     </Tooltip>
 
@@ -231,9 +291,7 @@ export function RadarSearchToolbar({
             <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-zinc-800/70 pt-3">
                 <div className="flex flex-wrap items-center gap-2">
                     <span className="font-mono text-xs tabular-nums text-zinc-400">
-                        {loading
-                            ? "Updating results..."
-                            : `Showing ${shownCount} of ${totalCount} ${totalCount === 1 ? "role" : "roles"}`}
+                        {statusSummary}
                     </span>
                     {Boolean(debouncedSearch) && !loading && <SearchModeBadge mode={searchMode} />}
                 </div>

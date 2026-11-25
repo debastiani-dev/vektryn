@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from apps.jobs.models.jobs import JobPosting
 from apps.jobs.models.saved_filter import SavedFilter
+from apps.jobs.models.triage import DismissedJob, MutedCompany
 
 
 @admin.register(JobPosting)
@@ -31,4 +32,34 @@ class SavedFilterAdmin(admin.ModelAdmin):
     list_display = ("name", "user", "created_at", "modified_at", "is_deleted")
     list_filter = ("is_deleted",)
     search_fields = ("name", "user__username")
+    readonly_fields = ("uuid", "created_at", "modified_at")
+
+
+@admin.register(DismissedJob)
+class DismissedJobAdmin(admin.ModelAdmin):
+    list_display = ("job_posting", "user", "created_at", "is_deleted")
+    list_filter = ("is_deleted",)
+    search_fields = (
+        "job_posting__title",
+        "job_posting__company_name",
+        "user__username",
+    )
+    readonly_fields = ("uuid", "created_at", "modified_at")
+
+
+@admin.register(MutedCompany)
+class MutedCompanyAdmin(admin.ModelAdmin):
+    list_display = (
+        "company_name_display",
+        "company_name_normalized",
+        "user",
+        "created_at",
+        "is_deleted",
+    )
+    list_filter = ("is_deleted",)
+    search_fields = (
+        "company_name_display",
+        "company_name_normalized",
+        "user__username",
+    )
     readonly_fields = ("uuid", "created_at", "modified_at")

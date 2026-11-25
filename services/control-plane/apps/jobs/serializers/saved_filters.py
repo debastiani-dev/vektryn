@@ -15,6 +15,18 @@ ALLOWED_QUERY_PARAM_KEYS = frozenset(
         "region",
         "ats_source",
         "sort_by",
+        "hide_dismissed",
+        "hide_muted",
+        "untracked_only",
+    }
+)
+
+BOOLEAN_QUERY_PARAM_KEYS = frozenset(
+    {
+        "evaluated_only",
+        "hide_dismissed",
+        "hide_muted",
+        "untracked_only",
     }
 )
 
@@ -55,4 +67,9 @@ class SavedFilterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 f"Unsupported filter parameter(s): {sorted_unknown}."
             )
+        for bool_key in BOOLEAN_QUERY_PARAM_KEYS:
+            if bool_key in value and not isinstance(value[bool_key], bool):
+                raise serializers.ValidationError(
+                    f"Filter parameter '{bool_key}' must be a boolean."
+                )
         return value

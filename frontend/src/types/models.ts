@@ -118,6 +118,25 @@ export interface SavedFilterQueryParams {
     region?: string;
     ats_source?: string;
     sort_by?: string;
+    hide_dismissed?: boolean;
+    hide_muted?: boolean;
+    untracked_only?: boolean;
+}
+
+export interface DismissedJob {
+    uuid: string;
+    job_posting: string;
+    job_title: string;
+    company_name: string;
+    ats_source: string;
+    created_at: string;
+}
+
+export interface MutedCompany {
+    uuid: string;
+    company_name_display: string;
+    company_name_normalized: string;
+    created_at: string;
 }
 
 export interface SavedFilter {
