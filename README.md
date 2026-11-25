@@ -102,7 +102,7 @@ done
 npm --prefix frontend ci
 ```
 
-3. Start the stack (including Postgres + `pgvector`, Redis, KRaft Kafka, stream workers, and observability), run migrations, and create your account:
+3. Start the stack (including Postgres + `pgvector`, Redis, KRaft Kafka, and stream workers), run migrations, and create your account:
 
 ```bash
 make up
@@ -134,8 +134,6 @@ make createsuperuser
 - **Control Plane OpenAPI Schema**: http://localhost:8000/api/schema/
 - **Django Admin**: http://localhost:8000/admin/
 - **Stream Edge Health**: http://localhost:8001/health
-- **Prometheus**: http://localhost:9090/
-- **Grafana (`Vektryn Pipeline Overview`)**: http://localhost:3001/ (`admin` / `vektryn_admin`)
 
 ## Development
 
@@ -176,7 +174,7 @@ vektryn/
 │   └── stream-edge/            # FastAPI ingestion/SSE edge, collectors, Kafka workers
 ├── frontend/                   # React 19 + TypeScript + Vite 8 + Tailwind v4 SPA & Nginx
 ├── infra/
-│   ├── docker/                 # Postgres init SQL, OTel Collector, Prometheus, Grafana dashboards
+│   ├── docker/                 # Postgres init SQL
 │   └── terraform/              # GCP Cloud Run, Jobs, Scheduler, e2-micro data node, GCS, IAM/WIF
 ├── docker-compose.yml          # Full local stack
 ├── Makefile                    # Unified dev, worker, test, and lint commands
@@ -188,7 +186,7 @@ vektryn/
 
 ```text
 services/control-plane/
-├── config/     # Pydantic settings (proxy/TLS/CSRF hardening), OTel/Sentry telemetry, ASGI/WSGI, URLs
+├── config/     # Pydantic settings (proxy/TLS/CSRF hardening), Sentry telemetry, ASGI/WSGI, URLs
 └── apps/
     ├── base/       # Abstract BaseModel (UUID/timestamps/soft-delete) and session auth endpoints
     ├── resumes/    # ResumeProfile uploads (PDF/DOCX/TXT/MD), snapshot storage, 768-dim embeddings
@@ -209,8 +207,7 @@ services/stream-edge/src/stream_edge/
 ├── collectors/   # 8 ATS board collectors + 6 Global/BR feeds, discovery, taxonomy, prefilter
 ├── workers/      # Kafka enrichment, pgvector matcher, daily rollup, lifecycle check, DLQ replay
 ├── config.py     # Pydantic BaseSettings (Kafka/SASL portability, Redis, GCS, Gemini keys)
-├── metrics.py    # Custom Prometheus counters, gauges, histograms, and worker /metrics servers
-└── telemetry.py  # OpenTelemetry OTLP tracer & optional Sentry SDK setup
+└── telemetry.py  # Optional Sentry SDK setup
 ```
 
 ### Test Structure
@@ -249,11 +246,10 @@ make test opts="-k test_auth"
 
 ## Observability
 
-`make up` brings up the local telemetry stack automatically:
+Observability is consolidated around in-app pipeline telemetry, GCP Cloud Run logs/metrics, and Sentry error tracking:
 
-- **OpenTelemetry Collector** (`:4317` gRPC / `:4318` HTTP / `:8889` Prometheus exporter): Collects traces across Django Control Plane, FastAPI Stream Edge, and Kafka workers.
-- **Prometheus** (`:9090`): Scrapes `/metrics` from `control-plane:8000`, `stream-edge:8001`, `enrichment-worker:9101`, `matcher-worker:9102`, and `otel-collector:8889`.
-- **Grafana** (`:3001`): Auto-provisions the Prometheus datasource and **Vektryn Pipeline Overview** dashboard (targets up, SSE clients, ingest rate by ATS, worker throughput/DLQ, Gemini p95 latency/errors, processing duration).
+- **In-App Pipeline Telemetry (`PipelineStatusPopover` & `DlqInspectorModal`)**: Live collector run metrics (`CollectorRunLog`), active/unscored job backlog, Redis-backed worker liveness heartbeats (`enrichment-worker`, `matcher-worker`), and staff `jobs.dlq` inspection/replay/dismiss controls via `GET /api/v1/system/status/` and `/api/v1/system/dlq/`.
+- **Sentry SDK**: Optional error tracking across Control Plane, Stream Edge, and React SPA (zero-op when DSN is unset).
 
 ## Deployment
 

@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 from stream_edge.clients.gcs import SnapshotStorageClient
 from stream_edge.clients.kafka import KafkaEventProducer
 from stream_edge.config import settings
-from stream_edge.metrics import INGEST_JOBS_TOTAL
 from vektryn_contracts import (
     ATSSource,
     ApplyUrl,
@@ -135,10 +134,6 @@ async def ingest_job(
         key=job_partition_key(event.ats_source, event.external_id),
         event=event,
     )
-    INGEST_JOBS_TOTAL.labels(
-        ats_source=payload.ats_source.value,
-        status="accepted",
-    ).inc()
 
     return IngestJobResponse(
         event_id=event.event_id,

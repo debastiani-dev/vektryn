@@ -305,17 +305,17 @@ async def test_breezy_collector_fetches_full_description_html():
     assert "Kafka" in jobs[0].description_clean
 
 
-async def test_metrics_endpoint_exposes_custom_vektryn_counters():
+async def test_health_endpoint_ok_and_prometheus_metrics_removed():
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test", follow_redirects=True
     ) as client:
-        response = await client.get("/metrics")
+        health_response = await client.get("/health")
+        metrics_response = await client.get("/metrics")
 
-    assert response.status_code == 200
-    body = response.text
-    assert "vektryn_ingest_jobs_total" in body
-    assert "vektryn_sse_active_clients" in body
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok", "service": "stream-edge"}
+    assert metrics_response.status_code == 404
 
 
 def test_kafka_base_config_supports_optional_sasl_ssl(monkeypatch):
@@ -792,9 +792,9 @@ async def test_internal_collect_endpoint_auth_subprocess_and_single_flight(monke
 async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused():
     captured: dict[str, object] = {}
 
-    def _fake_generate_structured_sync(*, prompt: str, schema, operation: str):
+    def _fake_generate_structured_sync(*, prompt: str, schema):
         captured["prompt"] = prompt
-        captured["operation"] = operation
+        captured["schema"] = schema
         return (
             json.dumps(
                 {
@@ -833,7 +833,7 @@ async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused
     )
 
     prompt = str(captured["prompt"])
-    assert captured["operation"] == "evaluate_fit"
+    assert captured["schema"].__name__ == "ResumeGapEvaluation"
     assert model_used == "gemini-4-hydrogen"
     assert evaluation.fit_score == 86
     assert len(evaluation.fit_highlights) == 2

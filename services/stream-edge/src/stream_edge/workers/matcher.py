@@ -4,11 +4,9 @@ from datetime import UTC, datetime
 import json
 import logging
 import signal
-import time
 import uuid
 
 from confluent_kafka import KafkaError
-from opentelemetry import trace
 from pgvector.psycopg import register_vector
 import psycopg
 
@@ -24,13 +22,7 @@ from stream_edge.clients.notifications import (
     persist_pipeline_error_notifications,
 )
 from stream_edge.config import settings
-from stream_edge.metrics import (
-    MATCH_ALERTS_EMITTED_TOTAL,
-    WORKER_MESSAGES_TOTAL,
-    WORKER_PROCESSING_SECONDS,
-    start_worker_metrics_server,
-)
-from stream_edge.telemetry import configure_tracing
+from stream_edge.telemetry import configure_sentry
 from vektryn_contracts import (
     ATSSource,
     JobEnrichedEvent,
@@ -46,7 +38,6 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
-tracer = trace.get_tracer("vektryn-matcher-worker")
 
 MATCHER_MAX_POLL_INTERVAL_MS = 600_000
 
@@ -424,7 +415,6 @@ def _publish_match_alerts(
             key=alert_partition_key(alert_event.user_id),
             event=alert_event,
         )
-        MATCH_ALERTS_EMITTED_TOTAL.inc()
 
 
 def _persist_manual_import_ready(
@@ -954,8 +944,7 @@ def _rescore_resume_sync(
 
 
 async def run_matcher_worker() -> None:
-    configure_tracing("vektryn-matcher-worker")
-    start_worker_metrics_server(9102)
+    configure_sentry("vektryn-matcher-worker")
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     heartbeat = WorkerHeartbeat("matcher-worker")
@@ -993,54 +982,30 @@ async def run_matcher_worker() -> None:
                     logger.error("Kafka consumer error: %s", msg.error())
                 continue
 
-            started = time.perf_counter()
             try:
                 raw_value = (msg.value() or b"").decode("utf-8")
                 topic = msg.topic()
                 if topic == KafkaTopic.JOBS_RESCORE.value:
                     rescore_event = JobRescoreEvent.model_validate_json(raw_value)
-                    with tracer.start_as_current_span(
-                        "matcher.rescore_resume",
-                        attributes={
-                            "vektryn.resume_profile_uuid": str(
-                                rescore_event.resume_profile_uuid
-                            ),
-                            "vektryn.max_jobs": rescore_event.max_jobs,
-                            "vektryn.force": rescore_event.force,
-                            "vektryn.trace_id": rescore_event.trace_id,
-                        },
-                    ):
-                        await asyncio.to_thread(
-                            _rescore_resume_sync,
-                            event=rescore_event,
-                            gemini=gemini,
-                            producer=producer,
-                        )
+                    await asyncio.to_thread(
+                        _rescore_resume_sync,
+                        event=rescore_event,
+                        gemini=gemini,
+                        producer=producer,
+                    )
                 else:
                     enriched = JobEnrichedEvent.model_validate_json(raw_value)
-                    with tracer.start_as_current_span(
-                        "matcher.upsert_and_score",
-                        attributes={
-                            "vektryn.ats_source": enriched.ats_source.value,
-                            "vektryn.external_id": enriched.external_id,
-                            "vektryn.trace_id": enriched.trace_id,
-                        },
-                    ):
-                        await asyncio.to_thread(
-                            _upsert_job_and_score_sync,
-                            enriched=enriched,
-                            gemini=gemini,
-                            producer=producer,
-                        )
-                WORKER_MESSAGES_TOTAL.labels(
-                    worker="matcher", outcome="processed"
-                ).inc()
+                    await asyncio.to_thread(
+                        _upsert_job_and_score_sync,
+                        enriched=enriched,
+                        gemini=gemini,
+                        producer=producer,
+                    )
                 heartbeat.record_message()
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
                 )
             except Exception as exc:
-                WORKER_MESSAGES_TOTAL.labels(worker="matcher", outcome="dlq").inc()
                 logger.exception("Failed matching message; routing to DLQ: %s", exc)
                 await producer.publish_dlq(msg=msg, error=exc)
                 await asyncio.to_thread(
@@ -1052,10 +1017,6 @@ async def run_matcher_worker() -> None:
                 )
                 await asyncio.to_thread(
                     consumer.commit, message=msg, asynchronous=False
-                )
-            finally:
-                WORKER_PROCESSING_SECONDS.labels(worker="matcher").observe(
-                    time.perf_counter() - started
                 )
     finally:
         await heartbeat.stop()

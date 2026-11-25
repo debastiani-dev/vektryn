@@ -1,11 +1,6 @@
 import logging
 import os
 
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
@@ -33,22 +28,3 @@ def configure_sentry(service_name: str) -> bool:
     _SENTRY_CONFIGURED = True
     logger.info("Sentry error tracking enabled for %s", service_name)
     return True
-
-
-def configure_tracing(service_name: str) -> trace.Tracer:
-    configure_sentry(service_name)
-
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
-    if endpoint:
-        resource = Resource.create({"service.name": service_name})
-        provider = TracerProvider(resource=resource)
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=f"{endpoint.rstrip('/')}/v1/traces")
-            )
-        )
-        trace.set_tracer_provider(provider)
-        logger.info(
-            "OpenTelemetry tracing enabled for %s -> %s", service_name, endpoint
-        )
-    return trace.get_tracer(service_name)

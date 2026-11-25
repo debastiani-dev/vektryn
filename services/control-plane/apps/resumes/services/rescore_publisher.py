@@ -1,10 +1,9 @@
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from confluent_kafka import KafkaError, Producer
 from django.conf import settings
-from opentelemetry import trace
 import redis
 
 from vektryn_contracts import JobRescoreEvent, KafkaTopic, rescore_partition_key
@@ -34,10 +33,7 @@ class RescoreCooldownError(Exception):
 
 
 def current_trace_id() -> str:
-    span_ctx = trace.get_current_span().get_span_context()
-    if span_ctx and span_ctx.is_valid:
-        return f"{span_ctx.trace_id:032x}"
-    return "0" * 32
+    return uuid4().hex
 
 
 def _kafka_producer_config(bootstrap_servers: str) -> dict[str, Any]:
