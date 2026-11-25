@@ -25,6 +25,7 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "status",
             "priority",
             "notes",
+            "next_action_at",
             "applied_at",
             "last_activity_at",
             "created_at",

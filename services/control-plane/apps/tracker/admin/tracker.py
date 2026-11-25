@@ -10,8 +10,9 @@ class ApplicationLeadAdmin(admin.ModelAdmin):
         "user",
         "status",
         "priority",
+        "next_action_at",
         "applied_at",
         "last_activity_at",
     )
     list_filter = ("status", "priority", "is_deleted")
-    readonly_fields = ("uuid", "created_at", "modified_at")
+    readonly_fields = ("uuid", "followup_notified_at", "created_at", "modified_at")

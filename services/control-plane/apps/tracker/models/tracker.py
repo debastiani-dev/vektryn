@@ -38,6 +38,8 @@ class ApplicationLead(BaseModel):
 
     applied_at = models.DateTimeField(null=True, blank=True)
     last_activity_at = models.DateTimeField(null=True, blank=True)
+    next_action_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    followup_notified_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
 
     class Meta:

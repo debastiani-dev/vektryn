@@ -7,6 +7,7 @@ from rest_framework.response import Response
 
 from apps.base.models.notification import Notification
 from apps.base.serializers.notifications import NotificationSerializer
+from apps.tracker.services.leads import sync_due_followup_notifications_for_user
 from vektryn_contracts.enums import NotificationKind
 
 _VALID_KINDS = frozenset(kind.value for kind in NotificationKind)
@@ -36,6 +37,7 @@ class NotificationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         ).order_by("-created_at")
 
     def list(self, request: Request, *args, **kwargs) -> Response:
+        sync_due_followup_notifications_for_user(request.user)
         qs = self.get_queryset()
         unread_param = request.query_params.get("unread", "").strip().lower()
         if unread_param in _TRUTHY_VALUES:

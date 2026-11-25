@@ -3,6 +3,7 @@ import {
     Bell,
     BookmarkCheck,
     BookmarkPlus,
+    CalendarClock,
     Check,
     CheckCheck,
     Database,
@@ -95,6 +96,14 @@ function NotificationKindBadge({ item }: Readonly<{ item: NotificationItem }>) {
             <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
                 <Database className="h-3 w-3" />
                 Collector Sync
+            </span>
+        );
+    }
+    if (item.kind === "lead_followup_due") {
+        return (
+            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300 ring-1 ring-amber-500/35">
+                <CalendarClock className="h-3 w-3" />
+                Follow-up Due
             </span>
         );
     }
@@ -247,7 +256,7 @@ function NotificationCard({
                     </button>
                 )}
 
-                {item.kind === "tracked_job_closed" && (
+                {(item.kind === "tracked_job_closed" || item.kind === "lead_followup_due") && (
                     <button
                         type="button"
                         onClick={() => onOpenTracker(item)}

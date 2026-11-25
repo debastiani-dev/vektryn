@@ -1,9 +1,13 @@
 import {
+    AlertTriangle,
     Banknote,
+    Bell,
     Briefcase,
     Building2,
+    CalendarClock,
     ChevronDown,
     Clock,
+    Download,
     ExternalLink,
     Eye,
     EyeOff,
@@ -15,17 +19,28 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { fetchAllPages, vektrynApi } from "../../api/client";
+import { NOTIFICATIONS_REFRESH_EVENT } from "../../hooks/useNotifications";
 import type { ApplicationLead, LeadPriority, LeadStatus, MatchScore } from "../../types/models";
 import {
+    DEFAULT_MIN_ALERT_SCORE,
     formatApplyLinkTooltip,
     formatContractType,
     formatExactDate,
     formatRelativeTime,
     formatSalaryRange,
     formatScoreLabel,
+    formatVectorSimilarity,
+    isAlertMatch,
     isMailtoUrl,
     scoreBadgeStyle,
 } from "../../utils/format";
+import {
+    formatFollowupDate,
+    formatFollowupExact,
+    fromDatetimeLocalValue,
+    isLeadFollowupOverdue,
+    toDatetimeLocalValue,
+} from "../../utils/leadReminders";
 import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
 import { type JobListingPreview, JobPostingDrawer } from "../radar/JobPostingDrawer";
 import { Tooltip } from "../ui/Tooltip";
@@ -118,10 +133,13 @@ interface PipelineLeadCardProps {
     lead: ApplicationLead;
     match: MatchScore | null;
     isEditingNotes: boolean;
+    isEditingFollowup: boolean;
     isDeleting: boolean;
     isUpdatingPriority: boolean;
     notesDraft: string;
+    followupDraft: string;
     onNotesDraftChange: (next: string) => void;
+    onFollowupDraftChange: (next: string) => void;
     onOpenJob: (lead: ApplicationLead, match: MatchScore | null) => void;
     onOpenGapDetails: (match: MatchScore) => void;
     onCyclePriority: (lead: ApplicationLead) => void;
@@ -129,7 +147,105 @@ interface PipelineLeadCardProps {
     onStartEditingNotes: (lead: ApplicationLead) => void;
     onCancelEditingNotes: () => void;
     onSaveNotes: (lead: ApplicationLead) => void;
+    onStartEditingFollowup: (lead: ApplicationLead) => void;
+    onCancelEditingFollowup: () => void;
+    onSaveFollowup: (lead: ApplicationLead, nextIso: string | null) => void;
     onDeleteLead: (lead: ApplicationLead) => void;
+}
+
+function LeadScoreBadges({
+    match,
+    isClosed,
+    lead,
+}: Readonly<{
+    match: MatchScore | null;
+    isClosed: boolean;
+    lead: ApplicationLead;
+}>) {
+    const overdue = isLeadFollowupOverdue(lead);
+    const followupDate = formatFollowupDate(lead.next_action_at);
+    const followupExact = formatFollowupExact(lead.next_action_at);
+    if (!match && !isClosed && !followupDate) {
+        return null;
+    }
+
+    const hasAiScore = typeof match?.fit_score === "number";
+    const isAlert = isAlertMatch(match?.fit_score, DEFAULT_MIN_ALERT_SCORE);
+    const vectorPct = match ? Math.max(0, Math.min(100, Math.round(match.cosine_similarity * 100))) : 0;
+
+    return (
+        <div className="flex flex-wrap items-center gap-1.5">
+            {match && (
+                <>
+                    <Tooltip
+                        content={
+                            hasAiScore
+                                ? "Stage 2 Gemini AI fit score evaluating tech stack, seniority, and experience alignment."
+                                : "Stage 1 vector match only — Stage 2 Gemini AI scoring has not run for this role."
+                        }
+                    >
+                        <span
+                            className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeStyle(
+                                match.fit_score,
+                            )}`}
+                        >
+                            {hasAiScore ? formatScoreLabel(match.fit_score) : "UNSCORED"}
+                        </span>
+                    </Tooltip>
+
+                    {isAlert && (
+                        <Tooltip content="Meets or exceeds the alert fit threshold">
+                            <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/15 px-2 py-0.5 text-[11px] font-semibold text-violet-300 ring-1 ring-violet-500/35">
+                                <Bell className="h-3 w-3" />
+                                Alert
+                            </span>
+                        </Tooltip>
+                    )}
+
+                    <Tooltip
+                        content={`Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`}
+                    >
+                        <span className="rounded-md bg-zinc-800/80 px-2 py-0.5 font-mono text-[11px] tabular-nums text-zinc-300">
+                            {formatVectorSimilarity(match.cosine_similarity)}
+                        </span>
+                    </Tooltip>
+                </>
+            )}
+
+            {followupDate && (
+                <Tooltip
+                    content={
+                        overdue
+                            ? `Follow-up overdue since ${followupExact ?? followupDate}`
+                            : `Scheduled follow-up on ${followupExact ?? followupDate}`
+                    }
+                >
+                    <span
+                        className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium ring-1 ${
+                            overdue
+                                ? "bg-amber-500/20 text-amber-200 ring-amber-500/45"
+                                : "bg-sky-500/12 text-sky-300 ring-sky-500/25"
+                        }`}
+                    >
+                        {overdue ? (
+                            <AlertTriangle className="h-3 w-3 text-amber-300" />
+                        ) : (
+                            <CalendarClock className="h-3 w-3 text-sky-300" />
+                        )}
+                        {overdue ? `Overdue · ${followupDate}` : `Follow up · ${followupDate}`}
+                    </span>
+                </Tooltip>
+            )}
+
+            {isClosed && (
+                <Tooltip content="This job posting was marked closed upstream">
+                    <span className="rounded-md bg-rose-500/15 px-2 py-0.5 text-[11px] font-medium text-rose-300 ring-1 ring-rose-500/30">
+                        Closed
+                    </span>
+                </Tooltip>
+            )}
+        </div>
+    );
 }
 
 function LeadApplyLink({ applyUrl }: Readonly<{ applyUrl: string }>) {
@@ -153,14 +269,29 @@ function LeadApplyLink({ applyUrl }: Readonly<{ applyUrl: string }>) {
     );
 }
 
+function getCardAccentClass(overdue: boolean, priority: LeadPriority): string {
+    if (overdue) return "border-amber-500/45 border-l-2 border-l-amber-400";
+    if (priority === "high") return "border-zinc-800/90 border-l-2 border-l-rose-500/80";
+    return "border-zinc-800/90";
+}
+
+function getFollowupButtonClass(overdue: boolean, hasFollowup: boolean): string {
+    if (overdue) return "bg-amber-500/20 text-amber-300 hover:bg-amber-500/30";
+    if (hasFollowup) return "bg-sky-500/15 text-sky-300 hover:bg-sky-500/25";
+    return "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200";
+}
+
 function PipelineLeadCard({
     lead,
     match,
     isEditingNotes,
+    isEditingFollowup,
     isDeleting,
     isUpdatingPriority,
     notesDraft,
+    followupDraft,
     onNotesDraftChange,
+    onFollowupDraftChange,
     onOpenJob,
     onOpenGapDetails,
     onCyclePriority,
@@ -168,9 +299,14 @@ function PipelineLeadCard({
     onStartEditingNotes,
     onCancelEditingNotes,
     onSaveNotes,
+    onStartEditingFollowup,
+    onCancelEditingFollowup,
+    onSaveFollowup,
     onDeleteLead,
 }: Readonly<PipelineLeadCardProps>) {
     const hasNotes = Boolean(lead.notes.trim());
+    const hasFollowup = Boolean(lead.next_action_at);
+    const overdue = isLeadFollowupOverdue(lead);
     const job = match?.job_posting ?? null;
     const jobId = extractJobPostingId(lead.job_posting);
     const title =
@@ -196,9 +332,11 @@ function PipelineLeadCard({
     const notesTooltip = hasNotes
         ? "Edit notes attached to this lead"
         : "Add recruiter, salary, or interview prep notes";
+    const followupTooltip = hasFollowup
+        ? "Edit or clear scheduled follow-up reminder"
+        : "Schedule a follow-up reminder date";
 
     const nextPriority = NEXT_PRIORITY[lead.priority];
-    const cosinePct = match ? Math.round(match.cosine_similarity * 100) : null;
     const salaryLabel = job
         ? formatSalaryRange(
             job.salary_min,
@@ -212,61 +350,13 @@ function PipelineLeadCard({
         job && job.contract_type !== "unknown" ? formatContractType(job.contract_type) : null;
     const isClosed = job ? !job.is_active : false;
     const hasDecisionMeta = Boolean(salaryLabel || locationLabel || contractLabel);
+    const cardAccentClass = getCardAccentClass(overdue, lead.priority);
 
     return (
         <article
-            className={`space-y-3.5 rounded-xl border border-zinc-800/90 bg-zinc-950/90 p-4 ring-1 ring-inset ring-white/[0.03] transition hover:border-zinc-700 sm:p-5 ${lead.priority === "high" ? "border-l-2 border-l-rose-500/80" : ""
-                }`}
+            className={`space-y-3.5 rounded-xl border bg-zinc-950/90 p-4 ring-1 ring-inset ring-white/[0.03] transition hover:border-zinc-700 sm:p-5 ${cardAccentClass}`}
         >
-            {(match || isClosed) && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                    {match && match.fit_score !== null && (
-                        <>
-                            <Tooltip content={`AI fit score: ${match.fit_score}%`}>
-                                <span
-                                    className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${scoreBadgeStyle(
-                                        match.fit_score,
-                                    )}`}
-                                >
-                                    {formatScoreLabel(match.fit_score)}
-                                </span>
-                            </Tooltip>
-                            <Tooltip
-                                content={`Vector embedding cosine similarity (${(match.cosine_similarity * 100).toFixed(1)}%)`}
-                            >
-                                <span className="rounded-md bg-zinc-800/80 px-2 py-0.5 font-mono text-[11px] tabular-nums text-zinc-300">
-                                    {cosinePct}% sim
-                                </span>
-                            </Tooltip>
-                        </>
-                    )}
-
-                    {match && match.fit_score === null && cosinePct !== null && (
-                        <>
-                            <Tooltip
-                                content={`Not AI-scored yet — ${cosinePct}% resume-to-job embedding similarity`}
-                            >
-                                <span className="rounded-md bg-sky-500/12 px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-sky-300 ring-1 ring-sky-500/25">
-                                    {cosinePct}% Cosine Sim
-                                </span>
-                            </Tooltip>
-                            <Tooltip content="Matched by embedding similarity only — LLM gap scoring has not run">
-                                <span className="rounded-md bg-zinc-800/80 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
-                                    No AI Score
-                                </span>
-                            </Tooltip>
-                        </>
-                    )}
-
-                    {isClosed && (
-                        <Tooltip content="This job posting was marked closed upstream">
-                            <span className="rounded-md bg-rose-500/15 px-2 py-0.5 text-[11px] font-medium text-rose-300 ring-1 ring-rose-500/30">
-                                Closed
-                            </span>
-                        </Tooltip>
-                    )}
-                </div>
-            )}
+            <LeadScoreBadges match={match} isClosed={isClosed} lead={lead} />
 
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1.5">
@@ -379,6 +469,17 @@ function PipelineLeadCard({
                         </Tooltip>
                     )}
 
+                    <Tooltip content={followupTooltip}>
+                        <button
+                            type="button"
+                            onClick={() => onStartEditingFollowup(lead)}
+                            aria-label="Schedule follow-up reminder"
+                            className={`rounded-lg p-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${getFollowupButtonClass(overdue, hasFollowup)}`}
+                        >
+                            <CalendarClock className="h-4 w-4" />
+                        </button>
+                    </Tooltip>
+
                     <Tooltip content={notesTooltip}>
                         <button
                             type="button"
@@ -408,6 +509,56 @@ function PipelineLeadCard({
                     </Tooltip>
                 </div>
             </div>
+
+            {isEditingFollowup && (
+                <div className="space-y-3 border-t border-zinc-800 pt-3.5">
+                    <label
+                        htmlFor={`followup-${lead.uuid}`}
+                        className="block text-[11px] font-medium uppercase tracking-wider text-zinc-400"
+                    >
+                        Follow-up reminder
+                    </label>
+                    <input
+                        id={`followup-${lead.uuid}`}
+                        type="datetime-local"
+                        value={followupDraft}
+                        onChange={(e) => onFollowupDraftChange(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs text-zinc-100 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                        {hasFollowup ? (
+                            <button
+                                type="button"
+                                onClick={() => onSaveFollowup(lead, null)}
+                                className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-950/40"
+                            >
+                                Clear
+                            </button>
+                        ) : (
+                            <span />
+                        )}
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={onCancelEditingFollowup}
+                                className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-400 transition hover:text-zinc-200"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!followupDraft.trim()}
+                                onClick={() =>
+                                    onSaveFollowup(lead, fromDatetimeLocalValue(followupDraft))
+                                }
+                                className="rounded-lg bg-violet-600 px-3.5 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500 disabled:opacity-50"
+                            >
+                                Save
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {isEditingNotes && (
                 <div className="space-y-3 border-t border-zinc-800 pt-3.5">
@@ -455,11 +606,14 @@ interface PipelineStageColumnProps {
     stageLeads: ApplicationLead[];
     matchesByJobId: Record<string, MatchScore>;
     editingNotesId: string | null;
+    editingFollowupId: string | null;
     deletingId: string | null;
     updatingPriorityId: string | null;
     notesDraft: string;
+    followupDraft: string;
     onRegisterRef: (el: HTMLElement | null) => void;
     onNotesDraftChange: (next: string) => void;
+    onFollowupDraftChange: (next: string) => void;
     onOpenJob: (lead: ApplicationLead, match: MatchScore | null) => void;
     onOpenGapDetails: (match: MatchScore) => void;
     onCyclePriority: (lead: ApplicationLead) => void;
@@ -467,6 +621,9 @@ interface PipelineStageColumnProps {
     onStartEditingNotes: (lead: ApplicationLead) => void;
     onCancelEditingNotes: () => void;
     onSaveNotes: (lead: ApplicationLead) => void;
+    onStartEditingFollowup: (lead: ApplicationLead) => void;
+    onCancelEditingFollowup: () => void;
+    onSaveFollowup: (lead: ApplicationLead, nextIso: string | null) => void;
     onDeleteLead: (lead: ApplicationLead) => void;
 }
 
@@ -475,11 +632,14 @@ function PipelineStageColumn({
     stageLeads,
     matchesByJobId,
     editingNotesId,
+    editingFollowupId,
     deletingId,
     updatingPriorityId,
     notesDraft,
+    followupDraft,
     onRegisterRef,
     onNotesDraftChange,
+    onFollowupDraftChange,
     onOpenJob,
     onOpenGapDetails,
     onCyclePriority,
@@ -487,6 +647,9 @@ function PipelineStageColumn({
     onStartEditingNotes,
     onCancelEditingNotes,
     onSaveNotes,
+    onStartEditingFollowup,
+    onCancelEditingFollowup,
+    onSaveFollowup,
     onDeleteLead,
 }: Readonly<PipelineStageColumnProps>) {
     return (
@@ -524,10 +687,13 @@ function PipelineStageColumn({
                             lead={lead}
                             match={match}
                             isEditingNotes={editingNotesId === lead.uuid}
+                            isEditingFollowup={editingFollowupId === lead.uuid}
                             isDeleting={deletingId === lead.uuid}
                             isUpdatingPriority={updatingPriorityId === lead.uuid}
                             notesDraft={notesDraft}
+                            followupDraft={followupDraft}
                             onNotesDraftChange={onNotesDraftChange}
+                            onFollowupDraftChange={onFollowupDraftChange}
                             onOpenJob={onOpenJob}
                             onOpenGapDetails={onOpenGapDetails}
                             onCyclePriority={onCyclePriority}
@@ -535,6 +701,9 @@ function PipelineStageColumn({
                             onStartEditingNotes={onStartEditingNotes}
                             onCancelEditingNotes={onCancelEditingNotes}
                             onSaveNotes={onSaveNotes}
+                            onStartEditingFollowup={onStartEditingFollowup}
+                            onCancelEditingFollowup={onCancelEditingFollowup}
+                            onSaveFollowup={onSaveFollowup}
                             onDeleteLead={onDeleteLead}
                         />
                     );
@@ -584,6 +753,9 @@ export function PipelineTrackerView() {
     const [error, setError] = useState<string | null>(null);
     const [editingNotesId, setEditingNotesId] = useState<string | null>(null);
     const [notesDraft, setNotesDraft] = useState("");
+    const [editingFollowupId, setEditingFollowupId] = useState<string | null>(null);
+    const [followupDraft, setFollowupDraft] = useState("");
+    const [exportingFormat, setExportingFormat] = useState<"csv" | "json" | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
     const [updatingPriorityId, setUpdatingPriorityId] = useState<string | null>(null);
     const [hideEmptyStages, setHideEmptyStages] = useState(false);
@@ -702,8 +874,47 @@ export function PipelineTrackerView() {
     }
 
     function startEditingNotes(lead: ApplicationLead) {
+        setEditingFollowupId(null);
         setEditingNotesId(lead.uuid);
         setNotesDraft(lead.notes);
+    }
+
+    function startEditingFollowup(lead: ApplicationLead) {
+        setEditingNotesId(null);
+        setEditingFollowupId(lead.uuid);
+        setFollowupDraft(toDatetimeLocalValue(lead.next_action_at));
+    }
+
+    async function handleSaveFollowup(lead: ApplicationLead, nextIso: string | null) {
+        setError(null);
+        try {
+            const updated = await vektrynApi.updateLead(lead.uuid, { next_action_at: nextIso });
+            setLeads((prev) => prev.map((item) => (item.uuid === lead.uuid ? updated : item)));
+            setEditingFollowupId(null);
+            window.dispatchEvent(new Event(NOTIFICATIONS_REFRESH_EVENT));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to save follow-up reminder");
+        }
+    }
+
+    async function handleExportLeads(format: "csv" | "json") {
+        setExportingFormat(format);
+        setError(null);
+        try {
+            const { blob, filename } = await vektrynApi.exportLeads(format);
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = filename;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : `Failed to export leads as ${format.toUpperCase()}`);
+        } finally {
+            setExportingFormat(null);
+        }
     }
 
     function scrollToStage(stageId: LeadStatus) {
@@ -719,6 +930,7 @@ export function PipelineTrackerView() {
     const interviewingCount = leads.filter(
         (lead) => lead.status === "screening" || lead.status === "interviewing",
     ).length;
+    const overdueCount = leads.filter((lead) => isLeadFollowupOverdue(lead)).length;
     const offerCount = leads.filter((lead) => lead.status === "offer").length;
     const toggleEmptyTooltip = hideEmptyStages
         ? "Show all 8 pipeline stage columns"
@@ -765,13 +977,16 @@ export function PipelineTrackerView() {
                             stageLeads={stageLeads}
                             matchesByJobId={matchesByJobId}
                             editingNotesId={editingNotesId}
+                            editingFollowupId={editingFollowupId}
                             deletingId={deletingId}
                             updatingPriorityId={updatingPriorityId}
                             notesDraft={notesDraft}
+                            followupDraft={followupDraft}
                             onRegisterRef={(el) => {
                                 stageRefs.current[stage.id] = el;
                             }}
                             onNotesDraftChange={setNotesDraft}
+                            onFollowupDraftChange={setFollowupDraft}
                             onOpenJob={openJobListing}
                             onOpenGapDetails={openGapDetails}
                             onCyclePriority={(lead) => void handleCyclePriority(lead)}
@@ -781,6 +996,9 @@ export function PipelineTrackerView() {
                             onStartEditingNotes={startEditingNotes}
                             onCancelEditingNotes={() => setEditingNotesId(null)}
                             onSaveNotes={(lead) => void handleSaveNotes(lead)}
+                            onStartEditingFollowup={startEditingFollowup}
+                            onCancelEditingFollowup={() => setEditingFollowupId(null)}
+                            onSaveFollowup={(lead, nextIso) => void handleSaveFollowup(lead, nextIso)}
                             onDeleteLead={(lead) => void handleDeleteLead(lead)}
                         />
                     );
@@ -794,13 +1012,48 @@ export function PipelineTrackerView() {
     return (
         <div className="space-y-8">
             <header className="space-y-6">
-                <div className="flex flex-col gap-1">
-                    <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-                        Pipeline Tracker
-                    </h1>
-                    <p className="text-sm text-zinc-400">
-                        Manage saved applications, track interview stages, and keep recruiter prep notes.
-                    </p>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                            <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+                                Pipeline Tracker
+                            </h1>
+                            {!loading && overdueCount > 0 && (
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/35">
+                                    <AlertTriangle className="h-3.5 w-3.5" />
+                                    {overdueCount} overdue follow-up{overdueCount === 1 ? "" : "s"}
+                                </span>
+                            )}
+                        </div>
+                        <p className="text-sm text-zinc-400">
+                            Manage saved applications, schedule follow-up reminders, and export your pipeline.
+                        </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                        <Tooltip content="Download your pipeline leads as CSV">
+                            <button
+                                type="button"
+                                disabled={exportingFormat !== null || loading}
+                                onClick={() => void handleExportLeads("csv")}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/80 px-3.5 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-700 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                                <Download className="h-3.5 w-3.5 text-violet-400" />
+                                {exportingFormat === "csv" ? "Exporting..." : "Download CSV"}
+                            </button>
+                        </Tooltip>
+                        <Tooltip content="Download your pipeline leads as JSON">
+                            <button
+                                type="button"
+                                disabled={exportingFormat !== null || loading}
+                                onClick={() => void handleExportLeads("json")}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/80 px-3.5 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-700 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                                <Download className="h-3.5 w-3.5 text-sky-400" />
+                                {exportingFormat === "json" ? "Exporting..." : "Download JSON"}
+                            </button>
+                        </Tooltip>
+                    </div>
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

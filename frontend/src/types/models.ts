@@ -99,7 +99,28 @@ export interface ApplicationLead {
     priority: LeadPriority;
     applied_at: string | null;
     last_activity_at: string | null;
+    next_action_at: string | null;
     notes: string;
+    created_at: string;
+    modified_at: string;
+}
+
+export interface SavedFilterQueryParams {
+    search?: string;
+    resume_profile?: string;
+    min_score?: number;
+    evaluated_only?: boolean;
+    seniority?: string;
+    contract_type?: string;
+    region?: string;
+    ats_source?: string;
+    sort_by?: string;
+}
+
+export interface SavedFilter {
+    uuid: string;
+    name: string;
+    query_params: SavedFilterQueryParams;
     created_at: string;
     modified_at: string;
 }
@@ -135,7 +156,8 @@ export type NotificationKind =
     | "pipeline_error"
     | "rescore_completed"
     | "manual_import_ready"
-    | "collector_sync_completed";
+    | "collector_sync_completed"
+    | "lead_followup_due";
 
 export interface NotificationPayload {
     job_posting_uuid?: string;
