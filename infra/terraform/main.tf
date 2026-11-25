@@ -12,6 +12,8 @@ locals {
     "serviceusage.googleapis.com",
     "vpcaccess.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "iap.googleapis.com",
+    "oslogin.googleapis.com",
   ]
 
   common_labels = {
@@ -76,6 +78,7 @@ module "data_node" {
   vpc_network_id           = module.networking.vpc_network_id
   vpc_subnetwork_id        = module.networking.vpc_subnetwork_id
   stream_edge_sa_email     = module.iam.stream_edge_sa_email
+  deployer_sa_email        = module.iam.deployer_sa_email
   stream_edge_latest_image = "${module.storage.artifact_registry_uri}/stream-edge:latest"
   snapshots_bucket_name    = module.storage.snapshots_bucket_name
 

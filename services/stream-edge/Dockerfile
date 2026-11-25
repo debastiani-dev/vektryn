@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -6,13 +7,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "poetry>=2.0,<3.0"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "poetry>=2.0,<3.0"
 
-COPY packages/contracts /app/packages/contracts
+COPY packages/contracts/pyproject.toml /app/packages/contracts/
+COPY packages/contracts/src /app/packages/contracts/src
 COPY services/stream-edge/pyproject.toml services/stream-edge/poetry.lock /app/services/stream-edge/
 
 WORKDIR /app/services/stream-edge
-RUN poetry install --only main --no-root --no-interaction --no-ansi
+RUN --mount=type=cache,target=/root/.cache/pypoetry \
+    poetry install --only main --no-root --no-interaction --no-ansi
 
 COPY services/stream-edge /app/services/stream-edge
 RUN poetry install --only-root --no-interaction --no-ansi

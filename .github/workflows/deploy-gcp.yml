@@ -2,6 +2,27 @@ name: Deploy - GCP Cloud Run
 
 on:
   workflow_dispatch:
+    inputs:
+      force_build_all:
+        description: "Force rebuild and rollout of control-plane, stream-edge, and frontend"
+        required: false
+        type: boolean
+        default: false
+      force_terraform:
+        description: "Force terraform apply"
+        required: false
+        type: boolean
+        default: false
+      force_migrate:
+        description: "Force execution of vektryn-migrate Cloud Run Job"
+        required: false
+        type: boolean
+        default: false
+      force_worker_refresh:
+        description: "Force IAP SSH refresh of enrichment-worker and matcher-worker on vektryn-data-node"
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -10,6 +31,11 @@ on:
       - "frontend/**"
       - "infra/terraform/**"
       - ".github/workflows/deploy-gcp.yml"
+      - ".github/scripts/detect_deploy_changes.py"
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -18,51 +44,136 @@ permissions:
 env:
   REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'vektryn' }}
+  DATA_VM_NAME: ${{ vars.DATA_VM_NAME || 'vektryn-data-node' }}
+  DATA_VM_ZONE: ${{ vars.DATA_VM_ZONE || 'us-central1-a' }}
+  PROD_HEALTH_URL: ${{ vars.PROD_HEALTH_URL || 'https://vektryn.debastiani.dev/api/v1/health/' }}
 
 jobs:
-  deploy:
+  changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
     if: vars.GCP_PROJECT_ID != ''
+    outputs:
+      control_plane: ${{ steps.detect.outputs.control_plane }}
+      stream_edge: ${{ steps.detect.outputs.stream_edge }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+      contracts: ${{ steps.detect.outputs.contracts }}
+      migrations: ${{ steps.detect.outputs.migrations }}
+      terraform: ${{ steps.detect.outputs.terraform }}
+      worker_refresh: ${{ steps.detect.outputs.worker_refresh }}
+      has_builds: ${{ steps.detect.outputs.has_builds }}
+      has_deploy_work: ${{ steps.detect.outputs.has_deploy_work }}
+      build_matrix: ${{ steps.detect.outputs.build_matrix }}
+      built_services: ${{ steps.detect.outputs.built_services }}
+      started_at: ${{ steps.detect.outputs.started_at }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify deploy targets
+        id: detect
+        run: |
+          python3 .github/scripts/detect_deploy_changes.py \
+            --event-name "${{ github.event_name }}" \
+            --before "${{ github.event.before || '' }}" \
+            --after "${{ github.sha }}" \
+            --force-build-all "${{ inputs.force_build_all || false }}" \
+            --force-terraform "${{ inputs.force_terraform || false }}" \
+            --force-migrate "${{ inputs.force_migrate || false }}" \
+            --force-worker-refresh "${{ inputs.force_worker_refresh || false }}"
+
+  build:
+    name: Build (${{ matrix.service }})
+    needs: changes
+    runs-on: ubuntu-latest
+    if: vars.GCP_PROJECT_ID != '' && needs.changes.outputs.has_builds == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJson(needs.changes.outputs.build_matrix) }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}/${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy & Verify
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    if: >-
+      always() &&
+      vars.GCP_PROJECT_ID != '' &&
+      needs.changes.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+
+    steps:
+      - name: Checkout repository (Terraform)
+        if: needs.changes.outputs.terraform == 'true'
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        if: needs.changes.outputs.has_deploy_work == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
+        if: needs.changes.outputs.has_deploy_work == 'true'
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-      - name: Build and push container images
-        run: |
-          REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
-          TAG="${{ github.sha }}"
-
-          docker build -f services/control-plane/Dockerfile -t "$REGISTRY/control-plane:$TAG" -t "$REGISTRY/control-plane:latest" .
-          docker build -f services/stream-edge/Dockerfile -t "$REGISTRY/stream-edge:$TAG" -t "$REGISTRY/stream-edge:latest" .
-          docker build -f frontend/Dockerfile -t "$REGISTRY/frontend:$TAG" -t "$REGISTRY/frontend:latest" frontend
-
-          docker push --all-tags "$REGISTRY/control-plane"
-          docker push --all-tags "$REGISTRY/stream-edge"
-          docker push --all-tags "$REGISTRY/frontend"
-
       - name: Set up Terraform
+        if: needs.changes.outputs.terraform == 'true'
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "~1.11"
 
       - name: Terraform Apply
+        id: terraform
+        if: needs.changes.outputs.terraform == 'true'
         working-directory: infra/terraform
         run: |
           REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
           TAG="${{ github.sha }}"
           STATE_BUCKET="${{ vars.TF_STATE_BUCKET }}"
+
+          CP_TAG="latest"
+          SE_TAG="latest"
+          FE_TAG="latest"
+          if [ "${{ needs.changes.outputs.control_plane }}" = "true" ]; then CP_TAG="$TAG"; fi
+          if [ "${{ needs.changes.outputs.stream_edge }}" = "true" ]; then SE_TAG="$TAG"; fi
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then FE_TAG="$TAG"; fi
 
           if [ -n "$STATE_BUCKET" ]; then
             terraform init -backend-config="bucket=$STATE_BUCKET"
@@ -73,21 +184,189 @@ jobs:
           terraform apply -auto-approve \
             -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
             -var="region=${{ env.REGION }}" \
-            -var="control_plane_image=$REGISTRY/control-plane:$TAG" \
-            -var="stream_edge_image=$REGISTRY/stream-edge:$TAG" \
-            -var="frontend_image=$REGISTRY/frontend:$TAG"
+            -var="control_plane_image=$REGISTRY/control-plane:$CP_TAG" \
+            -var="stream_edge_image=$REGISTRY/stream-edge:$SE_TAG" \
+            -var="frontend_image=$REGISTRY/frontend:$FE_TAG"
 
       - name: Run Django database migrations
+        id: migrate
+        if: needs.changes.outputs.migrations == 'true'
         run: |
+          REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
+          TAG="${{ github.sha }}"
+
+          if [ "${{ needs.changes.outputs.control_plane }}" = "true" ]; then
+            gcloud run jobs update vektryn-migrate \
+              --project="${{ vars.GCP_PROJECT_ID }}" \
+              --region="${{ env.REGION }}" \
+              --image="$REGISTRY/control-plane:$TAG" \
+              --quiet
+          fi
+
           gcloud run jobs execute vektryn-migrate \
             --project="${{ vars.GCP_PROJECT_ID }}" \
             --region="${{ env.REGION }}" \
             --wait
 
-      - name: Smoke check Control Plane health
+      - name: Roll out updated Cloud Run services and jobs
+        id: cloud_run
+        if: needs.changes.outputs.has_builds == 'true'
         run: |
-          CP_URL=$(gcloud run services describe vektryn-control-plane \
+          set -euo pipefail
+          REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
+          TAG="${{ github.sha }}"
+          PROJECT="${{ vars.GCP_PROJECT_ID }}"
+          REGION="${{ env.REGION }}"
+
+          PIDS=()
+          TARGETS=()
+
+          launch() {
+            local target="$1"
+            shift
+            TARGETS+=("$target")
+            "$@" &
+            PIDS+=("$!")
+          }
+
+          if [ "${{ needs.changes.outputs.control_plane }}" = "true" ]; then
+            launch "vektryn-control-plane" \
+              gcloud run services update vektryn-control-plane \
+                --project="$PROJECT" --region="$REGION" \
+                --image="$REGISTRY/control-plane:$TAG" --quiet
+
+            if [ "${{ needs.changes.outputs.migrations }}" != "true" ]; then
+              launch "vektryn-migrate" \
+                gcloud run jobs update vektryn-migrate \
+                  --project="$PROJECT" --region="$REGION" \
+                  --image="$REGISTRY/control-plane:$TAG" --quiet
+            fi
+          fi
+
+          if [ "${{ needs.changes.outputs.stream_edge }}" = "true" ]; then
+            launch "vektryn-stream-edge" \
+              gcloud run services update vektryn-stream-edge \
+                --project="$PROJECT" --region="$REGION" \
+                --image="$REGISTRY/stream-edge:$TAG" --quiet
+
+            for job_name in vektryn-collect vektryn-rollup vektryn-lifecycle; do
+              launch "$job_name" \
+                gcloud run jobs update "$job_name" \
+                  --project="$PROJECT" --region="$REGION" \
+                  --image="$REGISTRY/stream-edge:$TAG" --quiet
+            done
+          fi
+
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then
+            launch "vektryn-frontend" \
+              gcloud run services update vektryn-frontend \
+                --project="$PROJECT" --region="$REGION" \
+                --image="$REGISTRY/frontend:$TAG" --quiet
+          fi
+
+          FAILED=0
+          for i in "${!PIDS[@]}"; do
+            if ! wait "${PIDS[$i]}"; then
+              echo "ERROR: Cloud Run update failed for ${TARGETS[$i]}" >&2
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+
+          if [ "${{ needs.changes.outputs.control_plane }}" = "true" ] && [ "${{ needs.changes.outputs.migrations }}" = "true" ]; then
+            TARGETS+=("vektryn-migrate")
+          fi
+          echo "updated_targets=$(IFS=,; echo "${TARGETS[*]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh data-node workers via IAP SSH
+        id: worker_refresh
+        if: needs.changes.outputs.worker_refresh == 'true'
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
+
+          gcloud compute ssh "${{ env.DATA_VM_NAME }}" \
             --project="${{ vars.GCP_PROJECT_ID }}" \
-            --region="${{ env.REGION }}" \
-            --format="value(status.url)")
-          curl --fail --silent --show-error "${CP_URL}/api/v1/health/"
+            --zone="${{ env.DATA_VM_ZONE }}" \
+            --tunnel-through-iap \
+            --quiet \
+            --ssh-key-expire-after=5m \
+            --ssh-flag="-T" \
+            --command="bash -s -- '${{ env.REGION }}' '${REGISTRY}/stream-edge:latest'" <<'REMOTE_EOF'
+          set -euo pipefail
+          REGION="$1"
+          IMAGE_REF="$2"
+
+          DOCKER_CFG="$(mktemp -d)"
+          trap 'sudo rm -rf "${DOCKER_CFG}"' EXIT
+
+          TOKEN="$(curl -sf -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")"
+
+          printf '%s' "${TOKEN}" | sudo DOCKER_CONFIG="${DOCKER_CFG}" \
+            docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"
+
+          cd /opt/vektryn
+          sudo DOCKER_CONFIG="${DOCKER_CFG}" docker compose pull enrichment-worker matcher-worker
+          EXPECTED_IMG="$(sudo docker image inspect --format='{{.Id}}' "${IMAGE_REF}")"
+
+          sudo docker compose up -d --no-deps enrichment-worker matcher-worker
+          sleep 5
+
+          for ctr in vektryn-enrichment-worker vektryn-matcher-worker; do
+            STATUS="$(sudo docker inspect --format='{{.State.Status}}' "${ctr}")"
+            RESTARTING="$(sudo docker inspect --format='{{.State.Restarting}}' "${ctr}")"
+            RESTARTS="$(sudo docker inspect --format='{{.RestartCount}}' "${ctr}")"
+            IMG="$(sudo docker inspect --format='{{.Image}}' "${ctr}")"
+            echo "${ctr}: status=${STATUS} restarting=${RESTARTING} restarts=${RESTARTS} image=${IMG}"
+
+            if [ "${STATUS}" != "running" ] || [ "${RESTARTING}" != "false" ] || [ "${RESTARTS}" != "0" ] || [ "${IMG}" != "${EXPECTED_IMG}" ]; then
+              echo "ERROR: ${ctr} failed health verification (expected image ${EXPECTED_IMG})" >&2
+              sudo docker logs --tail 50 "${ctr}" >&2 || true
+              exit 1
+            fi
+          done
+          REMOTE_EOF
+
+      - name: Smoke check production health
+        id: smoke
+        if: needs.changes.outputs.has_deploy_work == 'true'
+        run: |
+          curl --fail --silent --show-error \
+            --retry 3 --retry-delay 3 --retry-all-errors \
+            "${{ env.PROD_HEALTH_URL }}"
+
+      - name: Write deployment summary
+        if: always()
+        run: |
+          NOW="$(date -u +%s)"
+          STARTED="${{ needs.changes.outputs.started_at }}"
+          ELAPSED="$(( NOW - STARTED ))"
+          MINS="$(( ELAPSED / 60 ))"
+          SECS="$(( ELAPSED % 60 ))"
+
+          {
+            echo "## Production Deployment Summary"
+            echo ""
+            echo "- **Trigger:** \`${{ github.event_name }}\` (\`${{ github.sha }}\`)"
+            echo "- **Elapsed:** \`${MINS}m ${SECS}s\`"
+            echo "- **Built images:** \`${{ needs.changes.outputs.built_services }}\`"
+            echo "- **Updated Cloud Run targets:** \`${{ steps.cloud_run.outputs.updated_targets || 'none' }}\`"
+            echo ""
+            echo "| Stage | Triggered | Outcome |"
+            echo "| :--- | :---: | :--- |"
+            echo "| Build (BuildKit matrix) | \`${{ needs.changes.outputs.has_builds }}\` | \`${{ needs.build.result }}\` |"
+            echo "| Terraform Apply | \`${{ needs.changes.outputs.terraform }}\` | \`${{ steps.terraform.outcome }}\` |"
+            echo "| Django Migrations (\`vektryn-migrate\`) | \`${{ needs.changes.outputs.migrations }}\` | \`${{ steps.migrate.outcome }}\` |"
+            echo "| Cloud Run Updates | \`${{ needs.changes.outputs.has_builds }}\` | \`${{ steps.cloud_run.outcome }}\` |"
+            echo "| Data-Node Worker Refresh (IAP SSH) | \`${{ needs.changes.outputs.worker_refresh }}\` | \`${{ steps.worker_refresh.outcome }}\` |"
+            echo "| Health Smoke Check | \`${{ needs.changes.outputs.has_deploy_work }}\` | \`${{ steps.smoke.outcome }}\` |"
+            echo ""
+            echo "### Detected Change Flags"
+            echo "| control-plane | stream-edge | frontend | contracts | migrations | terraform | worker_refresh |"
+            echo "| :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
+            echo "| \`${{ needs.changes.outputs.control_plane }}\` | \`${{ needs.changes.outputs.stream_edge }}\` | \`${{ needs.changes.outputs.frontend }}\` | \`${{ needs.changes.outputs.contracts }}\` | \`${{ needs.changes.outputs.migrations }}\` | \`${{ needs.changes.outputs.terraform }}\` | \`${{ needs.changes.outputs.worker_refresh }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,7 @@ variable "labels" { type = map(string) }
 variable "vpc_network_id" { type = string }
 variable "vpc_subnetwork_id" { type = string }
 variable "stream_edge_sa_email" { type = string }
+variable "deployer_sa_email" { type = string }
 variable "stream_edge_latest_image" { type = string }
 variable "snapshots_bucket_name" { type = string }
 
@@ -79,6 +80,7 @@ resource "google_compute_instance" "data_node" {
   }
 
   metadata = {
+    enable-oslogin = "TRUE"
     startup-script = templatefile("${path.module}/startup.sh.tftpl", {
       project_id               = var.project_id
       region                   = var.region
@@ -91,6 +93,22 @@ resource "google_compute_instance" "data_node" {
   lifecycle {
     ignore_changes = [boot_disk[0].initialize_params[0].image]
   }
+}
+
+resource "google_iap_tunnel_instance_iam_member" "deployer_iap_tunnel" {
+  project  = var.project_id
+  zone     = var.zone
+  instance = google_compute_instance.data_node.name
+  role     = "roles/iap.tunnelResourceAccessor"
+  member   = "serviceAccount:${var.deployer_sa_email}"
+}
+
+resource "google_compute_instance_iam_member" "deployer_os_admin_login" {
+  project       = var.project_id
+  zone          = var.zone
+  instance_name = google_compute_instance.data_node.name
+  role          = "roles/compute.osAdminLogin"
+  member        = "serviceAccount:${var.deployer_sa_email}"
 }
 
 output "internal_ip" { value = google_compute_address.data_node_internal.address }

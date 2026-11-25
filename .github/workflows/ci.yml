@@ -32,13 +32,13 @@ jobs:
         run: poetry install --no-interaction --no-ansi
 
       - name: Lint with Ruff
-        run: poetry run ruff check .
+        run: poetry run ruff check . ../../.github/scripts
 
       - name: Format check with Black
-        run: poetry run black --check .
+        run: poetry run black --check . ../../.github/scripts
 
       - name: Run pytest
-        run: poetry run pytest
+        run: poetry run pytest . ../../.github/scripts
 
   control-plane:
     name: Control Plane (Lint & Test)
