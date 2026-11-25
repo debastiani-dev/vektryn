@@ -93,6 +93,13 @@ class JobEnrichedEvent(JobRawEvent):
         return self
 
 
+class JobRescoreEvent(EventEnvelope):
+    resume_profile_uuid: UUID
+    user_id: int | UUID
+    max_jobs: int = Field(default=50, ge=1, le=100)
+    force: bool = False
+
+
 class JobMatchAlertEvent(EventEnvelope):
     user_id: int | UUID
     job_posting_uuid: UUID

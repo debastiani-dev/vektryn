@@ -40,6 +40,14 @@ class ControlPlaneSettings(BaseSettings):
     postgres_host: str = Field(default="localhost")
     postgres_port: int = 5432
 
+    redis_url: str = ""
+
+    kafka_bootstrap_servers: str = ""
+    kafka_security_protocol: str = ""
+    kafka_sasl_mechanism: str = ""
+    kafka_sasl_username: str = ""
+    kafka_sasl_password: str = ""
+
     gemini_api_key: str = ""
     gemini_embedding_model: str = "gemini-embedding-001"
     gemini_scoring_model: str = "gemini-4-hydrogen"
@@ -223,6 +231,12 @@ STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
 STORAGE_BACKEND = env.storage_backend.strip().lower()
 LOCAL_STORAGE_DIR = env.local_storage_dir
 GCS_RESUMES_BUCKET = env.gcs_resumes_bucket.strip()
+REDIS_URL = env.redis_url.strip()
+KAFKA_BOOTSTRAP_SERVERS = env.kafka_bootstrap_servers.strip()
+KAFKA_SECURITY_PROTOCOL = env.kafka_security_protocol.strip()
+KAFKA_SASL_MECHANISM = env.kafka_sasl_mechanism.strip()
+KAFKA_SASL_USERNAME = env.kafka_sasl_username.strip()
+KAFKA_SASL_PASSWORD = env.kafka_sasl_password.strip()
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

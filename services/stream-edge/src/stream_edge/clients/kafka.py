@@ -159,15 +159,17 @@ def create_kafka_consumer(
     topics: list[KafkaTopic | str],
     bootstrap_servers: str = settings.kafka_bootstrap_servers,
     auto_offset_reset: str = "earliest",
+    max_poll_interval_ms: int | None = None,
 ) -> Consumer:
-    consumer = Consumer(
-        {
-            **_kafka_base_config(bootstrap_servers),
-            "group.id": group_id,
-            "auto.offset.reset": auto_offset_reset,
-            "enable.auto.commit": False,
-        }
-    )
+    consumer_config: dict[str, Any] = {
+        **_kafka_base_config(bootstrap_servers),
+        "group.id": group_id,
+        "auto.offset.reset": auto_offset_reset,
+        "enable.auto.commit": False,
+    }
+    if max_poll_interval_ms is not None:
+        consumer_config["max.poll.interval.ms"] = max_poll_interval_ms
+    consumer = Consumer(consumer_config)
     topic_names = [t.value if isinstance(t, KafkaTopic) else t for t in topics]
     consumer.subscribe(topic_names)
     return consumer

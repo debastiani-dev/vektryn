@@ -7,6 +7,7 @@ import type {
     LeadStatus,
     MatchScoreListResponse,
     PaginatedResponse,
+    RescoreResponse,
     ResumeProfile,
     SeniorityLevel,
     StackTrendDaily,
@@ -151,6 +152,12 @@ export const vektrynApi = {
     deleteResume: (uuid: string) =>
         apiFetch<void>(`/api/v1/resumes/${encodeURIComponent(uuid)}/`, {
             method: "DELETE",
+        }),
+
+    rescoreResume: (uuid: string, options: { max_jobs?: number; force?: boolean } = {}) =>
+        apiFetch<RescoreResponse>(`/api/v1/resumes/${encodeURIComponent(uuid)}/rescore/`, {
+            method: "POST",
+            body: JSON.stringify(options),
         }),
 
     listMatches: (params = "") =>

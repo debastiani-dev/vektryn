@@ -6,6 +6,7 @@ import {
     Pencil,
     PlayCircle,
     Plus,
+    RefreshCw,
     Sparkles,
     Trash2,
     X,
@@ -58,6 +59,9 @@ function toggleItem<T>(list: T[], item: T): T[] {
 interface ResumeCardProps {
     profile: ResumeProfile;
     busy: boolean;
+    rescoring: boolean;
+    rescoreNotice: string | null;
+    onRescore: (profile: ResumeProfile) => void;
     onEdit: (profile: ResumeProfile) => void;
     onToggleActive: (profile: ResumeProfile) => void;
     onDelete: (profile: ResumeProfile) => void;
@@ -66,6 +70,9 @@ interface ResumeCardProps {
 function ResumeProfileCard({
     profile,
     busy,
+    rescoring,
+    rescoreNotice,
+    onRescore,
     onEdit,
     onToggleActive,
     onDelete,
@@ -74,6 +81,13 @@ function ResumeProfileCard({
     const activeToggleTooltip = profile.is_active
         ? "Pause scoring incoming jobs against this resume"
         : "Activate scoring incoming jobs against this resume";
+    const canRescore = profile.is_active && profile.has_embedding;
+    let rescoreTooltip = "Queue background rescoring against active jobs for this profile";
+    if (!profile.is_active) {
+        rescoreTooltip = "Activate this resume profile before rescoring active jobs";
+    } else if (!profile.has_embedding) {
+        rescoreTooltip = "Generate an embedding by saving or re-uploading this resume first";
+    }
 
     return (
         <article className="space-y-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-6 ring-1 ring-inset ring-white/[0.03] transition hover:border-zinc-700/90">
@@ -141,11 +155,26 @@ function ResumeProfileCard({
                     </div>
                 </div>
 
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex flex-wrap shrink-0 items-center gap-2">
+                    <Tooltip content={rescoreTooltip}>
+                        <button
+                            type="button"
+                            disabled={busy || rescoring || !canRescore}
+                            onClick={() => onRescore(profile)}
+                            aria-label="Rescore active jobs"
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/35 bg-violet-500/12 px-3 py-2 text-xs font-medium text-violet-200 transition hover:border-violet-400/50 hover:bg-violet-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                            <RefreshCw
+                                className={`h-3.5 w-3.5 text-violet-300 ${rescoring ? "animate-spin" : ""}`}
+                            />
+                            {rescoring ? "Rescoring..." : "Rescore Active Jobs"}
+                        </button>
+                    </Tooltip>
+
                     <Tooltip content={activeToggleTooltip}>
                         <button
                             type="button"
-                            disabled={busy}
+                            disabled={busy || rescoring}
                             onClick={() => onToggleActive(profile)}
                             aria-label={profile.is_active ? "Pause profile" : "Activate profile"}
                             className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
@@ -189,6 +218,12 @@ function ResumeProfileCard({
                     </Tooltip>
                 </div>
             </div>
+
+            {rescoreNotice && (
+                <div className="rounded-xl border border-violet-500/25 bg-violet-950/20 px-4 py-2.5 text-xs text-violet-200">
+                    {rescoreNotice}
+                </div>
+            )}
 
             <div className="grid gap-4 border-t border-zinc-800/70 pt-4 sm:grid-cols-3">
                 <div className="space-y-1.5">
@@ -287,6 +322,8 @@ export function ResumesView() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
+    const [rescoringId, setRescoringId] = useState<string | null>(null);
+    const [rescoreNoticeById, setRescoreNoticeById] = useState<Record<string, string>>({});
     const [formOpen, setFormOpen] = useState(false);
     const [editingProfile, setEditingProfile] = useState<ResumeProfile | null>(null);
     const [submitting, setSubmitting] = useState(false);
@@ -415,6 +452,27 @@ export function ResumesView() {
         }
     }
 
+    async function handleRescore(profile: ResumeProfile) {
+        setRescoringId(profile.uuid);
+        setError(null);
+        try {
+            const res = await vektrynApi.rescoreResume(profile.uuid);
+            setRescoreNoticeById((prev) => ({
+                ...prev,
+                [profile.uuid]: `Queued background rescoring for up to ${res.max_jobs} active jobs — refresh Job Radar shortly to see updated scores.`,
+            }));
+        } catch (err) {
+            const raw = err instanceof Error ? err.message : "Failed to queue rescoring";
+            if (raw.includes("API 429")) {
+                setError("Rescoring was already queued recently for this profile. Please wait a moment before retrying.");
+            } else {
+                setError(raw);
+            }
+        } finally {
+            setRescoringId(null);
+        }
+    }
+
     async function handleDelete(profile: ResumeProfile) {
         setBusyId(profile.uuid);
         setError(null);
@@ -481,6 +539,9 @@ export function ResumesView() {
                         key={profile.uuid}
                         profile={profile}
                         busy={busyId === profile.uuid}
+                        rescoring={rescoringId === profile.uuid}
+                        rescoreNotice={rescoreNoticeById[profile.uuid] ?? null}
+                        onRescore={(p) => void handleRescore(p)}
                         onEdit={openEditForm}
                         onToggleActive={(p) => void handleToggleActive(p)}
                         onDelete={(p) => void handleDelete(p)}

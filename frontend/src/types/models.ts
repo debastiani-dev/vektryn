@@ -167,3 +167,12 @@ export interface MatchScoreSummary {
 export interface MatchScoreListResponse extends PaginatedResponse<MatchScore> {
     summary?: MatchScoreSummary;
 }
+
+export interface RescoreResponse {
+    status: "queued";
+    event_id: string;
+    resume_profile_uuid: string;
+    max_jobs: number;
+    force: boolean;
+}
+

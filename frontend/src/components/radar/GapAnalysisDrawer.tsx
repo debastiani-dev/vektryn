@@ -7,6 +7,7 @@ import {
     Clock,
     ExternalLink,
     MessageSquareQuote,
+    RefreshCw,
     Sparkles,
     X,
     XCircle,
@@ -115,6 +116,18 @@ export function GapAnalysisDrawer({
                                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300 ring-1 ring-violet-500/35">
                                         <Bell className="h-3.5 w-3.5" />
                                         Alert Match
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {match.is_stale && (
+                                <Tooltip
+                                    content="Your resume changed since this match was scored. Background rescoring will refresh this verdict shortly."
+                                    side="bottom"
+                                >
+                                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/35">
+                                        <RefreshCw className="h-3.5 w-3.5" />
+                                        Stale Score
                                     </span>
                                 </Tooltip>
                             )}

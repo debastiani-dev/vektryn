@@ -20,12 +20,14 @@ from vektryn_contracts.events import (
     JobEnrichedEvent,
     JobMatchAlertEvent,
     JobRawEvent,
+    JobRescoreEvent,
 )
 from vektryn_contracts.topics import (
     KafkaTopic,
     alert_partition_key,
     dlq_partition_key,
     job_partition_key,
+    rescore_partition_key,
 )
 
 __all__ = [
@@ -38,6 +40,7 @@ __all__ = [
     "JobEnrichedEvent",
     "JobMatchAlertEvent",
     "JobRawEvent",
+    "JobRescoreEvent",
     "KafkaTopic",
     "LeadPriority",
     "LeadStatus",
@@ -48,6 +51,7 @@ __all__ = [
     "alert_partition_key",
     "dlq_partition_key",
     "job_partition_key",
+    "rescore_partition_key",
     "sign_stream_token",
     "verify_stream_token",
 ]

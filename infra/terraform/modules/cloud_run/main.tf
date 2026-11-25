@@ -114,6 +114,16 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
+        name = "KAFKA_BOOTSTRAP_SERVERS"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-kafka-bootstrap"]
+            version = "latest"
+          }
+        }
+      }
+
+      env {
         name = "GEMINI_API_KEY"
         value_source {
           secret_key_ref {

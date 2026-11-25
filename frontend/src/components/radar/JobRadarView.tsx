@@ -8,6 +8,7 @@ import {
     Clock,
     ExternalLink,
     MapPin,
+    RefreshCw,
     RotateCcw,
     Search,
     SlidersHorizontal,
@@ -190,6 +191,18 @@ function RadarMatchCard({
                                     <span className="inline-flex items-center gap-1 rounded-lg bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300 ring-1 ring-violet-500/35">
                                         <Bell className="h-3 w-3" />
                                         Alert
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {match.is_stale && (
+                                <Tooltip
+                                    content="Your resume changed since this match was scored. Background rescoring will refresh this verdict shortly."
+                                    className="pointer-events-auto inline-flex"
+                                >
+                                    <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/35">
+                                        <RefreshCw className="h-3 w-3" />
+                                        Stale Score
                                     </span>
                                 </Tooltip>
                             )}
