@@ -8,6 +8,9 @@ import {
     formatScoreLabel,
     formatSeniority,
     formatUsdAnnual,
+    formatVectorSimilarity,
+    isAlertMatch,
+    scoreBadgeStyle,
     scoreVisualTheme,
 } from "./format";
 
@@ -36,12 +39,45 @@ describe("format utilities", () => {
         expect(formatCategoryLabel("ai_ml")).toBe("AI / ML");
     });
 
-    it("maps AI fit scores to semantic visual themes and labels", () => {
-        expect(formatScoreLabel(86)).toBe("86% AI Fit");
-        expect(formatScoreLabel(null)).toBe("No AI Score");
-        expect(scoreVisualTheme(88).caption).toBe("Strong Fit");
-        expect(scoreVisualTheme(74).caption).toBe("Alert Fit");
-        expect(scoreVisualTheme(55).caption).toBe("AI Fit");
-        expect(scoreVisualTheme(null).caption).toBe("Cosine Sim");
+    it("separates Stage 2 AI fit themes/labels from unscored Stage 1 matches", () => {
+        expect(formatScoreLabel(86.4)).toBe("86% AI Fit");
+        expect(formatScoreLabel(null)).toBe("Not Scored");
+        expect(formatScoreLabel(undefined)).toBe("Not Scored");
+
+        // Alert-threshold AI score (default 70 and custom minAlertScore)
+        const alertTheme = scoreVisualTheme(76);
+        expect(alertTheme.caption).toBe("AI FIT");
+        expect(alertTheme.tile).toContain("violet");
+        expect(scoreBadgeStyle(76)).toContain("violet");
+        expect(isAlertMatch(76)).toBe(true);
+        expect(isAlertMatch(76, 80)).toBe(false);
+
+        // Non-alert mid/good AI score
+        const midTheme = scoreVisualTheme(64);
+        expect(midTheme.caption).toBe("AI FIT");
+        expect(midTheme.tile).toContain("emerald");
+        expect(scoreBadgeStyle(64)).toContain("emerald");
+        expect(isAlertMatch(64)).toBe(false);
+
+        // Non-alert lower AI score
+        const lowTheme = scoreVisualTheme(42);
+        expect(lowTheme.caption).toBe("AI FIT");
+        expect(lowTheme.tile).toContain("amber");
+        expect(scoreBadgeStyle(42)).toContain("amber");
+
+        // Unscored (null / undefined)
+        const unscoredTheme = scoreVisualTheme(null);
+        expect(unscoredTheme.caption).toBe("UNSCORED");
+        expect(unscoredTheme.tile).toContain("zinc");
+        expect(scoreBadgeStyle(null)).toContain("zinc");
+        expect(isAlertMatch(null)).toBe(false);
+        expect(isAlertMatch(undefined)).toBe(false);
+    });
+
+    it("formats Stage 1 vector similarity percentages cleanly", () => {
+        expect(formatVectorSimilarity(0.796)).toBe("80% vector");
+        expect(formatVectorSimilarity(0.624)).toBe("62% vector");
+        expect(formatVectorSimilarity(0)).toBe("0% vector");
+        expect(formatVectorSimilarity(1.1)).toBe("100% vector");
     });
 });

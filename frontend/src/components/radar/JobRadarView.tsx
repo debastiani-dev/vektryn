@@ -1,5 +1,6 @@
 import {
     Banknote,
+    Bell,
     BookmarkCheck,
     BookmarkPlus,
     Building2,
@@ -17,12 +18,15 @@ import { useEffect, useState } from "react";
 import { fetchAllPagesWithCount, vektrynApi } from "../../api/client";
 import type { MatchScore, ResumeProfile } from "../../types/models";
 import {
+    DEFAULT_MIN_ALERT_SCORE,
     formatAtsSource,
     formatContractType,
     formatExactDate,
     formatRelativeTime,
     formatSalaryRange,
     formatSeniority,
+    formatVectorSimilarity,
+    isAlertMatch,
     scoreVisualTheme,
 } from "../../utils/format";
 import { PaginationBar } from "../ui/PaginationBar";
@@ -88,6 +92,7 @@ function RadarSkeleton() {
 
 interface RadarMatchCardProps {
     match: MatchScore;
+    minAlertScore: number;
     isSaved: boolean;
     isBusy: boolean;
     onOpenJob: (match: MatchScore) => void;
@@ -97,6 +102,7 @@ interface RadarMatchCardProps {
 
 function RadarMatchCard({
     match,
+    minAlertScore,
     isSaved,
     isBusy,
     onOpenJob,
@@ -105,17 +111,19 @@ function RadarMatchCard({
 }: Readonly<RadarMatchCardProps>) {
     const job = match.job_posting;
     const actionLabel = getSaveActionLabel(isSaved, isBusy);
-    const scoreTheme = scoreVisualTheme(match.fit_score);
-    const cosinePct = Math.round(match.cosine_similarity * 100);
-    const tileValue = match.fit_score !== null ? `${match.fit_score}%` : `${cosinePct}%`;
-    const scoreProgress =
-        match.fit_score !== null
-            ? Math.max(4, Math.min(100, match.fit_score))
-            : Math.max(4, Math.min(100, cosinePct));
-    const scoreTooltip =
-        match.fit_score !== null
-            ? `AI fit score: ${match.fit_score}% — click to view full job listing`
-            : `Not AI-scored yet — showing ${cosinePct}% resume-to-job embedding similarity. Click to view full job listing.`;
+    const rawFit = match.fit_score;
+    const hasAiScore = rawFit !== null && rawFit !== undefined;
+    const fitPct = hasAiScore ? Math.max(0, Math.min(100, Math.round(rawFit))) : null;
+    const scoreTheme = scoreVisualTheme(rawFit, minAlertScore);
+    const isAlert = isAlertMatch(rawFit, minAlertScore);
+    const vectorPct = Math.max(0, Math.min(100, Math.round(match.cosine_similarity * 100)));
+    const tileValue = fitPct !== null ? `${fitPct}%` : "—";
+    const scoreProgress = fitPct !== null ? Math.max(4, fitPct) : 0;
+    const scoreTooltip = hasAiScore
+        ? "Stage 2 Gemini AI fit score (0–100%) evaluating tech stack, seniority, and experience alignment against your active resume."
+        : "Stage 1 vector match only. Roles below the semantic similarity threshold skip automatic Gemini scoring to save tokens.";
+    const alertTooltip = `Meets or exceeds your ${minAlertScore}% alert threshold for this resume profile.`;
+    const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
     const salaryLabel = formatSalaryRange(
         job.salary_min,
         job.salary_max,
@@ -174,25 +182,26 @@ function RadarMatchCard({
 
                     <div className="min-w-0 flex-1 space-y-3.5">
                         <div className="flex flex-wrap items-center gap-2">
-                            {match.fit_score !== null ? (
+                            {isAlert && (
                                 <Tooltip
-                                    content={`Vector embedding cosine similarity (${(match.cosine_similarity * 100).toFixed(1)}%)`}
+                                    content={alertTooltip}
                                     className="pointer-events-auto inline-flex"
                                 >
-                                    <span className="rounded-lg bg-zinc-800/75 px-2.5 py-1 font-mono text-xs tabular-nums text-zinc-300">
-                                        {cosinePct}% sim
-                                    </span>
-                                </Tooltip>
-                            ) : (
-                                <Tooltip
-                                    content="Matched by embedding similarity only — LLM gap scoring has not run for this role"
-                                    className="pointer-events-auto inline-flex"
-                                >
-                                    <span className="rounded-lg bg-zinc-800/75 px-2.5 py-1 text-xs font-medium text-zinc-400">
-                                        No AI Score
+                                    <span className="inline-flex items-center gap-1 rounded-lg bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300 ring-1 ring-violet-500/35">
+                                        <Bell className="h-3 w-3" />
+                                        Alert
                                     </span>
                                 </Tooltip>
                             )}
+
+                            <Tooltip
+                                content={vectorTooltip}
+                                className="pointer-events-auto inline-flex"
+                            >
+                                <span className="rounded-lg bg-zinc-800/75 px-2.5 py-1 font-mono text-xs tabular-nums text-zinc-300">
+                                    {formatVectorSimilarity(match.cosine_similarity)}
+                                </span>
+                            </Tooltip>
 
                             {seniorityLabel && (
                                 <Tooltip
@@ -541,6 +550,18 @@ export function JobRadarView() {
         );
     });
 
+    const minAlertByResumeId: Record<string, number> = {};
+    for (const resume of resumes) {
+        minAlertByResumeId[resume.uuid] = resume.min_alert_score;
+    }
+    const activeResumeMinAlertScore =
+        resumes.find((r) => r.is_active)?.min_alert_score ?? DEFAULT_MIN_ALERT_SCORE;
+
+    function resolveMinAlertScore(match: MatchScore | null): number {
+        if (!match) return activeResumeMinAlertScore;
+        return minAlertByResumeId[match.resume_profile_uuid] ?? activeResumeMinAlertScore;
+    }
+
     const strongCount = strongFitCount;
     const alertCount = alertThresholdCount;
     const savedCount = savedTotalCount;
@@ -597,6 +618,7 @@ export function JobRadarView() {
                     <RadarMatchCard
                         key={match.uuid}
                         match={match}
+                        minAlertScore={resolveMinAlertScore(match)}
                         isSaved={Boolean(savedLeadsByJobId[match.job_posting.uuid])}
                         isBusy={savingJobId === match.job_posting.uuid}
                         onOpenJob={openJobListing}
@@ -817,6 +839,7 @@ export function JobRadarView() {
 
             <GapAnalysisDrawer
                 match={selectedGapMatch}
+                minAlertScore={resolveMinAlertScore(selectedGapMatch)}
                 saving={
                     selectedGapMatch ? savingJobId === selectedGapMatch.job_posting.uuid : false
                 }
