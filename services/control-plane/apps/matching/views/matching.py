@@ -1,5 +1,7 @@
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
+from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
 from apps.matching.filters.matching import MatchScoreFilter
@@ -7,10 +9,42 @@ from apps.matching.models.matching import MatchScore
 from apps.matching.serializers.matching import MatchScoreSerializer
 
 
+class NullsLastOrderingFilter(OrderingFilter):
+    """Apply NULLS LAST for nullable ordering fields so unscored/undated rows sort below populated rows."""
+
+    nulls_last_fields = frozenset({"fit_score", "job_posting__posted_at"})
+
+    def filter_queryset(self, request, queryset, view):
+        ordering = self.get_ordering(request, queryset, view)
+        if not ordering:
+            return queryset
+
+        expressions = []
+        for term in ordering:
+            descending = term.startswith("-")
+            field_name = term.lstrip("-")
+            if field_name in self.nulls_last_fields:
+                expr = F(field_name)
+                expressions.append(
+                    expr.desc(nulls_last=True)
+                    if descending
+                    else expr.asc(nulls_last=True)
+                )
+            else:
+                expressions.append(term)
+        return queryset.order_by(*expressions)
+
+
 class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = MatchScoreSerializer
+    filter_backends = [DjangoFilterBackend, NullsLastOrderingFilter]
     filterset_class = MatchScoreFilter
-    ordering_fields = ["fit_score", "cosine_similarity", "created_at"]
+    ordering_fields = [
+        "fit_score",
+        "cosine_similarity",
+        "created_at",
+        "job_posting__posted_at",
+    ]
     ordering = ["-fit_score", "-cosine_similarity", "-created_at"]
     lookup_field = "uuid"
     queryset = MatchScore.objects.none()

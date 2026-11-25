@@ -1,4 +1,5 @@
 import {
+    ArrowUpDown,
     Banknote,
     Bell,
     BookmarkCheck,
@@ -411,6 +412,7 @@ interface ImportBannerState {
     externalId?: string;
     startedAt?: number;
     job?: JobPostingSummary | null;
+    match?: MatchScore | null;
 }
 
 function formatElapsedDuration(elapsedSeconds: number): string {
@@ -429,7 +431,7 @@ function ImportStatusBanner({
     onDismiss,
 }: Readonly<{
     banner: ImportBannerState;
-    onViewJob: (job: JobPostingSummary) => void;
+    onViewJob: (job: JobPostingSummary, match?: MatchScore | null) => void;
     onRetryWait: () => void;
     onDismiss: () => void;
 }>) {
@@ -484,7 +486,7 @@ function ImportStatusBanner({
                     <button
                         type="button"
                         onClick={() => {
-                            if (banner.job) onViewJob(banner.job);
+                            if (banner.job) onViewJob(banner.job, banner.match);
                         }}
                         className="rounded-lg border border-emerald-500/35 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/25"
                     >
@@ -559,6 +561,37 @@ async function fetchImportedJobByExternalId(
     }
 }
 
+async function fetchImportedMatchByExternalId(externalId: string): Promise<MatchScore | null> {
+    try {
+        const res = await vektrynApi.listMatches(
+            `?external_id=${encodeURIComponent(externalId)}`,
+        );
+        return res.results[0] ?? null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchExistingImportedRecords(
+    jobUuid: string | null,
+    externalId: string,
+): Promise<{ job: JobPostingSummary | null; match: MatchScore | null }> {
+    const jobPromise = jobUuid
+        ? vektrynApi.getJob(jobUuid).catch(() => null)
+        : Promise.resolve(null);
+    const [job, match] = await Promise.all([
+        jobPromise,
+        fetchImportedMatchByExternalId(externalId),
+    ]);
+    return { job: job ?? match?.job_posting ?? null, match };
+}
+
+type ImportPersistedHandler = (
+    externalId: string,
+    persisted: JobPostingSummary,
+    match: MatchScore | null,
+) => void;
+
 function useCrossTabPendingImportSync(
     onSynced: (banner: ImportBannerState | null, cleared: boolean) => void,
 ) {
@@ -577,7 +610,7 @@ function useCrossTabPendingImportSync(
 class PendingImportPoller {
     private readonly externalId: string;
     private readonly startedAt: number;
-    private readonly onPersisted: (externalId: string, persisted: JobPostingSummary) => void;
+    private readonly onPersisted: ImportPersistedHandler;
     private readonly onTimeout: (externalId: string) => void;
     private cancelled = false;
     private inFlight = false;
@@ -587,7 +620,7 @@ class PendingImportPoller {
     constructor(
         externalId: string,
         startedAt: number,
-        onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
+        onPersisted: ImportPersistedHandler,
         onTimeout: (externalId: string) => void,
     ) {
         this.externalId = externalId;
@@ -625,12 +658,19 @@ class PendingImportPoller {
         this.inFlight = true;
         this.attempts += 1;
         const persisted = await fetchImportedJobByExternalId(this.externalId);
-        this.inFlight = false;
-        if (this.cancelled) return;
-        if (persisted) {
-            this.onPersisted(this.externalId, persisted);
+        if (this.cancelled) {
+            this.inFlight = false;
             return;
         }
+        if (persisted) {
+            const match = await fetchImportedMatchByExternalId(this.externalId);
+            this.inFlight = false;
+            if (!this.cancelled) {
+                this.onPersisted(this.externalId, persisted, match);
+            }
+            return;
+        }
+        this.inFlight = false;
         if (Date.now() - this.startedAt >= IMPORT_POLL_MAX_DURATION_MS) {
             this.onTimeout(this.externalId);
             return;
@@ -643,7 +683,7 @@ class PendingImportPoller {
 
 function useImportJobPolling(
     importBanner: ImportBannerState | null,
-    onPersisted: (externalId: string, persisted: JobPostingSummary) => void,
+    onPersisted: ImportPersistedHandler,
     onTimeout: (externalId: string) => void,
 ) {
     useEffect(() => {
@@ -744,6 +784,42 @@ function RadarKpiGrid({
     );
 }
 
+type RadarSortOption = "best_match" | "newest" | "posted_at" | "vector";
+
+const RADAR_SORT_OPTIONS: ReadonlyArray<{
+    value: RadarSortOption;
+    label: string;
+    ordering: string;
+}> = [
+    {
+        value: "best_match",
+        label: "Best Match",
+        ordering: "-fit_score,-cosine_similarity,-created_at",
+    },
+    {
+        value: "newest",
+        label: "Newest Added",
+        ordering: "-created_at",
+    },
+    {
+        value: "posted_at",
+        label: "Posted Date",
+        ordering: "-job_posting__posted_at,-created_at",
+    },
+    {
+        value: "vector",
+        label: "Vector Similarity",
+        ordering: "-cosine_similarity,-fit_score,-created_at",
+    },
+];
+
+function resolveRadarOrdering(sortBy: RadarSortOption): string | null {
+    if (sortBy === "best_match") {
+        return null;
+    }
+    return RADAR_SORT_OPTIONS.find((opt) => opt.value === sortBy)?.ordering ?? null;
+}
+
 export function JobRadarView() {
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [totalCount, setTotalCount] = useState(0);
@@ -760,6 +836,7 @@ export function JobRadarView() {
     const [error, setError] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
     const [minScore, setMinScore] = useState<number>(0);
+    const [sortBy, setSortBy] = useState<RadarSortOption>("best_match");
     const [selectedJobMatch, setSelectedJobMatch] = useState<MatchScore | null>(null);
     const [selectedImportedJob, setSelectedImportedJob] = useState<JobPostingSummary | null>(null);
     const [selectedGapMatch, setSelectedGapMatch] = useState<MatchScore | null>(null);
@@ -778,7 +855,12 @@ export function JobRadarView() {
         setSelectedJobMatch(match);
     }
 
-    function openImportedJobListing(job: JobPostingSummary) {
+    function openImportedJobListing(job: JobPostingSummary, match?: MatchScore | null) {
+        const resolvedMatch = match ?? matches.find((m) => m.job_posting.uuid === job.uuid) ?? null;
+        if (resolvedMatch) {
+            openJobListing(resolvedMatch);
+            return;
+        }
         setSelectedGapMatch(null);
         setSelectedJobMatch(null);
         setSelectedImportedJob(job);
@@ -851,6 +933,10 @@ export function JobRadarView() {
                 if (evaluatedOnly) {
                     params.set("evaluated_only", "true");
                 }
+                const orderingParam = resolveRadarOrdering(sortBy);
+                if (orderingParam) {
+                    params.set("ordering", orderingParam);
+                }
                 const matchRes = await vektrynApi.listMatches(`?${params.toString()}`);
                 if (cancelled) return;
                 setMatches(matchRes.results);
@@ -883,10 +969,10 @@ export function JobRadarView() {
         return () => {
             cancelled = true;
         };
-    }, [page, minScore, resumeFilter, evaluatedOnly, reloadTick]);
+    }, [page, minScore, resumeFilter, evaluatedOnly, sortBy, reloadTick]);
 
     const handleImportedPersisted = useCallback(
-        (externalId: string, persisted: JobPostingSummary) => {
+        (externalId: string, persisted: JobPostingSummary, match: MatchScore | null) => {
             clearPendingImport(externalId);
             setReloadTick((prev) => prev + 1);
             setImportBanner((prev) =>
@@ -897,6 +983,7 @@ export function JobRadarView() {
                           title: persisted.title,
                           company: persisted.company_name,
                           job: persisted,
+                          match,
                           message: "Enriched and scored — Job Radar has been refreshed.",
                       }
                     : prev,
@@ -978,20 +1065,17 @@ export function JobRadarView() {
 
         clearPendingImport(res.external_id);
         setReloadTick((prev) => prev + 1);
-        let existingJob: JobPostingSummary | null = null;
-        if (res.job_posting_uuid) {
-            try {
-                existingJob = await vektrynApi.getJob(res.job_posting_uuid);
-            } catch {
-                existingJob = null;
-            }
-        }
+        const { job: existingJob, match: existingMatch } = await fetchExistingImportedRecords(
+            res.job_posting_uuid,
+            res.external_id,
+        );
         setImportBanner({
             phase: res.status === "reactivated" ? "ready" : "info",
             title: res.title,
             company: res.company_name,
             externalId: res.external_id,
             job: existingJob,
+            match: existingMatch,
             message:
                 res.status === "reactivated"
                     ? "Previously closed role reactivated and refreshed in Job Radar."
@@ -1261,6 +1345,33 @@ export function JobRadarView() {
                             AI Scored Only
                         </button>
                     </Tooltip>
+
+                    <div className="flex items-center gap-2.5">
+                        <ArrowUpDown className="h-4 w-4 text-zinc-400" />
+                        <label htmlFor="radar-sort" className="text-zinc-400">
+                            Sort:
+                        </label>
+                        <Tooltip content="Order matching roles server-side">
+                            <div className="relative">
+                                <select
+                                    id="radar-sort"
+                                    value={sortBy}
+                                    onChange={(e) => {
+                                        setSortBy(e.target.value as RadarSortOption);
+                                        setPage(1);
+                                    }}
+                                    className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                >
+                                    {RADAR_SORT_OPTIONS.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>
+                                            {opt.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
+                            </div>
+                        </Tooltip>
+                    </div>
 
                     <div className="flex items-center gap-2.5">
                         <SlidersHorizontal className="h-4 w-4 text-zinc-400" />

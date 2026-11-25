@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 import socket
 from io import BytesIO
 from pathlib import Path
@@ -1099,3 +1100,117 @@ def test_manual_import_endpoint_url_email_dedup_reactivate_and_guards(settings):
     assert manual_job.is_active is True
     assert manual_job.is_deleted is False
     assert manual_job.closed_at is None
+
+
+@pytest.mark.django_db
+def test_matches_ordering_puts_null_fit_scores_and_null_posted_at_last():
+    user = User.objects.create_user(username="radar-order-user", password="pw")
+    resume = ResumeProfile.objects.create(
+        user=user,
+        label="Backend",
+        raw_text="Python Django PostgreSQL",
+        content_hash=uuid4().hex,
+        extracted_skills=["python", "django"],
+    )
+    now = datetime.now(UTC)
+
+    def _make_job(ext_id: str, posted_at: datetime | None) -> JobPosting:
+        return JobPosting.objects.create(
+            ats_source=ATSSource.GREENHOUSE.value,
+            external_id=ext_id,
+            title=f"Role {ext_id}",
+            company_name="Acme",
+            apply_url=f"https://acme.example/jobs/{ext_id}",
+            description_clean="Python backend role",
+            content_hash=uuid4().hex,
+            posted_at=posted_at,
+            is_active=True,
+        )
+
+    job_unscored_high_vec = _make_job("unscored-hi", now - timedelta(days=1))
+    job_scored_mid = _make_job("scored-mid", now - timedelta(days=5))
+    job_scored_top = _make_job("scored-top", None)
+    job_unscored_low_vec = _make_job("unscored-lo", now)
+
+    m_unscored_hi = MatchScore.objects.create(
+        job_posting=job_unscored_high_vec,
+        resume_profile=resume,
+        cosine_similarity=0.95,
+        fit_score=None,
+    )
+    m_scored_mid = MatchScore.objects.create(
+        job_posting=job_scored_mid,
+        resume_profile=resume,
+        cosine_similarity=0.72,
+        fit_score=78,
+    )
+    m_scored_top = MatchScore.objects.create(
+        job_posting=job_scored_top,
+        resume_profile=resume,
+        cosine_similarity=0.81,
+        fit_score=91,
+    )
+    m_unscored_lo = MatchScore.objects.create(
+        job_posting=job_unscored_low_vec,
+        resume_profile=resume,
+        cosine_similarity=0.65,
+        fit_score=None,
+    )
+
+    # Space out created_at deterministically to verify -created_at ordering
+    for offset, match_obj in enumerate(
+        [m_unscored_hi, m_scored_mid, m_scored_top, m_unscored_lo]
+    ):
+        MatchScore.objects.filter(pk=match_obj.pk).update(
+            created_at=now + timedelta(seconds=offset * 10)
+        )
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+    matches_url = "/api/v1/matches/"
+
+    # Default ordering: AI-scored DESC first, then unscored ordered by cosine_similarity DESC
+    default_resp = client.get(matches_url)
+    assert default_resp.status_code == 200
+    assert [
+        r["job_posting"]["external_id"] for r in default_resp.json()["results"]
+    ] == [
+        "scored-top",
+        "scored-mid",
+        "unscored-hi",
+        "unscored-lo",
+    ]
+
+    # Posted Date ordering: newest posted_at first, NULL posted_at strictly last
+    posted_resp = client.get(
+        f"{matches_url}?ordering=-job_posting__posted_at,-created_at"
+    )
+    assert posted_resp.status_code == 200
+    assert [r["job_posting"]["external_id"] for r in posted_resp.json()["results"]] == [
+        "unscored-lo",
+        "unscored-hi",
+        "scored-mid",
+        "scored-top",
+    ]
+
+    # Newest Added ordering: most recently created match first
+    newest_resp = client.get(f"{matches_url}?ordering=-created_at")
+    assert newest_resp.status_code == 200
+    assert [r["job_posting"]["external_id"] for r in newest_resp.json()["results"]] == [
+        "unscored-lo",
+        "scored-top",
+        "scored-mid",
+        "unscored-hi",
+    ]
+
+    # Vector Similarity ordering: highest cosine_similarity first
+    vector_resp = client.get(
+        f"{matches_url}?ordering=-cosine_similarity,-fit_score,-created_at"
+    )
+    assert vector_resp.status_code == 200
+    assert [r["job_posting"]["external_id"] for r in vector_resp.json()["results"]] == [
+        "unscored-hi",
+        "scored-top",
+        "scored-mid",
+        "unscored-lo",
+    ]
