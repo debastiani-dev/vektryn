@@ -14,7 +14,7 @@ import {
     X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { fetchAllPages, vektrynApi } from "../../api/client";
+import { fetchAllPagesWithCount, vektrynApi } from "../../api/client";
 import type { MatchScore, ResumeProfile } from "../../types/models";
 import {
     formatAtsSource,
@@ -360,6 +360,8 @@ function RadarMatchCard({
 export function JobRadarView() {
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [totalCount, setTotalCount] = useState(0);
+    const [strongFitCount, setStrongFitCount] = useState(0);
+    const [alertThresholdCount, setAlertThresholdCount] = useState(0);
     const [hasNext, setHasNext] = useState(false);
     const [hasPrevious, setHasPrevious] = useState(false);
     const [page, setPage] = useState(1);
@@ -373,6 +375,7 @@ export function JobRadarView() {
     const [selectedJobMatch, setSelectedJobMatch] = useState<MatchScore | null>(null);
     const [selectedGapMatch, setSelectedGapMatch] = useState<MatchScore | null>(null);
     const [savedLeadsByJobId, setSavedLeadsByJobId] = useState<Record<string, string>>({});
+    const [savedTotalCount, setSavedTotalCount] = useState(0);
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
 
     function openJobListing(match: MatchScore) {
@@ -386,7 +389,9 @@ export function JobRadarView() {
     }
 
     async function refreshSavedLeads() {
-        const allLeads = await fetchAllPages(vektrynApi.listLeads);
+        const { items: allLeads, totalCount: leadsCount } = await fetchAllPagesWithCount(
+            vektrynApi.listLeads,
+        );
         const nextMap: Record<string, string> = {};
         for (const lead of allLeads) {
             const jobId = extractJobPostingId(lead.job_posting);
@@ -395,25 +400,27 @@ export function JobRadarView() {
             }
         }
         setSavedLeadsByJobId(nextMap);
+        setSavedTotalCount(leadsCount);
     }
 
     useEffect(() => {
         let cancelled = false;
         async function loadMeta() {
             const [leadsResult, resumesResult] = await Promise.allSettled([
-                fetchAllPages(vektrynApi.listLeads),
+                fetchAllPagesWithCount(vektrynApi.listLeads),
                 vektrynApi.listResumes(),
             ]);
             if (cancelled) return;
             if (leadsResult.status === "fulfilled") {
                 const nextMap: Record<string, string> = {};
-                for (const lead of leadsResult.value) {
+                for (const lead of leadsResult.value.items) {
                     const jobId = extractJobPostingId(lead.job_posting);
                     if (jobId && lead.uuid) {
                         nextMap[jobId] = lead.uuid;
                     }
                 }
                 setSavedLeadsByJobId(nextMap);
+                setSavedTotalCount(leadsResult.value.totalCount);
             }
             if (resumesResult.status === "fulfilled") {
                 setResumes(resumesResult.value.results);
@@ -446,6 +453,14 @@ export function JobRadarView() {
                 if (cancelled) return;
                 setMatches(matchRes.results);
                 setTotalCount(matchRes.count);
+                setStrongFitCount(
+                    matchRes.summary?.strong_fit_count ??
+                        matchRes.results.filter((m) => (m.fit_score ?? 0) >= 80).length,
+                );
+                setAlertThresholdCount(
+                    matchRes.summary?.alert_threshold_count ??
+                        matchRes.results.filter((m) => (m.fit_score ?? 0) >= 70).length,
+                );
                 setHasNext(Boolean(matchRes.next));
                 setHasPrevious(Boolean(matchRes.previous));
             } catch (err) {
@@ -476,6 +491,7 @@ export function JobRadarView() {
                     delete copy[jobId];
                     return copy;
                 });
+                setSavedTotalCount((prev) => Math.max(0, prev - 1));
             } else {
                 const created = await vektrynApi.createLead({
                     job_posting: jobId,
@@ -486,6 +502,7 @@ export function JobRadarView() {
                     ...prev,
                     [jobId]: created.uuid,
                 }));
+                setSavedTotalCount((prev) => prev + 1);
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
@@ -505,6 +522,7 @@ export function JobRadarView() {
                     delete copy[jobId];
                     return copy;
                 });
+                setSavedTotalCount((prev) => Math.max(0, prev - 1));
             } else {
                 setError(message || "Failed to update saved lead");
             }
@@ -523,9 +541,9 @@ export function JobRadarView() {
         );
     });
 
-    const strongCount = matches.filter((m) => (m.fit_score ?? 0) >= 80).length;
-    const alertCount = matches.filter((m) => (m.fit_score ?? 0) >= 70).length;
-    const savedCount = Object.keys(savedLeadsByJobId).length;
+    const strongCount = strongFitCount;
+    const alertCount = alertThresholdCount;
+    const savedCount = savedTotalCount;
     const hasActiveFilters =
         Boolean(searchTerm.trim()) || minScore > 0 || Boolean(resumeFilter) || evaluatedOnly;
 

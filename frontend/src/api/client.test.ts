@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaginatedResponse } from "../types/models";
-import { fetchAllPages, vektrynApi } from "./client";
+import { fetchAllPages, fetchAllPagesWithCount, vektrynApi } from "./client";
 
 describe("fetchAllPages", () => {
     it("follows DRF pagination until next is null while preserving query params", async () => {
@@ -29,6 +29,18 @@ describe("fetchAllPages", () => {
 
         const items = await fetchAllPages(fetchPage, "", 3);
         expect(items).toEqual(["row", "row", "row"]);
+    });
+
+    it("preserves server total count in fetchAllPagesWithCount even when capped by maxPages", async () => {
+        const fetchPage = async (): Promise<PaginatedResponse<string>> => ({
+            count: 99,
+            next: "/api/next",
+            previous: null,
+            results: ["row"],
+        });
+
+        const result = await fetchAllPagesWithCount(fetchPage, "", 2);
+        expect(result).toEqual({ items: ["row", "row"], totalCount: 99 });
     });
 });
 

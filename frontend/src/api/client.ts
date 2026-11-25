@@ -5,7 +5,7 @@ import type {
     JobPostingDetail,
     LeadPriority,
     LeadStatus,
-    MatchScore,
+    MatchScoreListResponse,
     PaginatedResponse,
     ResumeProfile,
     SeniorityLevel,
@@ -82,22 +82,35 @@ function buildResumeBody(payload: Partial<ResumeProfileInput>): BodyInit {
     return JSON.stringify(jsonPayload);
 }
 
-export async function fetchAllPages<T>(
+export async function fetchAllPagesWithCount<T>(
     fetchPage: (query: string) => Promise<PaginatedResponse<T>>,
     baseParams = "",
     maxPages = 10,
-): Promise<T[]> {
+): Promise<{ items: T[]; totalCount: number }> {
     const items: T[] = [];
+    let totalCount = 0;
     const params = new URLSearchParams(baseParams.replace(/^\?/, ""));
 
     for (let page = 1; page <= maxPages; page += 1) {
         params.set("page", String(page));
         const res = await fetchPage(`?${params.toString()}`);
+        if (page === 1) {
+            totalCount = res.count;
+        }
         items.push(...res.results);
         if (!res.next) {
             break;
         }
     }
+    return { items, totalCount };
+}
+
+export async function fetchAllPages<T>(
+    fetchPage: (query: string) => Promise<PaginatedResponse<T>>,
+    baseParams = "",
+    maxPages = 10,
+): Promise<T[]> {
+    const { items } = await fetchAllPagesWithCount(fetchPage, baseParams, maxPages);
     return items;
 }
 
@@ -141,7 +154,7 @@ export const vektrynApi = {
         }),
 
     listMatches: (params = "") =>
-        apiFetch<PaginatedResponse<MatchScore>>(`/api/v1/matches/${params}`),
+        apiFetch<MatchScoreListResponse>(`/api/v1/matches/${params}`),
 
     listLeads: (params = "") =>
         apiFetch<PaginatedResponse<ApplicationLead>>(`/api/v1/leads/${params}`),
