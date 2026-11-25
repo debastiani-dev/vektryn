@@ -1,5 +1,7 @@
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
 from apps.jobs.filters.jobs import JobPostingFilter
@@ -8,6 +10,11 @@ from apps.jobs.serializers.jobs import (
     JobPostingDetailSerializer,
     JobPostingSummarySerializer,
     ManualJobImportSerializer,
+)
+from apps.jobs.services.hybrid_search import (
+    annotate_rrf_score,
+    execute_hybrid_search,
+    extract_search_query,
 )
 from apps.jobs.services.manual_import import (
     ManualImportFetchError,
@@ -20,6 +27,7 @@ from apps.jobs.services.manual_import import (
 
 class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = JobPosting.objects.all()
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_class = JobPostingFilter
     ordering_fields = ["created_at", "posted_at", "salary_max"]
     ordering = ["-created_at"]
@@ -31,6 +39,40 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "import_job":
             return ManualJobImportSerializer
         return JobPostingSummarySerializer
+
+    def list(self, request, *args, **kwargs):
+        structured_qs = DjangoFilterBackend().filter_queryset(
+            request, self.get_queryset(), self
+        )
+        search_query = extract_search_query(request.query_params)
+        search_mode: str | None = None
+
+        if search_query:
+            result = execute_hybrid_search(structured_qs, search_query)
+            search_mode = result.search_mode
+            if "ordering" in request.query_params:
+                filtered_qs = structured_qs.filter(
+                    uuid__in=list(result.rrf_scores.keys())
+                )
+                ordered_qs = OrderingFilter().filter_queryset(
+                    request, filtered_qs, self
+                )
+            else:
+                ordered_qs = annotate_rrf_score(
+                    structured_qs, result.rrf_scores, id_field="uuid"
+                ).order_by("-rrf_score", "-created_at")
+        else:
+            ordered_qs = OrderingFilter().filter_queryset(request, structured_qs, self)
+
+        page = self.paginate_queryset(ordered_qs)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data["search_mode"] = search_mode
+            return response
+
+        serializer = self.get_serializer(ordered_qs, many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=["post"], url_path="import")
     def import_job(self, request):

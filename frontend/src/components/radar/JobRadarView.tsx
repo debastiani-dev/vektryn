@@ -9,6 +9,7 @@ import {
     ChevronDown,
     Clock,
     ExternalLink,
+    Filter,
     Loader2,
     Mail,
     MapPin,
@@ -23,6 +24,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { fetchAllPagesWithCount, vektrynApi } from "../../api/client";
 import type {
+    HybridSearchMode,
     JobPostingSummary,
     ManualJobImportResponse,
     MatchScore,
@@ -49,11 +51,17 @@ import {
     PENDING_IMPORT_STORAGE_KEY,
     savePendingImport,
 } from "../../utils/pendingImportStorage";
+import {
+    countActiveMetadataFilters,
+    EMPTY_METADATA_FILTERS,
+    type RadarMetadataFilters,
+} from "../../utils/radarFilters";
 import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
 import { GapAnalysisDrawer } from "./GapAnalysisDrawer";
 import { ImportJobModal } from "./ImportJobModal";
 import { JobPostingDrawer } from "./JobPostingDrawer";
+import { ActiveMetadataFilterChips, MetadataFiltersPanel } from "./RadarMetadataFilters";
 
 function extractJobPostingId(jobPosting: unknown): string | null {
     if (typeof jobPosting === "string" && jobPosting.length > 0) {
@@ -813,11 +821,60 @@ const RADAR_SORT_OPTIONS: ReadonlyArray<{
     },
 ];
 
+const SEARCH_DEBOUNCE_MS = 350;
+
 function resolveRadarOrdering(sortBy: RadarSortOption): string | null {
     if (sortBy === "best_match") {
         return null;
     }
     return RADAR_SORT_OPTIONS.find((opt) => opt.value === sortBy)?.ordering ?? null;
+}
+
+function buildMatchesQueryParams(opts: {
+    page: number;
+    minScore: number;
+    resumeFilter: string;
+    evaluatedOnly: boolean;
+    sortBy: RadarSortOption;
+    search: string;
+    metadataFilters: RadarMetadataFilters;
+}): string {
+    const params = new URLSearchParams();
+    params.set("page", String(opts.page));
+    if (opts.minScore > 0) params.set("min_fit_score", String(opts.minScore));
+    if (opts.resumeFilter) params.set("resume_profile", opts.resumeFilter);
+    if (opts.evaluatedOnly) params.set("evaluated_only", "true");
+    if (opts.search) params.set("search", opts.search);
+    if (opts.metadataFilters.seniority) params.set("seniority", opts.metadataFilters.seniority);
+    if (opts.metadataFilters.contractType) {
+        params.set("contract_type", opts.metadataFilters.contractType);
+    }
+    if (opts.metadataFilters.region) params.set("region", opts.metadataFilters.region);
+    if (opts.metadataFilters.atsSource) params.set("ats_source", opts.metadataFilters.atsSource);
+    const orderingParam = resolveRadarOrdering(opts.sortBy);
+    if (orderingParam) params.set("ordering", orderingParam);
+    return `?${params.toString()}`;
+}
+
+function SearchModeBadge({ mode }: Readonly<{ mode: HybridSearchMode | null }>) {
+    if (!mode) return null;
+    const isHybrid = mode === "hybrid";
+    const tooltip = isHybrid
+        ? "Ranked with Reciprocal Rank Fusion combining PostgreSQL full-text search and pgvector semantic similarity."
+        : "Ranked with PostgreSQL full-text search.";
+    return (
+        <Tooltip content={tooltip} className="inline-flex">
+            <span
+                className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${
+                    isHybrid
+                        ? "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/35"
+                        : "bg-zinc-800/90 text-zinc-400 ring-1 ring-zinc-700/70"
+                }`}
+            >
+                {isHybrid ? "Hybrid RRF" : "Keyword"}
+            </span>
+        </Tooltip>
+    );
 }
 
 export function JobRadarView() {
@@ -835,6 +892,12 @@ export function JobRadarView() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [searchMode, setSearchMode] = useState<HybridSearchMode | null>(null);
+    const [metadataFilters, setMetadataFilters] = useState<RadarMetadataFilters>(
+        EMPTY_METADATA_FILTERS,
+    );
+    const [filtersOpen, setFiltersOpen] = useState(false);
     const [minScore, setMinScore] = useState<number>(0);
     const [sortBy, setSortBy] = useState<RadarSortOption>("best_match");
     const [selectedJobMatch, setSelectedJobMatch] = useState<MatchScore | null>(null);
@@ -917,30 +980,37 @@ export function JobRadarView() {
     }, []);
 
     useEffect(() => {
+        const trimmed = searchTerm.trim();
+        if (trimmed === debouncedSearch) {
+            return;
+        }
+        const timerId = window.setTimeout(() => {
+            setDebouncedSearch(trimmed);
+            setPage(1);
+        }, SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timerId);
+    }, [searchTerm, debouncedSearch]);
+
+    useEffect(() => {
         let cancelled = false;
         async function loadMatches() {
             setLoading(true);
             setError(null);
             try {
-                const params = new URLSearchParams();
-                params.set("page", String(page));
-                if (minScore > 0) {
-                    params.set("min_fit_score", String(minScore));
-                }
-                if (resumeFilter) {
-                    params.set("resume_profile", resumeFilter);
-                }
-                if (evaluatedOnly) {
-                    params.set("evaluated_only", "true");
-                }
-                const orderingParam = resolveRadarOrdering(sortBy);
-                if (orderingParam) {
-                    params.set("ordering", orderingParam);
-                }
-                const matchRes = await vektrynApi.listMatches(`?${params.toString()}`);
+                const query = buildMatchesQueryParams({
+                    page,
+                    minScore,
+                    resumeFilter,
+                    evaluatedOnly,
+                    sortBy,
+                    search: debouncedSearch,
+                    metadataFilters,
+                });
+                const matchRes = await vektrynApi.listMatches(query);
                 if (cancelled) return;
                 setMatches(matchRes.results);
                 setTotalCount(matchRes.count);
+                setSearchMode(matchRes.search_mode ?? null);
                 setAiScoredCount(
                     matchRes.summary?.ai_scored_count ??
                         matchRes.results.filter(
@@ -969,7 +1039,16 @@ export function JobRadarView() {
         return () => {
             cancelled = true;
         };
-    }, [page, minScore, resumeFilter, evaluatedOnly, sortBy, reloadTick]);
+    }, [
+        page,
+        minScore,
+        resumeFilter,
+        evaluatedOnly,
+        sortBy,
+        debouncedSearch,
+        metadataFilters,
+        reloadTick,
+    ]);
 
     const handleImportedPersisted = useCallback(
         (externalId: string, persisted: JobPostingSummary, match: MatchScore | null) => {
@@ -1137,16 +1216,6 @@ export function JobRadarView() {
         }
     }
 
-    const filtered = matches.filter((m) => {
-        if (!searchTerm.trim()) return true;
-        const q = searchTerm.toLowerCase();
-        return (
-            m.job_posting.title.toLowerCase().includes(q) ||
-            m.job_posting.company_name.toLowerCase().includes(q) ||
-            m.job_posting.tech_stack.some((t) => t.toLowerCase().includes(q))
-        );
-    });
-
     const minAlertByResumeId: Record<string, number> = {};
     for (const resume of resumes) {
         minAlertByResumeId[resume.uuid] = resume.min_alert_score;
@@ -1162,14 +1231,37 @@ export function JobRadarView() {
     const strongCount = strongFitCount;
     const alertCount = alertThresholdCount;
     const savedCount = savedTotalCount;
+    const activeMetadataCount = countActiveMetadataFilters(metadataFilters);
     const hasActiveFilters =
-        Boolean(searchTerm.trim()) || minScore > 0 || Boolean(resumeFilter) || evaluatedOnly;
+        Boolean(searchTerm.trim()) ||
+        Boolean(debouncedSearch) ||
+        minScore > 0 ||
+        Boolean(resumeFilter) ||
+        evaluatedOnly ||
+        activeMetadataCount > 0;
+
+    function updateMetadataFilters(patch: Partial<RadarMetadataFilters>) {
+        setMetadataFilters((prev) => ({ ...prev, ...patch }));
+        setPage(1);
+    }
+
+    function removeMetadataFilter(key: keyof RadarMetadataFilters) {
+        setMetadataFilters((prev) => ({ ...prev, [key]: "" }));
+        setPage(1);
+    }
+
+    function clearMetadataFilters() {
+        setMetadataFilters(EMPTY_METADATA_FILTERS);
+        setPage(1);
+    }
 
     function resetFilters() {
         setSearchTerm("");
+        setDebouncedSearch("");
         setMinScore(0);
         setResumeFilter("");
         setEvaluatedOnly(false);
+        setMetadataFilters(EMPTY_METADATA_FILTERS);
         setPage(1);
     }
 
@@ -1177,7 +1269,7 @@ export function JobRadarView() {
         if (loading) {
             return <RadarSkeleton />;
         }
-        if (filtered.length === 0) {
+        if (matches.length === 0) {
             return (
                 <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/40 px-6 py-20 text-center ring-1 ring-inset ring-white/[0.03]">
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-900 ring-1 ring-zinc-800">
@@ -1211,7 +1303,7 @@ export function JobRadarView() {
 
         return (
             <div className="grid gap-5">
-                {filtered.map((match) => (
+                {matches.map((match) => (
                     <RadarMatchCard
                         key={match.uuid}
                         match={match}
@@ -1275,129 +1367,177 @@ export function JobRadarView() {
                 />
             </header>
 
-            <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-4">
-                <div className="relative flex-1 max-w-xl">
-                    <Search className="pointer-events-none absolute top-3 left-3.5 h-4 w-4 text-zinc-500" />
-                    <input
-                        type="text"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        placeholder="Filter by role, company, or stack (e.g. django, kafka)..."
-                        className="w-full rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-10 pl-10 text-sm text-zinc-100 placeholder:text-zinc-500 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
-                    />
-                    {searchTerm && (
-                        <Tooltip content="Clear search query" className="absolute top-2 right-2.5 inline-flex">
+            <div className="space-y-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:px-5 sm:py-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="relative flex-1 max-w-xl">
+                        <Search className="pointer-events-none absolute top-3 left-3.5 h-4 w-4 text-zinc-500" />
+                        <input
+                            type="text"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            placeholder="Search stack, role, company, or concept (e.g. DRF, KRaft, distributed Python)..."
+                            className="w-full rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-28 pl-10 text-sm text-zinc-100 placeholder:text-zinc-500 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                        />
+                        <div className="absolute top-2 right-2.5 flex items-center gap-1.5">
+                            {Boolean(debouncedSearch) && !loading && (
+                                <SearchModeBadge mode={searchMode} />
+                            )}
+                            {searchTerm && (
+                                <Tooltip content="Clear search query" className="inline-flex">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSearchTerm("");
+                                            setDebouncedSearch("");
+                                            setPage(1);
+                                        }}
+                                        aria-label="Clear search"
+                                        className="rounded-lg p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                    >
+                                        <X className="h-4 w-4" />
+                                    </button>
+                                </Tooltip>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 text-sm">
+                        {!loading && (
+                            <span className="font-mono text-xs tabular-nums text-zinc-400">
+                                {matches.length} shown · {totalCount} total
+                            </span>
+                        )}
+
+                        <Tooltip content="Filter by seniority, contract type, region, or source">
                             <button
                                 type="button"
-                                onClick={() => setSearchTerm("")}
-                                aria-label="Clear search"
-                                className="rounded-lg p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                aria-expanded={filtersOpen}
+                                onClick={() => setFiltersOpen((prev) => !prev)}
+                                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                    filtersOpen || activeMetadataCount > 0
+                                        ? "border-violet-500/40 bg-violet-500/15 text-violet-200"
+                                        : "border-zinc-800 bg-zinc-950/70 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
+                                }`}
                             >
-                                <X className="h-4 w-4" />
+                                <Filter className="h-3.5 w-3.5" />
+                                Filters
+                                {activeMetadataCount > 0 && (
+                                    <span className="rounded-md bg-violet-500/30 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-violet-100">
+                                        {activeMetadataCount}
+                                    </span>
+                                )}
                             </button>
                         </Tooltip>
-                    )}
-                </div>
 
-                <div className="flex flex-wrap items-center gap-3 text-sm">
-                    {!loading && (
-                        <span className="font-mono text-xs tabular-nums text-zinc-400">
-                            {filtered.length} shown · {totalCount} total
-                        </span>
-                    )}
+                        {resumes.length > 0 && (
+                            <Tooltip content="Filter matches by target resume profile">
+                                <div className="relative">
+                                    <select
+                                        aria-label="Filter by resume profile"
+                                        value={resumeFilter}
+                                        onChange={(e) => {
+                                            setResumeFilter(e.target.value);
+                                            setPage(1);
+                                        }}
+                                        className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                    >
+                                        <option value="">All resumes</option>
+                                        {resumes.map((r) => (
+                                            <option key={r.uuid} value={r.uuid}>
+                                                {r.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
+                                </div>
+                            </Tooltip>
+                        )}
 
-                    {resumes.length > 0 && (
-                        <Tooltip content="Filter matches by target resume profile">
-                            <div className="relative">
-                                <select
-                                    aria-label="Filter by resume profile"
-                                    value={resumeFilter}
-                                    onChange={(e) => {
-                                        setResumeFilter(e.target.value);
-                                        setPage(1);
-                                    }}
-                                    className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
-                                >
-                                    <option value="">All resumes</option>
-                                    {resumes.map((r) => (
-                                        <option key={r.uuid} value={r.uuid}>
-                                            {r.label}
-                                        </option>
-                                    ))}
-                                </select>
-                                <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
-                            </div>
-                        </Tooltip>
-                    )}
-
-                    <Tooltip content="Only show roles with a Stage 2 AI fit score">
-                        <button
-                            type="button"
-                            onClick={() => {
-                                setEvaluatedOnly((prev) => !prev);
-                                setPage(1);
-                            }}
-                            className={`rounded-xl border px-3.5 py-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${evaluatedOnly
-                                    ? "border-violet-500/40 bg-violet-500/15 text-violet-200"
-                                    : "border-zinc-800 bg-zinc-950/70 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
+                        <Tooltip content="Only show roles with a Stage 2 AI fit score">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setEvaluatedOnly((prev) => !prev);
+                                    setPage(1);
+                                }}
+                                className={`rounded-xl border px-3.5 py-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                    evaluatedOnly
+                                        ? "border-violet-500/40 bg-violet-500/15 text-violet-200"
+                                        : "border-zinc-800 bg-zinc-950/70 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
                                 }`}
-                        >
-                            AI Scored Only
-                        </button>
-                    </Tooltip>
-
-                    <div className="flex items-center gap-2.5">
-                        <ArrowUpDown className="h-4 w-4 text-zinc-400" />
-                        <label htmlFor="radar-sort" className="text-zinc-400">
-                            Sort:
-                        </label>
-                        <Tooltip content="Order matching roles server-side">
-                            <div className="relative">
-                                <select
-                                    id="radar-sort"
-                                    value={sortBy}
-                                    onChange={(e) => {
-                                        setSortBy(e.target.value as RadarSortOption);
-                                        setPage(1);
-                                    }}
-                                    className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
-                                >
-                                    {RADAR_SORT_OPTIONS.map((opt) => (
-                                        <option key={opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </option>
-                                    ))}
-                                </select>
-                                <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
-                            </div>
+                            >
+                                AI Scored Only
+                            </button>
                         </Tooltip>
-                    </div>
 
-                    <div className="flex items-center gap-2.5">
-                        <SlidersHorizontal className="h-4 w-4 text-zinc-400" />
-                        <label htmlFor="min-fit" className="text-zinc-400">
-                            Min Fit:
-                        </label>
-                        <Tooltip content="Filter roles by minimum AI fit score threshold (server-side)">
-                            <div className="relative">
-                                <select
-                                    id="min-fit"
-                                    value={minScore}
-                                    onChange={(e) => {
-                                        setMinScore(Number(e.target.value));
-                                        setPage(1);
-                                    }}
-                                    className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
-                                >
-                                    <option value={0}>All scored roles</option>
-                                    <option value={70}>70%+ (Alert threshold)</option>
-                                    <option value={80}>80%+ (Strong match)</option>
-                                </select>
-                                <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
-                            </div>
-                        </Tooltip>
+                        <div className="flex items-center gap-2.5">
+                            <ArrowUpDown className="h-4 w-4 text-zinc-400" />
+                            <label htmlFor="radar-sort" className="text-zinc-400">
+                                Sort:
+                            </label>
+                            <Tooltip content="Order matching roles server-side">
+                                <div className="relative">
+                                    <select
+                                        id="radar-sort"
+                                        value={sortBy}
+                                        onChange={(e) => {
+                                            setSortBy(e.target.value as RadarSortOption);
+                                            setPage(1);
+                                        }}
+                                        className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                    >
+                                        {RADAR_SORT_OPTIONS.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>
+                                                {opt.value === "best_match" && debouncedSearch
+                                                    ? "Relevance (Hybrid)"
+                                                    : opt.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
+                                </div>
+                            </Tooltip>
+                        </div>
+
+                        <div className="flex items-center gap-2.5">
+                            <SlidersHorizontal className="h-4 w-4 text-zinc-400" />
+                            <label htmlFor="min-fit" className="text-zinc-400">
+                                Min Fit:
+                            </label>
+                            <Tooltip content="Filter roles by minimum AI fit score threshold (server-side)">
+                                <div className="relative">
+                                    <select
+                                        id="min-fit"
+                                        value={minScore}
+                                        onChange={(e) => {
+                                            setMinScore(Number(e.target.value));
+                                            setPage(1);
+                                        }}
+                                        className="appearance-none rounded-xl border border-zinc-800 bg-zinc-950/70 py-2.5 pr-9 pl-3.5 text-sm text-zinc-100 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                    >
+                                        <option value={0}>All scored roles</option>
+                                        <option value={70}>70%+ (Alert threshold)</option>
+                                        <option value={80}>80%+ (Strong match)</option>
+                                    </select>
+                                    <ChevronDown className="pointer-events-none absolute top-3 right-3 h-4 w-4 text-zinc-500" />
+                                </div>
+                            </Tooltip>
+                        </div>
                     </div>
                 </div>
+
+                {filtersOpen && (
+                    <MetadataFiltersPanel
+                        filters={metadataFilters}
+                        onUpdate={updateMetadataFilters}
+                    />
+                )}
+
+                <ActiveMetadataFilterChips
+                    filters={metadataFilters}
+                    onRemove={removeMetadataFilter}
+                    onClearAll={clearMetadataFilters}
+                />
             </div>
 
             {error && (

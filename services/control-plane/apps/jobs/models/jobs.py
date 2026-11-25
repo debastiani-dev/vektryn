@@ -1,5 +1,6 @@
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
@@ -80,6 +81,11 @@ class JobPosting(BaseModel):
         null=True,
         blank=True,
     )
+    search_vector = SearchVectorField(
+        null=True,
+        blank=True,
+        editable=False,
+    )
 
     is_active = models.BooleanField(default=True, db_index=True)
     posted_at = models.DateTimeField(null=True, blank=True)
@@ -106,6 +112,10 @@ class JobPosting(BaseModel):
             GinIndex(
                 fields=["region_eligibility"],
                 name="gin_job_posting_region_elig",
+            ),
+            GinIndex(
+                fields=["search_vector"],
+                name="gin_job_posting_search_vector",
             ),
             HnswIndex(
                 name="hnsw_job_posting_embedding",

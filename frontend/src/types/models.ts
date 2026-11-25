@@ -165,8 +165,11 @@ export interface MatchScoreSummary {
     alert_threshold_count: number;
 }
 
+export type HybridSearchMode = "hybrid" | "keyword";
+
 export interface MatchScoreListResponse extends PaginatedResponse<MatchScore> {
     summary?: MatchScoreSummary;
+    search_mode?: HybridSearchMode | null;
 }
 
 export interface RescoreResponse {
