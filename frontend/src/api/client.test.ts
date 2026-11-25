@@ -330,4 +330,64 @@ describe("vektrynApi", () => {
         expect(matchRes.uuid).toBe("match-1");
         expect((fetchMock.mock.calls[4] as [string])[0]).toBe("/api/v1/matches/match-1/");
     });
+
+    it("supports saved filter CRUD and lead CSV export", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=preset-csrf" });
+        const samplePreset = {
+            uuid: "preset-1",
+            name: "BR Senior Python",
+            query_params: { seniority: "senior", region: "brazil" },
+            created_at: "2026-11-25T10:00:00Z",
+            modified_at: "2026-11-25T10:00:00Z",
+        };
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        count: 1,
+                        next: null,
+                        previous: null,
+                        results: [samplePreset],
+                    }),
+                    { status: 200, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(samplePreset), {
+                    status: 201,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(null, { status: 204 }))
+            .mockResolvedValueOnce(
+                new Response("uuid,job_title\nlead-1,Engineer\n", {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "text/csv",
+                        "Content-Disposition": 'attachment; filename="vektryn-leads-2026-11-25.csv"',
+                    },
+                }),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const listed = await vektrynApi.listSavedFilters();
+        expect(listed.results).toHaveLength(1);
+        expect((fetchMock.mock.calls[0] as [string])[0]).toBe("/api/v1/jobs/filters/");
+
+        const created = await vektrynApi.createSavedFilter({
+            name: "BR Senior Python",
+            query_params: { seniority: "senior", region: "brazil" },
+        });
+        expect(created.uuid).toBe("preset-1");
+        expect((fetchMock.mock.calls[1] as [string, RequestInit])[1].method).toBe("POST");
+
+        await vektrynApi.deleteSavedFilter("preset-1");
+        expect((fetchMock.mock.calls[2] as [string])[0]).toBe("/api/v1/jobs/filters/preset-1/");
+
+        const exported = await vektrynApi.exportLeads("csv");
+        expect(exported.filename).toBe("vektryn-leads-2026-11-25.csv");
+        expect(await exported.blob.text()).toContain("lead-1,Engineer");
+        expect((fetchMock.mock.calls[3] as [string])[0]).toBe("/api/v1/leads/export/?format=csv");
+    });
 });

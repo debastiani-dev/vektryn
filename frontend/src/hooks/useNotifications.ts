@@ -5,6 +5,8 @@ import { alertToNotification, mergeLiveNotification } from "../utils/notificatio
 import { useAlertStream } from "./useAlertStream";
 
 export type NotificationFilter = "all" | "unread";
+export const NOTIFICATIONS_REFRESH_EVENT = "vektryn:notifications-refresh";
+const NOTIFICATION_POLL_INTERVAL_MS = 60_000;
 
 function buildNotificationQuery(filter: NotificationFilter, page: number): string {
     const params = new URLSearchParams();
@@ -118,8 +120,19 @@ export function useNotifications(streamToken: string | null) {
             }
         }
         void hydrate();
+        const intervalId = window.setInterval(() => {
+            if (!document.hidden) {
+                void hydrate();
+            }
+        }, NOTIFICATION_POLL_INTERVAL_MS);
+        const handleExternalRefresh = () => {
+            void hydrate();
+        };
+        window.addEventListener(NOTIFICATIONS_REFRESH_EVENT, handleExternalRefresh);
         return () => {
             cancelled = true;
+            window.clearInterval(intervalId);
+            window.removeEventListener(NOTIFICATIONS_REFRESH_EVENT, handleExternalRefresh);
         };
     }, [filter, streamToken, syncNotifications]);
 

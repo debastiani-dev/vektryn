@@ -246,13 +246,119 @@ def test_lifecycle_notifies_active_leads_and_always_runs_retention(monkeypatch) 
             return _EmptyCursor()
 
     monkeypatch.setattr(lifecycle.psycopg, "connect", lambda *_a, **_kw: _EmptyConn())
+    followup_calls: list[int] = []
+    monkeypatch.setattr(
+        lifecycle,
+        "_run_due_followups_sync",
+        lambda _now: followup_calls.append(1) or 0,
+    )
     monkeypatch.setattr(
         lifecycle,
         "_run_notification_retention_sync",
         lambda _now: prune_calls.append(1) or 0,
     )
     assert asyncio.run(lifecycle.run_lifecycle_check(batch_size=10)) == 0
+    assert followup_calls == [1]
     assert prune_calls == [1]
+
+
+def test_lifecycle_notifies_due_followups_and_isolates_failures(monkeypatch) -> None:
+    lead_uuid = uuid.uuid4()
+    job_uuid = uuid.uuid4()
+    due_at = datetime(2026, 11, 24, 15, 0, tzinfo=UTC)
+    now = datetime(2026, 11, 25, 3, 0, tzinfo=UTC)
+    executed: list[tuple[str, tuple]] = []
+
+    class _DueCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            executed.append((sql, params or ()))
+            self._sql = sql
+
+        def fetchall(self):
+            if "UPDATE tracker_applicationlead" in self._sql:
+                return [
+                    (
+                        lead_uuid,
+                        42,
+                        job_uuid,
+                        "interviewing",
+                        due_at,
+                        "Staff Python Engineer",
+                        "Acme",
+                        "https://acme.test/jobs/1",
+                    )
+                ]
+            return []
+
+    class _DueConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return _DueCursor()
+
+        def commit(self):
+            # In-memory test double: transaction commit is a no-op
+            return None
+
+    monkeypatch.setattr(lifecycle.psycopg, "connect", lambda *_a, **_kw: _DueConn())
+    emitted = lifecycle._notify_due_followups_sync(now)
+    assert emitted == 1
+    assert any("SET followup_notified_at = %s" in sql for sql, _ in executed)
+    assert any("l.next_action_at <= %s" in sql for sql, _ in executed)
+    notif_inserts = [
+        params for sql, params in executed if "INSERT INTO base_notification" in sql
+    ]
+    assert len(notif_inserts) == 1
+    assert notif_inserts[0][3] == 42
+    assert notif_inserts[0][4] == NotificationKind.LEAD_FOLLOWUP_DUE.value
+
+    # Failure in _notify_due_followups_sync must not prevent retention sweep in run_lifecycle_check
+    class _EmptyCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            return None
+
+        def fetchall(self):
+            return []
+
+    class _EmptyConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return _EmptyCursor()
+
+    def _raise_db_blip(_now):
+        raise RuntimeError("DB blip")
+
+    prune_ran: list[int] = []
+    monkeypatch.setattr(lifecycle.psycopg, "connect", lambda *_a, **_kw: _EmptyConn())
+    monkeypatch.setattr(lifecycle, "_notify_due_followups_sync", _raise_db_blip)
+    monkeypatch.setattr(
+        lifecycle,
+        "_run_notification_retention_sync",
+        lambda _now: prune_ran.append(1) or 0,
+    )
+    assert asyncio.run(lifecycle.run_lifecycle_check(batch_size=5)) == 0
+    assert prune_ran == [1]
 
 
 def test_sse_frame_uses_notification_uuid_with_event_id_fallback() -> None:

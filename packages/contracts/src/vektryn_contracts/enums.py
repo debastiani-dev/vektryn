@@ -100,3 +100,4 @@ class NotificationKind(StrEnum):
     RESCORE_COMPLETED = "rescore_completed"
     MANUAL_IMPORT_READY = "manual_import_ready"
     COLLECTOR_SYNC_COMPLETED = "collector_sync_completed"
+    LEAD_FOLLOWUP_DUE = "lead_followup_due"

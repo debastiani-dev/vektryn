@@ -17,6 +17,8 @@ import type {
     ReadAllNotificationsResponse,
     RescoreResponse,
     ResumeProfile,
+    SavedFilter,
+    SavedFilterQueryParams,
     SeniorityLevel,
     StackTrendDaily,
     TriggerCollectResponse,
@@ -152,6 +154,29 @@ export const vektrynApi = {
             body: JSON.stringify(payload),
         }),
 
+    listSavedFilters: (params = "") =>
+        apiFetch<PaginatedResponse<SavedFilter>>(`/api/v1/jobs/filters/${params}`),
+
+    createSavedFilter: (payload: { name: string; query_params: SavedFilterQueryParams }) =>
+        apiFetch<SavedFilter>("/api/v1/jobs/filters/", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        }),
+
+    updateSavedFilter: (
+        uuid: string,
+        payload: Partial<{ name: string; query_params: SavedFilterQueryParams }>,
+    ) =>
+        apiFetch<SavedFilter>(`/api/v1/jobs/filters/${encodeURIComponent(uuid)}/`, {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+        }),
+
+    deleteSavedFilter: (uuid: string) =>
+        apiFetch<void>(`/api/v1/jobs/filters/${encodeURIComponent(uuid)}/`, {
+            method: "DELETE",
+        }),
+
     listResumes: (params = "") =>
         apiFetch<PaginatedResponse<ResumeProfile>>(`/api/v1/resumes/${params}`),
 
@@ -201,17 +226,34 @@ export const vektrynApi = {
 
     updateLead: (
         uuid: string,
-        payload: Partial<Pick<ApplicationLead, "status" | "priority" | "notes">>,
+        payload: Partial<
+            Pick<ApplicationLead, "status" | "priority" | "notes" | "next_action_at">
+        >,
     ) =>
-        apiFetch<ApplicationLead>(`/api/v1/leads/${uuid}/`, {
+        apiFetch<ApplicationLead>(`/api/v1/leads/${encodeURIComponent(uuid)}/`, {
             method: "PATCH",
             body: JSON.stringify(payload),
         }),
 
     deleteLead: (uuid: string) =>
-        apiFetch<void>(`/api/v1/leads/${uuid}/`, {
+        apiFetch<void>(`/api/v1/leads/${encodeURIComponent(uuid)}/`, {
             method: "DELETE",
         }),
+
+    exportLeads: async (format: "csv" | "json"): Promise<{ blob: Blob; filename: string }> => {
+        const response = await fetch(`/api/v1/leads/export/?format=${format}`, {
+            credentials: "same-origin",
+        });
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`API ${response.status}: ${text || response.statusText}`);
+        }
+        const disposition = response.headers.get("Content-Disposition") ?? "";
+        const match = /filename="([^"]+)"/.exec(disposition);
+        const filename = match?.[1] ?? `vektryn-leads.${format}`;
+        const blob = await response.blob();
+        return { blob, filename };
+    },
 
     listTrends: (params = "") =>
         apiFetch<PaginatedResponse<StackTrendDaily>>(`/api/v1/analytics/trends/${params}`),

@@ -116,6 +116,7 @@ def test_job_match_alert_and_dlq_contracts() -> None:
     assert NotificationKind.RESCORE_COMPLETED.value == "rescore_completed"
     assert NotificationKind.MANUAL_IMPORT_READY.value == "manual_import_ready"
     assert NotificationKind.COLLECTOR_SYNC_COMPLETED.value == "collector_sync_completed"
+    assert NotificationKind.LEAD_FOLLOWUP_DUE.value == "lead_followup_due"
 
     legacy_alert = JobMatchAlertEvent(
         user_id=42,

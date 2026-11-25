@@ -25,6 +25,7 @@ import type {
     ManualJobImportResponse,
     MatchScore,
     ResumeProfile,
+    SavedFilter,
 } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
@@ -55,12 +56,17 @@ import {
     type RadarSortOption,
     resolveRadarOrdering,
 } from "../../utils/radarFilters";
+import {
+    hydrateRadarStateFromPreset,
+    serializeRadarStateToPreset,
+} from "../../utils/savedFilters";
 import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
 import { GapAnalysisDrawer } from "./GapAnalysisDrawer";
 import { ImportJobModal } from "./ImportJobModal";
 import { JobPostingDrawer } from "./JobPostingDrawer";
 import { RadarSearchToolbar } from "./RadarSearchToolbar";
+import { SavedFilterPresetsBar } from "./SavedFilterPresetsBar";
 
 function extractJobPostingId(jobPosting: unknown): string | null {
     if (typeof jobPosting === "string" && jobPosting.length > 0) {
@@ -853,6 +859,10 @@ export function JobRadarView() {
     const [savedLeadsByJobId, setSavedLeadsByJobId] = useState<Record<string, string>>({});
     const [savedTotalCount, setSavedTotalCount] = useState(0);
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
+    const [savedPresets, setSavedPresets] = useState<SavedFilter[]>([]);
+    const [savingPreset, setSavingPreset] = useState(false);
+    const [deletingPresetId, setDeletingPresetId] = useState<string | null>(null);
+    const [presetError, setPresetError] = useState<string | null>(null);
 
     function openJobListing(match: MatchScore) {
         setSelectedGapMatch(null);
@@ -895,9 +905,10 @@ export function JobRadarView() {
     useEffect(() => {
         let cancelled = false;
         async function loadMeta() {
-            const [leadsResult, resumesResult] = await Promise.allSettled([
+            const [leadsResult, resumesResult, presetsResult] = await Promise.allSettled([
                 fetchAllPagesWithCount(vektrynApi.listLeads),
                 vektrynApi.listResumes(),
+                vektrynApi.listSavedFilters(),
             ]);
             if (cancelled) return;
             if (leadsResult.status === "fulfilled") {
@@ -913,6 +924,9 @@ export function JobRadarView() {
             }
             if (resumesResult.status === "fulfilled") {
                 setResumes(resumesResult.value.results);
+            }
+            if (presetsResult.status === "fulfilled") {
+                setSavedPresets(presetsResult.value.results);
             }
         }
         void loadMeta();
@@ -1207,7 +1221,63 @@ export function JobRadarView() {
         setResumeFilter("");
         setEvaluatedOnly(false);
         setMetadataFilters(EMPTY_METADATA_FILTERS);
+        setSortBy("best_match");
         setPage(1);
+    }
+
+    const currentRadarState = {
+        searchTerm,
+        resumeFilter,
+        minScore,
+        evaluatedOnly,
+        metadataFilters,
+        sortBy,
+    };
+
+    function handleApplyPreset(preset: SavedFilter) {
+        const next = hydrateRadarStateFromPreset(preset.query_params, resumes);
+        setSearchTerm(next.searchTerm);
+        setDebouncedSearch(next.searchTerm.trim());
+        setResumeFilter(next.resumeFilter);
+        setMinScore(next.minScore);
+        setEvaluatedOnly(next.evaluatedOnly);
+        setMetadataFilters(next.metadataFilters);
+        setSortBy(next.sortBy);
+        setPage(1);
+        setPresetError(null);
+    }
+
+    async function handleSavePreset(name: string): Promise<boolean> {
+        setSavingPreset(true);
+        setPresetError(null);
+        try {
+            const created = await vektrynApi.createSavedFilter({
+                name,
+                query_params: serializeRadarStateToPreset(currentRadarState),
+            });
+            setSavedPresets((prev) =>
+                [...prev, created].sort((a, b) => a.name.localeCompare(b.name)),
+            );
+            return true;
+        } catch (err) {
+            setPresetError(err instanceof Error ? err.message : "Failed to save filter preset");
+            return false;
+        } finally {
+            setSavingPreset(false);
+        }
+    }
+
+    async function handleDeletePreset(preset: SavedFilter) {
+        setDeletingPresetId(preset.uuid);
+        setPresetError(null);
+        try {
+            await vektrynApi.deleteSavedFilter(preset.uuid);
+            setSavedPresets((prev) => prev.filter((item) => item.uuid !== preset.uuid));
+        } catch (err) {
+            setPresetError(err instanceof Error ? err.message : "Failed to delete filter preset");
+        } finally {
+            setDeletingPresetId(null);
+        }
     }
 
     function renderResults() {
@@ -1312,7 +1382,21 @@ export function JobRadarView() {
                 />
             </header>
 
-            <RadarSearchToolbar
+            <div className="space-y-3">
+                <SavedFilterPresetsBar
+                    presets={savedPresets}
+                    currentState={currentRadarState}
+                    resumes={resumes}
+                    canSaveCurrent={hasActiveFilters || sortBy !== "best_match"}
+                    saving={savingPreset}
+                    deletingId={deletingPresetId}
+                    error={presetError}
+                    onApplyPreset={handleApplyPreset}
+                    onSavePreset={handleSavePreset}
+                    onDeletePreset={(preset) => void handleDeletePreset(preset)}
+                />
+
+                <RadarSearchToolbar
                 searchTerm={searchTerm}
                 debouncedSearch={debouncedSearch}
                 searchMode={searchMode}
@@ -1358,6 +1442,7 @@ export function JobRadarView() {
                 onRemoveChip={handleRemoveFilterChip}
                 onResetAll={resetFilters}
             />
+            </div>
 
             {error && (
                 <div className="rounded-2xl border border-red-500/30 bg-red-950/20 px-5 py-4 text-sm text-red-300">

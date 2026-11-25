@@ -54,6 +54,22 @@ _ACTIVE_LEADS_FOR_JOBS_SQL = """
       AND status NOT IN ('rejected', 'withdrawn')
 """
 
+_CLAIM_DUE_FOLLOWUPS_SQL = """
+    UPDATE tracker_applicationlead AS l
+    SET followup_notified_at = %s,
+        modified_at = %s
+    FROM jobs_jobposting AS j
+    WHERE l.job_posting_id = j.uuid
+      AND l.is_deleted = FALSE
+      AND j.is_deleted = FALSE
+      AND l.status NOT IN ('rejected', 'withdrawn')
+      AND l.next_action_at IS NOT NULL
+      AND l.next_action_at <= %s
+      AND (l.followup_notified_at IS NULL OR l.followup_notified_at < l.next_action_at)
+    RETURNING l.uuid, l.user_id, l.job_posting_id, l.status, l.next_action_at,
+              j.title, j.company_name, j.apply_url
+"""
+
 
 async def _is_posting_closed(
     client: httpx.AsyncClient,
@@ -127,6 +143,67 @@ def _mark_closed_and_notify_sync(
     return len(transitioned), len(leads)
 
 
+def _notify_due_followups_sync(now: datetime) -> int:
+    with psycopg.connect(settings.postgres_dsn, autocommit=False) as conn:
+        with conn.cursor() as cur:
+            cur.execute(_CLAIM_DUE_FOLLOWUPS_SQL, (now, now, now))
+            due_rows = cur.fetchall()
+            for (
+                lead_uuid,
+                user_id,
+                job_uuid,
+                lead_status,
+                next_action_at,
+                title,
+                company_name,
+                apply_url,
+            ) in due_rows:
+                due_iso = (
+                    next_action_at.isoformat()
+                    if hasattr(next_action_at, "isoformat")
+                    else str(next_action_at)
+                )
+                due_label = (
+                    next_action_at.strftime("%b %d, %Y")
+                    if hasattr(next_action_at, "strftime")
+                    else due_iso[:10]
+                )
+                insert_notification_with_cursor(
+                    cur,
+                    notification_uuid=uuid.uuid4(),
+                    user_id=user_id,
+                    kind=NotificationKind.LEAD_FOLLOWUP_DUE,
+                    title=f"Follow-up due: {title}"[:255],
+                    body=(
+                        f"Scheduled follow-up for {company_name} ({lead_status}) "
+                        f"was due on {due_label}."
+                    ),
+                    payload={
+                        "lead_uuid": str(lead_uuid),
+                        "job_posting_uuid": str(job_uuid),
+                        "lead_status": str(lead_status),
+                        "next_action_at": due_iso,
+                        "title": title,
+                        "company_name": company_name,
+                        "apply_url": apply_url,
+                    },
+                    now=now,
+                )
+        conn.commit()
+    return len(due_rows)
+
+
+def _run_due_followups_sync(now: datetime) -> int:
+    try:
+        notified = _notify_due_followups_sync(now)
+        if notified > 0:
+            logger.info("Emitted %d lead_followup_due notifications", notified)
+        return notified
+    except Exception as exc:
+        logger.warning("Due follow-up notification sweep failed: %s", exc)
+        return 0
+
+
 def _run_notification_retention_sync(now: datetime) -> int:
     try:
         pruned = prune_expired_notifications_sync(
@@ -184,6 +261,7 @@ async def run_lifecycle_check(batch_size: int = 200) -> int:
         )
         return closed_count
     finally:
+        await asyncio.to_thread(_run_due_followups_sync, now)
         await asyncio.to_thread(_run_notification_retention_sync, now)
 
 
