@@ -50,6 +50,7 @@ DATABASE_URL=$(fetch_secret "vektryn-database-url")
 GEMINI_API_KEY=$(fetch_secret "vektryn-gemini-api-key")
 INGEST_API_KEY=$(fetch_secret "vektryn-ingest-api-key")
 STREAM_AUTH_SECRET=$(fetch_secret "vektryn-stream-auth-secret")
+SENTRY_DSN=$(fetch_secret "vektryn-sentry-dsn" 2>/dev/null || true)
 
 POSTGRES_PASSWORD=$(python3 -c "from urllib.parse import unquote, urlparse; import sys; print(unquote(urlparse(sys.argv[1]).password or 'vektryn_prod'))" "$DATABASE_URL")
 POSTGRES_USER=$(python3 -c "from urllib.parse import unquote, urlparse; import sys; print(unquote(urlparse(sys.argv[1]).username or 'vektryn'))" "$DATABASE_URL")
@@ -65,6 +66,9 @@ INGEST_API_KEY=$INGEST_API_KEY
 STREAM_AUTH_SECRET=$STREAM_AUTH_SECRET
 STORAGE_BACKEND=gcs
 GCS_SNAPSHOTS_BUCKET=${snapshots_bucket_name}
+SENTRY_DSN=$SENTRY_DSN
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0.0
 EOF
 chmod 600 /opt/vektryn/.env
 
@@ -164,7 +168,6 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      METRICS_PORT: "0"
     depends_on:
       redis:
         condition: service_healthy
@@ -180,7 +183,6 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      METRICS_PORT: "0"
     depends_on:
       postgres:
         condition: service_healthy

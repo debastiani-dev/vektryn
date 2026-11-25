@@ -336,9 +336,10 @@ def test_control_plane_sentry_gated_by_dsn(monkeypatch):
 
         monkeypatch.setenv("SENTRY_DSN", "https://public@example.ingest.sentry.io/1")
         with patch.object(cp_telemetry.sentry_sdk, "set_tag") as mock_tag:
-            assert cp_telemetry.configure_sentry("vektryn-control-plane") is True
+            assert cp_telemetry.configure_sentry("control-plane") is True
             mock_init.assert_called_once()
-            mock_tag.assert_called_once_with("service", "vektryn-control-plane")
+            mock_tag.assert_any_call("service", "control-plane")
+            mock_tag.assert_any_call("environment", "production")
 
 
 @pytest.mark.django_db

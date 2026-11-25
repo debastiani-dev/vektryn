@@ -173,6 +173,31 @@ resource "google_cloud_run_v2_service" "control_plane" {
         }
       }
 
+      env {
+        name  = "SENTRY_SERVICE_NAME"
+        value = "control-plane"
+      }
+
+      env {
+        name  = "SENTRY_ENVIRONMENT"
+        value = "production"
+      }
+
+      env {
+        name  = "SENTRY_TRACES_SAMPLE_RATE"
+        value = "0.0"
+      }
+
+      env {
+        name = "SENTRY_DSN"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-sentry-dsn"]
+            version = "latest"
+          }
+        }
+      }
+
       startup_probe {
         http_get {
           path = "/health/"
@@ -302,6 +327,26 @@ resource "google_cloud_run_v2_service" "stream_edge" {
         value_source {
           secret_key_ref {
             secret  = var.secret_ids["vektryn-stream-auth-secret"]
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name  = "SENTRY_ENVIRONMENT"
+        value = "production"
+      }
+
+      env {
+        name  = "SENTRY_TRACES_SAMPLE_RATE"
+        value = "0.0"
+      }
+
+      env {
+        name = "SENTRY_DSN"
+        value_source {
+          secret_key_ref {
+            secret  = var.secret_ids["vektryn-sentry-dsn"]
             version = "latest"
           }
         }
@@ -505,6 +550,26 @@ resource "google_cloud_run_v2_job" "scheduled_workers" {
             }
           }
         }
+
+        env {
+          name  = "SENTRY_ENVIRONMENT"
+          value = "production"
+        }
+
+        env {
+          name  = "SENTRY_TRACES_SAMPLE_RATE"
+          value = "0.0"
+        }
+
+        env {
+          name = "SENTRY_DSN"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-sentry-dsn"]
+              version = "latest"
+            }
+          }
+        }
       }
     }
   }
@@ -610,6 +675,31 @@ resource "google_cloud_run_v2_job" "migrate" {
           value_source {
             secret_key_ref {
               secret  = var.secret_ids["vektryn-database-url"]
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name  = "SENTRY_SERVICE_NAME"
+          value = "vektryn-migrate"
+        }
+
+        env {
+          name  = "SENTRY_ENVIRONMENT"
+          value = "production"
+        }
+
+        env {
+          name  = "SENTRY_TRACES_SAMPLE_RATE"
+          value = "0.0"
+        }
+
+        env {
+          name = "SENTRY_DSN"
+          value_source {
+            secret_key_ref {
+              secret  = var.secret_ids["vektryn-sentry-dsn"]
               version = "latest"
             }
           }

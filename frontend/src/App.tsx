@@ -16,6 +16,7 @@ import type {
 } from "./types/models";
 import { extractPayloadString } from "./utils/notifications";
 import { clearPendingImport } from "./utils/pendingImportStorage";
+import { syncSentryUser } from "./utils/sentry";
 
 export function App() {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
@@ -78,6 +79,10 @@ export function App() {
         setActiveNotificationMatch(null);
         setSavedJobIds(new Set());
     }, []);
+
+    useEffect(() => {
+        syncSentryUser(user);
+    }, [user]);
 
     useEffect(() => {
         return registerSessionExpiredHandler(() => {

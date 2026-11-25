@@ -22,4 +22,6 @@ COPY services/stream-edge /app/services/stream-edge
 RUN poetry install --only-root --no-interaction --no-ansi
 
 EXPOSE 8001
+ARG SENTRY_RELEASE=""
+ENV SENTRY_RELEASE=${SENTRY_RELEASE}
 CMD ["uvicorn", "stream_edge.main:app", "--host", "0.0.0.0", "--port", "8001"]

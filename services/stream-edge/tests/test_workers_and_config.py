@@ -343,9 +343,10 @@ def test_stream_edge_sentry_gated_by_dsn(monkeypatch):
 
         monkeypatch.setenv("SENTRY_DSN", "https://public@example.ingest.sentry.io/2")
         with patch.object(edge_telemetry.sentry_sdk, "set_tag") as mock_tag:
-            assert edge_telemetry.configure_sentry("vektryn-stream-edge") is True
+            assert edge_telemetry.configure_sentry("stream-edge") is True
             mock_init.assert_called_once()
-            mock_tag.assert_called_once_with("service", "vektryn-stream-edge")
+            mock_tag.assert_any_call("service", "stream-edge")
+            mock_tag.assert_any_call("environment", "production")
 
 
 def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():

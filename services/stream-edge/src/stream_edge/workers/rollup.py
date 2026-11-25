@@ -8,6 +8,11 @@ import psycopg
 
 from stream_edge.collectors.taxonomy import load_taxonomy
 from stream_edge.config import settings
+from stream_edge.telemetry import (
+    capture_worker_exception,
+    configure_sentry,
+    flush_sentry,
+)
 from vektryn_contracts.enums import TechCategory
 
 logger = logging.getLogger(__name__)
@@ -130,8 +135,19 @@ def run_daily_rollup(target_date: date | None = None) -> int:
     return len(mentions)
 
 
-if __name__ == "__main__":
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s"
     )
-    run_daily_rollup()
+    configure_sentry("vektryn-rollup")
+    try:
+        run_daily_rollup()
+    except Exception as exc:
+        capture_worker_exception(exc, worker="vektryn-rollup", topic="rollup")
+        raise
+    finally:
+        flush_sentry(timeout=5.0)
+
+
+if __name__ == "__main__":
+    main()

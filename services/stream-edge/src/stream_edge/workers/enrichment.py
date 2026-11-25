@@ -14,7 +14,11 @@ from stream_edge.clients.kafka import (
 from stream_edge.clients.notifications import persist_pipeline_error_notifications
 from stream_edge.clients.redis import DedupRedisClient
 from stream_edge.config import settings
-from stream_edge.telemetry import configure_sentry
+from stream_edge.telemetry import (
+    capture_worker_exception,
+    configure_sentry,
+    flush_sentry,
+)
 from vektryn_contracts import (
     JobEnrichedEvent,
     JobRawEvent,
@@ -104,7 +108,7 @@ async def process_raw_message(
 
 
 async def run_enrichment_worker() -> None:
-    configure_sentry("vektryn-enrichment-worker")
+    configure_sentry("enrichment-worker")
     ensure_topics_exist()
     gemini = GeminiStreamClient()
     redis_client = DedupRedisClient()
@@ -152,6 +156,11 @@ async def run_enrichment_worker() -> None:
                 )
             except Exception as exc:
                 logger.exception("Failed enriching message; routing to DLQ: %s", exc)
+                capture_worker_exception(
+                    exc,
+                    worker="enrichment-worker",
+                    topic=msg.topic(),
+                )
                 await producer.publish_dlq(msg=msg, error=exc)
                 await asyncio.to_thread(
                     persist_pipeline_error_notifications,
@@ -168,6 +177,7 @@ async def run_enrichment_worker() -> None:
         await redis_client.close()
         await asyncio.to_thread(producer.flush, 5.0)
         await asyncio.to_thread(consumer.close)
+        flush_sentry(timeout=5.0)
 
 
 if __name__ == "__main__":

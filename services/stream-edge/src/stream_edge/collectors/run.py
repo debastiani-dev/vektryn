@@ -40,6 +40,12 @@ from stream_edge.collectors.prefilter import (
 from stream_edge.collectors.remote_feeds import MultiCompanyFeedCollector
 from stream_edge.collectors.taxonomy import sync_dynamic_stacks
 from stream_edge.config import settings
+from stream_edge.telemetry import (
+    capture_worker_error_message,
+    capture_worker_exception,
+    configure_sentry,
+    flush_sentry,
+)
 from vektryn_contracts import compute_job_content_hash
 
 logging.basicConfig(
@@ -391,13 +397,19 @@ async def run_collection(
         )
 
         if errors_total > 0 and fetched_total == 0 and pushed_total == 0:
+            total_failure_msg = f"Collector sync finished with {errors_total} errors and 0 jobs fetched."
+            capture_worker_error_message(
+                total_failure_msg,
+                worker="vektryn-collect",
+                error_type="CollectorTotalFailure",
+                topic="collectors",
+                extra={"error_count": errors_total},
+            )
             await asyncio.to_thread(
                 persist_pipeline_error_notifications,
                 source="vektryn-collect",
                 error_type="CollectorTotalFailure",
-                error_message=(
-                    f"Collector sync finished with {errors_total} errors and 0 jobs fetched."
-                ),
+                error_message=total_failure_msg,
                 extra_payload={"error_count": errors_total},
             )
         elif pushed_total > 0 or errors_total > 0:
@@ -445,18 +457,29 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    configure_sentry("vektryn-collect")
     args = _parse_args()
     edge = os.getenv("STREAM_EDGE_URL", "http://localhost:8001")
     cap_per_board = int(os.getenv("COLLECT_MAX_PER_BOARD", "8"))
-    asyncio.run(
-        run_collection(
-            edge_url=edge,
-            max_per_board=cap_per_board,
-            boards_per_ats=args.boards_per_ats,
-            max_total=args.max_total,
-            resume_id=args.resume_id,
-            min_skill_matches=args.min_skills,
-            refresh_discovery=args.refresh_discovery,
+    try:
+        asyncio.run(
+            run_collection(
+                edge_url=edge,
+                max_per_board=cap_per_board,
+                boards_per_ats=args.boards_per_ats,
+                max_total=args.max_total,
+                resume_id=args.resume_id,
+                min_skill_matches=args.min_skills,
+                refresh_discovery=args.refresh_discovery,
+            )
         )
-    )
+    except Exception as exc:
+        capture_worker_exception(exc, worker="vektryn-collect", topic="collectors")
+        raise
+    finally:
+        flush_sentry(timeout=5.0)
+
+
+if __name__ == "__main__":
+    main()
