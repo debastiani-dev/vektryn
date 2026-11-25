@@ -2,10 +2,10 @@ import argparse
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import json
 import logging
 import os
 import time
-import uuid
 
 import httpx
 import psycopg
@@ -45,6 +45,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 COLLECTOR_LOG_RETENTION_DAYS = 90
+COLLECT_RUNNING_REDIS_KEY = "vektryn:system:collect_running"
+COLLECT_RUNNING_TTL_SECONDS = 900
+
+
+async def _set_collect_running_marker(started_at: datetime) -> None:
+    if not settings.redis_url:
+        return
+    client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await client.set(
+            COLLECT_RUNNING_REDIS_KEY,
+            json.dumps({"started_at": started_at.isoformat()}),
+            ex=COLLECT_RUNNING_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.debug("Failed setting collect running marker in Redis: %s", exc)
+    finally:
+        await client.aclose()
+
+
+async def _clear_collect_running_marker() -> None:
+    if not settings.redis_url:
+        return
+    client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await client.delete(COLLECT_RUNNING_REDIS_KEY)
+    except Exception as exc:
+        logger.debug("Failed clearing collect running marker in Redis: %s", exc)
+    finally:
+        await client.aclose()
 
 
 @dataclass
@@ -147,7 +177,6 @@ def persist_collector_run_logs_sync(
     cutoff = ran_at - timedelta(days=COLLECTOR_LOG_RETENTION_DAYS)
     rows = [
         (
-            uuid.uuid4(),
             ran_at,
             ran_at,
             source,
@@ -165,10 +194,10 @@ def persist_collector_run_logs_sync(
             cur.executemany(
                 """
                 INSERT INTO analytics_collectorrunlog (
-                    uuid, created_at, modified_at,
+                    created_at, modified_at,
                     source, fetched_count, ingested_count,
                     deduped_count, error_count, duration_ms, ran_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 rows,
             )
@@ -232,136 +261,140 @@ async def run_collection(
 ) -> dict[str, SourceRunMetrics]:
     run_timestamp = datetime.now(UTC)
     metrics_by_source: dict[str, SourceRunMetrics] = {}
-
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        # 1. Sync dynamic language/framework catalog (cached in Redis) & load resume criteria
-        dynamic_stacks = await sync_dynamic_stacks(
-            client, force_refresh=refresh_discovery
-        )
-        criteria = await asyncio.to_thread(
-            load_resume_criteria,
-            resume_id,
-            dynamic_stacks=dynamic_stacks,
-        )
-
-        # 2. Global + Brazilian multi-company feeds (Remotive, Himalayas, Jobicy, Gupy, Trampos, GitHub Vagas)
-        feed_collector = MultiCompanyFeedCollector(http_client=client)
-        raw_feed_jobs, feed_stats = await feed_collector.fetch_all_with_stats()
-        for source_key, stat in feed_stats.items():
-            entry = metrics_by_source.setdefault(source_key, SourceRunMetrics())
-            entry.fetched_count += stat["fetched"]
-            entry.error_count += stat["errors"]
-            entry.duration_ms = max(entry.duration_ms, stat["duration_ms"])
-
-        feed_candidates = filter_and_rank_jobs(
-            raw_feed_jobs,
-            criteria,
-            dynamic_stacks=dynamic_stacks,
-            min_skill_matches=min_skill_matches,
-        )
-        logger.info(
-            "Multi-company feeds (Global + BR): %d/%d postings survived resume pre-filter",
-            len(feed_candidates),
-            len(raw_feed_jobs),
-        )
-
-        # 3. Dynamic discovery & verification across all 8 Global + BR ATS platforms
-        board_pools = await discover_all_ats_boards(
-            client,
-            seed_jobs=raw_feed_jobs,
-            force_refresh=refresh_discovery,
-        )
-
-        collectors: dict[str, BaseATSCollector] = {
-            "greenhouse": GreenhouseCollector(http_client=client),
-            "ashby": AshbyCollector(http_client=client),
-            "lever": LeverCollector(http_client=client),
-            "workable": WorkableCollector(http_client=client),
-            "smartrecruiters": SmartRecruitersCollector(http_client=client),
-            "recruitee": RecruiteeCollector(http_client=client),
-            "breezy": BreezyCollector(http_client=client),
-            "inhire": InHireCollector(http_client=client),
-        }
-
-        pinned_boards: dict[str, list[str]] = {
-            "greenhouse": settings.greenhouse_boards,
-            "ashby": settings.ashby_boards,
-        }
-
-        sem = asyncio.Semaphore(12)
-        board_tasks = [
-            _collect_board(
-                collector,
-                ats_name,
-                token,
-                criteria,
-                dynamic_stacks,
-                max_per_board,
-                min_skill_matches,
-                sem,
-            )
-            for ats_name, collector in collectors.items()
-            for token in dict.fromkeys(
-                [
-                    *pinned_boards.get(ats_name, []),
-                    *board_pools.sample(ats_name, boards_per_ats),
-                ]
-            )
-        ]
-
-        board_results = await asyncio.gather(*board_tasks)
-        ats_candidates: list[CollectedJob] = []
-        for source_name, batch, fetched, errors, elapsed_ms in board_results:
-            entry = metrics_by_source.setdefault(source_name, SourceRunMetrics())
-            entry.fetched_count += fetched
-            entry.error_count += errors
-            entry.duration_ms = max(entry.duration_ms, elapsed_ms)
-            ats_candidates.extend(batch)
-
-        # 4. Merge, rank by resume skill overlap, pre-dedup unchanged active jobs, and push new postings
-        merged = filter_and_rank_jobs(
-            [*feed_candidates, *ats_candidates],
-            criteria,
-            dynamic_stacks=dynamic_stacks,
-            min_skill_matches=min_skill_matches,
-        )[:max_total]
-
-        to_ingest, deduped = await partition_new_and_deduped_jobs(merged)
-        for job in deduped:
-            entry = metrics_by_source.setdefault(
-                job.ats_source.value, SourceRunMetrics()
-            )
-            entry.deduped_count += 1
-
-        push_stats = await push_jobs_with_stats(
-            http_client=client,
-            edge_base_url=edge_url,
-            jobs=to_ingest,
-        )
-        for source_key, (accepted, push_errors) in push_stats.items():
-            entry = metrics_by_source.setdefault(source_key, SourceRunMetrics())
-            entry.ingested_count += accepted
-            entry.error_count += push_errors
-
-    pushed_total = sum(s.ingested_count for s in metrics_by_source.values())
-    deduped_total = sum(s.deduped_count for s in metrics_by_source.values())
-    logger.info(
-        "Collection complete: pushed %d new, skipped %d deduped (of %d ranked) to %s",
-        pushed_total,
-        deduped_total,
-        len(merged),
-        edge_url,
-    )
+    await _set_collect_running_marker(run_timestamp)
 
     try:
-        persisted = await asyncio.to_thread(
-            persist_collector_run_logs_sync,
-            metrics_by_source,
-            run_timestamp,
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            # 1. Sync dynamic language/framework catalog (cached in Redis) & load resume criteria
+            dynamic_stacks = await sync_dynamic_stacks(
+                client, force_refresh=refresh_discovery
+            )
+            criteria = await asyncio.to_thread(
+                load_resume_criteria,
+                resume_id,
+                dynamic_stacks=dynamic_stacks,
+            )
+
+            # 2. Global + Brazilian multi-company feeds (Remotive, Himalayas, Jobicy, Gupy, Trampos, GitHub Vagas)
+            feed_collector = MultiCompanyFeedCollector(http_client=client)
+            raw_feed_jobs, feed_stats = await feed_collector.fetch_all_with_stats()
+            for source_key, stat in feed_stats.items():
+                entry = metrics_by_source.setdefault(source_key, SourceRunMetrics())
+                entry.fetched_count += stat["fetched"]
+                entry.error_count += stat["errors"]
+                entry.duration_ms = max(entry.duration_ms, stat["duration_ms"])
+
+            feed_candidates = filter_and_rank_jobs(
+                raw_feed_jobs,
+                criteria,
+                dynamic_stacks=dynamic_stacks,
+                min_skill_matches=min_skill_matches,
+            )
+            logger.info(
+                "Multi-company feeds (Global + BR): %d/%d postings survived resume pre-filter",
+                len(feed_candidates),
+                len(raw_feed_jobs),
+            )
+
+            # 3. Dynamic discovery & verification across all 8 Global + BR ATS platforms
+            board_pools = await discover_all_ats_boards(
+                client,
+                seed_jobs=raw_feed_jobs,
+                force_refresh=refresh_discovery,
+            )
+
+            collectors: dict[str, BaseATSCollector] = {
+                "greenhouse": GreenhouseCollector(http_client=client),
+                "ashby": AshbyCollector(http_client=client),
+                "lever": LeverCollector(http_client=client),
+                "workable": WorkableCollector(http_client=client),
+                "smartrecruiters": SmartRecruitersCollector(http_client=client),
+                "recruitee": RecruiteeCollector(http_client=client),
+                "breezy": BreezyCollector(http_client=client),
+                "inhire": InHireCollector(http_client=client),
+            }
+
+            pinned_boards: dict[str, list[str]] = {
+                "greenhouse": settings.greenhouse_boards,
+                "ashby": settings.ashby_boards,
+            }
+
+            sem = asyncio.Semaphore(12)
+            board_tasks = [
+                _collect_board(
+                    collector,
+                    ats_name,
+                    token,
+                    criteria,
+                    dynamic_stacks,
+                    max_per_board,
+                    min_skill_matches,
+                    sem,
+                )
+                for ats_name, collector in collectors.items()
+                for token in dict.fromkeys(
+                    [
+                        *pinned_boards.get(ats_name, []),
+                        *board_pools.sample(ats_name, boards_per_ats),
+                    ]
+                )
+            ]
+
+            board_results = await asyncio.gather(*board_tasks)
+            ats_candidates: list[CollectedJob] = []
+            for source_name, batch, fetched, errors, elapsed_ms in board_results:
+                entry = metrics_by_source.setdefault(source_name, SourceRunMetrics())
+                entry.fetched_count += fetched
+                entry.error_count += errors
+                entry.duration_ms = max(entry.duration_ms, elapsed_ms)
+                ats_candidates.extend(batch)
+
+            # 4. Merge, rank by resume skill overlap, pre-dedup unchanged active jobs, and push new postings
+            merged = filter_and_rank_jobs(
+                [*feed_candidates, *ats_candidates],
+                criteria,
+                dynamic_stacks=dynamic_stacks,
+                min_skill_matches=min_skill_matches,
+            )[:max_total]
+
+            to_ingest, deduped = await partition_new_and_deduped_jobs(merged)
+            for job in deduped:
+                entry = metrics_by_source.setdefault(
+                    job.ats_source.value, SourceRunMetrics()
+                )
+                entry.deduped_count += 1
+
+            push_stats = await push_jobs_with_stats(
+                http_client=client,
+                edge_base_url=edge_url,
+                jobs=to_ingest,
+            )
+            for source_key, (accepted, push_errors) in push_stats.items():
+                entry = metrics_by_source.setdefault(source_key, SourceRunMetrics())
+                entry.ingested_count += accepted
+                entry.error_count += push_errors
+
+        pushed_total = sum(s.ingested_count for s in metrics_by_source.values())
+        deduped_total = sum(s.deduped_count for s in metrics_by_source.values())
+        logger.info(
+            "Collection complete: pushed %d new, skipped %d deduped (of %d ranked) to %s",
+            pushed_total,
+            deduped_total,
+            len(merged),
+            edge_url,
         )
-        logger.info("Persisted %d CollectorRunLog telemetry rows", persisted)
-    except Exception as exc:
-        logger.warning("Failed persisting CollectorRunLog rows: %s", exc)
+
+        try:
+            persisted = await asyncio.to_thread(
+                persist_collector_run_logs_sync,
+                metrics_by_source,
+                run_timestamp,
+            )
+            logger.info("Persisted %d CollectorRunLog telemetry rows", persisted)
+        except Exception as exc:
+            logger.warning("Failed persisting CollectorRunLog rows: %s", exc)
+    finally:
+        await _clear_collect_running_marker()
 
     return metrics_by_source
 

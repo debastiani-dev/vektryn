@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+import json
 import logging
 from typing import Any
 
@@ -9,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 COLLECT_COOLDOWN_KEY = "vektryn:system:collect_cooldown"
 COLLECT_COOLDOWN_SECONDS = 300
+COLLECT_RUNNING_KEY = "vektryn:system:collect_running"
+COLLECT_RUNNING_TTL_SECONDS = 900
 METADATA_TOKEN_URL = (
     "http://metadata.google.internal/computeMetadata/v1/"
     "instance/service-accounts/default/token"
@@ -53,6 +57,56 @@ def get_collect_cooldown_remaining() -> int:
     except Exception as exc:
         logger.debug("Failed checking collector cooldown TTL: %s", exc)
         return 0
+
+
+def _parse_running_started_at(raw: str) -> datetime | None:
+    try:
+        parsed = json.loads(raw)
+        iso_val = parsed.get("started_at") if isinstance(parsed, dict) else None
+        if not isinstance(iso_val, str) or not iso_val:
+            return None
+        dt = datetime.fromisoformat(iso_val.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_collect_running_state(
+    last_collect_at: datetime | None = None,
+) -> tuple[bool, str | None]:
+    client = _get_redis_client()
+    if client is None:
+        return False, None
+    try:
+        raw = client.get(COLLECT_RUNNING_KEY)
+        if not isinstance(raw, str) or not raw:
+            return False, None
+        started_at = _parse_running_started_at(raw)
+        if started_at is None:
+            return True, None
+        if last_collect_at is not None and last_collect_at >= started_at:
+            client.delete(COLLECT_RUNNING_KEY)
+            return False, None
+        return True, started_at.isoformat()
+    except Exception as exc:
+        logger.debug("Failed checking collector running marker: %s", exc)
+        return False, None
+
+
+def _mark_collect_running(started_at: datetime, execution_id: str | None) -> None:
+    client = _get_redis_client()
+    if client is None:
+        return
+    try:
+        client.set(
+            COLLECT_RUNNING_KEY,
+            json.dumps(
+                {"started_at": started_at.isoformat(), "execution_id": execution_id}
+            ),
+            ex=COLLECT_RUNNING_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.debug("Failed writing collector running marker: %s", exc)
 
 
 def _acquire_collect_cooldown() -> bool:
@@ -186,20 +240,24 @@ def trigger_collector_sync() -> dict[str, Any]:
     ingest_api_key = (getattr(settings, "INGEST_API_KEY", "") or "").strip()
 
     try:
+        started_at = datetime.now(UTC)
         if project_id and job_name:
-            return _trigger_cloud_run_job(
+            result = _trigger_cloud_run_job(
                 project_id=project_id,
                 region=region,
                 job_name=job_name,
             )
-        if stream_edge_url:
-            return _trigger_local_stream_edge(
+        elif stream_edge_url:
+            result = _trigger_local_stream_edge(
                 stream_edge_url=stream_edge_url,
                 ingest_api_key=ingest_api_key,
             )
-        raise CollectTriggerError(
-            "Collector trigger is not configured (set GCP_PROJECT_ID + COLLECTOR_JOB_NAME or STREAM_EDGE_URL)."
-        )
+        else:
+            raise CollectTriggerError(
+                "Collector trigger is not configured (set GCP_PROJECT_ID + COLLECTOR_JOB_NAME or STREAM_EDGE_URL)."
+            )
+        _mark_collect_running(started_at, result.get("execution_id"))
+        return result
     except CollectTriggerError:
         if lock_acquired:
             _release_collect_cooldown()
