@@ -1,5 +1,7 @@
 import type {
     ApplicationLead,
+    ChangePasswordInput,
+    ChangePasswordResponse,
     ContractType,
     CurrentUser,
     DismissedJob,
@@ -39,27 +41,55 @@ export class ApiError extends Error {
     readonly status: number;
     readonly detail: string | null;
     readonly retryAfterSeconds: number | null;
+    readonly fieldErrors: Record<string, string[]>;
 
     constructor(
         status: number,
         bodyText: string,
         detail: string | null,
         retryAfterSeconds: number | null,
+        fieldErrors: Record<string, string[]> = {},
     ) {
         super(`API ${status}: ${bodyText}`);
         this.name = "ApiError";
         this.status = status;
         this.detail = detail;
         this.retryAfterSeconds = retryAfterSeconds;
+        this.fieldErrors = fieldErrors;
     }
+}
+
+function parseFieldErrors(parsed: Record<string, unknown>): Record<string, string[]> {
+    const fieldErrors: Record<string, string[]> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+        if (key === "detail" || key === "retry_after_seconds") {
+            continue;
+        }
+        if (Array.isArray(value)) {
+            const messages = value
+                .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                .map((item) => item.trim());
+            if (messages.length > 0) {
+                fieldErrors[key] = messages;
+            }
+        } else if (typeof value === "string" && value.trim()) {
+            fieldErrors[key] = [value.trim()];
+        }
+    }
+    return fieldErrors;
 }
 
 function parseApiErrorMetadata(
     bodyText: string,
     retryAfterHeader: string | null,
-): { detail: string | null; retryAfterSeconds: number | null } {
+): {
+    detail: string | null;
+    retryAfterSeconds: number | null;
+    fieldErrors: Record<string, string[]>;
+} {
     let detail: string | null = null;
     let retryAfterSeconds: number | null = null;
+    let fieldErrors: Record<string, string[]> = {};
 
     if (retryAfterHeader) {
         const parsedHeader = Number.parseInt(retryAfterHeader, 10);
@@ -80,11 +110,48 @@ function parseApiErrorMetadata(
         ) {
             retryAfterSeconds = Math.ceil(parsed.retry_after_seconds);
         }
+        fieldErrors = parseFieldErrors(parsed);
+        if (!detail && fieldErrors.non_field_errors?.length) {
+            detail = fieldErrors.non_field_errors[0];
+        }
     } catch {
         // Non-JSON error body; fall back to header metadata only.
     }
 
-    return { detail, retryAfterSeconds };
+    return { detail, retryAfterSeconds, fieldErrors };
+}
+
+type SessionExpiredHandler = () => void;
+
+let sessionExpiredHandler: SessionExpiredHandler | null = null;
+
+const SESSION_EXPIRY_IGNORED_PREFIXES = [
+    "/api/v1/auth/login/",
+    "/api/v1/auth/csrf/",
+    "/api/v1/auth/logout/",
+    "/api/v1/auth/me/",
+];
+
+export function registerSessionExpiredHandler(handler: SessionExpiredHandler | null): () => void {
+    sessionExpiredHandler = handler;
+    return () => {
+        if (sessionExpiredHandler === handler) {
+            sessionExpiredHandler = null;
+        }
+    };
+}
+
+function isSessionExpiredResponse(path: string, status: number, detail: string | null): boolean {
+    if (SESSION_EXPIRY_IGNORED_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+        return false;
+    }
+    if (status === 401) {
+        return true;
+    }
+    if (status === 403 && detail) {
+        return detail.toLowerCase().includes("authentication credentials were not provided");
+    }
+    return false;
 }
 
 function getCookie(name: string): string {
@@ -112,7 +179,16 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (!res.ok) {
         const bodyText = await res.text();
         const meta = parseApiErrorMetadata(bodyText, res.headers.get("Retry-After"));
-        throw new ApiError(res.status, bodyText, meta.detail, meta.retryAfterSeconds);
+        if (isSessionExpiredResponse(path, res.status, meta.detail)) {
+            sessionExpiredHandler?.();
+        }
+        throw new ApiError(
+            res.status,
+            bodyText,
+            meta.detail,
+            meta.retryAfterSeconds,
+            meta.fieldErrors,
+        );
     }
     if (res.status === 204) {
         return undefined as T;
@@ -206,6 +282,12 @@ export const vektrynApi = {
         }),
 
     getCurrentUser: () => apiFetch<CurrentUser>("/api/v1/auth/me/"),
+
+    changePassword: (payload: ChangePasswordInput) =>
+        apiFetch<ChangePasswordResponse>("/api/v1/auth/change-password/", {
+            method: "POST",
+            body: JSON.stringify(payload),
+        }),
 
     listJobs: (params = "") =>
         apiFetch<PaginatedResponse<JobPostingSummary>>(`/api/v1/jobs/${params}`),

@@ -235,6 +235,16 @@ export interface CurrentUser {
     stream_token: string;
 }
 
+export interface ChangePasswordInput {
+    current_password: string;
+    new_password: string;
+    confirm_password?: string;
+}
+
+export interface ChangePasswordResponse {
+    detail: string;
+}
+
 export interface ResumeProfile {
     uuid: string;
     label: string;

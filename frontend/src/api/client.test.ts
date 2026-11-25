@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaginatedResponse } from "../types/models";
-import { ApiError, fetchAllPages, fetchAllPagesWithCount, vektrynApi } from "./client";
+import {
+    ApiError,
+    fetchAllPages,
+    fetchAllPagesWithCount,
+    registerSessionExpiredHandler,
+    vektrynApi,
+} from "./client";
 
 describe("fetchAllPages", () => {
     it("follows DRF pagination until next is null while preserving query params", async () => {
@@ -722,5 +728,118 @@ describe("vektrynApi", () => {
         expect((fetchMock.mock.calls[0] as [string])[0]).toBe(
             "/api/v1/analytics/personal/?days=90&resume_profile=res-1",
         );
+    });
+
+    it("rotates password with CSRF token and parses 400 fieldErrors and 429 login lockout", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=auth-csrf" });
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify({ detail: "Password updated successfully." }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        current_password: ["Current password is incorrect."],
+                        new_password: ["This password is too common."],
+                    }),
+                    { status: 400, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        detail: "Too many failed login attempts. Try again in 900s.",
+                        retry_after_seconds: 900,
+                    }),
+                    {
+                        status: 429,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Retry-After": "900",
+                        },
+                    },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const okRes = await vektrynApi.changePassword({
+            current_password: "OldPassword!1",
+            new_password: "NewPassword!2",
+            confirm_password: "NewPassword!2",
+        });
+        expect(okRes.detail).toBe("Password updated successfully.");
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe("/api/v1/auth/change-password/");
+        expect(init.method).toBe("POST");
+        expect((init.headers as Headers).get("X-CSRFToken")).toBe("auth-csrf");
+
+        try {
+            await vektrynApi.changePassword({
+                current_password: "wrong",
+                new_password: "password",
+            });
+            expect.unreachable("Expected 400 ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            const apiErr = err as ApiError;
+            expect(apiErr.status).toBe(400);
+            expect(apiErr.fieldErrors.current_password).toEqual([
+                "Current password is incorrect.",
+            ]);
+            expect(apiErr.fieldErrors.new_password).toEqual(["This password is too common."]);
+        }
+
+        try {
+            await vektrynApi.login("alice", "wrong");
+            expect.unreachable("Expected 429 ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            const apiErr = err as ApiError;
+            expect(apiErr.status).toBe(429);
+            expect(apiErr.retryAfterSeconds).toBe(900);
+        }
+    });
+
+    it("triggers session-expired handler on unauthenticated 403 but not staff-permission 403 or auth/me", async () => {
+        const onExpired = vi.fn();
+        const unregister = registerSessionExpiredHandler(onExpired);
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({ detail: "You do not have permission to perform this action." }),
+                    { status: 403, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({ detail: "Authentication credentials were not provided." }),
+                    { status: 403, headers: { "Content-Type": "application/json" } },
+                ),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({ detail: "Authentication credentials were not provided." }),
+                    { status: 403, headers: { "Content-Type": "application/json" } },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            await expect(vektrynApi.listDlqMessages()).rejects.toBeInstanceOf(ApiError);
+            expect(onExpired).not.toHaveBeenCalled();
+
+            await expect(vektrynApi.getCurrentUser()).rejects.toBeInstanceOf(ApiError);
+            expect(onExpired).not.toHaveBeenCalled();
+
+            await expect(vektrynApi.listNotifications()).rejects.toBeInstanceOf(ApiError);
+            expect(onExpired).toHaveBeenCalledTimes(1);
+        } finally {
+            unregister();
+        }
     });
 });

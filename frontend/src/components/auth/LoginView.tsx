@@ -1,20 +1,56 @@
-import { Lock, LogIn, Radar } from "lucide-react";
-import { type FormEvent, useState } from "react";
-import { vektrynApi } from "../../api/client";
+import { Clock, Info, Lock, LogIn, Radar, ShieldAlert } from "lucide-react";
+import { type SubmitEvent, useEffect, useState } from "react";
+import { ApiError, vektrynApi } from "../../api/client";
 import type { CurrentUser } from "../../types/models";
 
 interface LoginViewProps {
     onAuthenticated: (user: CurrentUser) => void;
+    sessionNotice?: string | null;
 }
 
-export function LoginView({ onAuthenticated }: Readonly<LoginViewProps>) {
+function formatCooldown(totalSeconds: number): string {
+    const safe = Math.max(0, Math.ceil(totalSeconds));
+    const minutes = Math.floor(safe / 60);
+    const seconds = safe % 60;
+    if (minutes === 0) {
+        return `${seconds}s`;
+    }
+    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+export function LoginView({
+    onAuthenticated,
+    sessionNotice = null,
+}: Readonly<LoginViewProps>) {
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [cooldownSeconds, setCooldownSeconds] = useState(0);
 
-    async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    useEffect(() => {
+        if (cooldownSeconds <= 0) {
+            return;
+        }
+        const timer = globalThis.setInterval(() => {
+            setCooldownSeconds((prev) => (prev <= 1 ? 0 : prev - 1));
+        }, 1000);
+        return () => globalThis.clearInterval(timer);
+    }, [cooldownSeconds]);
+
+    function handleUsernameChange(nextValue: string) {
+        setUsername(nextValue);
+        if (cooldownSeconds > 0) {
+            setCooldownSeconds(0);
+            setError(null);
+        }
+    }
+
+    async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
         event.preventDefault();
+        if (cooldownSeconds > 0) {
+            return;
+        }
         if (!username.trim() || !password) {
             setError("Enter both username and password.");
             return;
@@ -26,15 +62,33 @@ export function LoginView({ onAuthenticated }: Readonly<LoginViewProps>) {
             const user = await vektrynApi.login(username.trim(), password);
             onAuthenticated(user);
         } catch (err) {
-            const raw = err instanceof Error ? err.message : "";
-            if (raw.includes("API 401") || raw.includes("API 400")) {
-                setError("Invalid username or password.");
+            if (err instanceof ApiError) {
+                if (err.status === 429) {
+                    setCooldownSeconds(err.retryAfterSeconds ?? 60);
+                    setError(
+                        err.detail || "Too many failed login attempts. Please wait before retrying.",
+                    );
+                } else if (err.status === 401) {
+                    setError("Invalid username or password.");
+                } else if (err.status === 400) {
+                    setError(err.detail || "Enter both username and password.");
+                } else {
+                    setError(err.detail || "Sign in failed. Please try again.");
+                }
             } else {
-                setError(raw || "Sign in failed. Please try again.");
+                setError("Sign in failed. Please try again.");
             }
         } finally {
             setSubmitting(false);
         }
+    }
+
+    const isLockedOut = cooldownSeconds > 0;
+    let submitLabel = "Sign In";
+    if (isLockedOut) {
+        submitLabel = `Locked (${formatCooldown(cooldownSeconds)})`;
+    } else if (submitting) {
+        submitLabel = "Signing in...";
     }
 
     return (
@@ -54,8 +108,41 @@ export function LoginView({ onAuthenticated }: Readonly<LoginViewProps>) {
                     </div>
                 </div>
 
-                {error && (
-                    <div className="rounded-xl border border-red-500/30 bg-red-950/25 px-4 py-3 text-sm text-red-300">
+                {sessionNotice && !error && !isLockedOut && (
+                    <output className="flex items-start gap-2.5 rounded-xl border border-sky-500/35 bg-sky-950/30 px-4 py-3 text-xs text-sky-200">
+                        <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
+                        <span>{sessionNotice}</span>
+                    </output>
+                )}
+
+                {isLockedOut && (
+                    <div
+                        role="alert"
+                        className="flex items-start gap-3 rounded-xl border border-amber-500/35 bg-amber-950/30 px-4 py-3 text-sm text-amber-200"
+                    >
+                        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                        <div className="space-y-1">
+                            <p className="font-medium text-amber-100">
+                                Too many failed sign-in attempts
+                            </p>
+                            <p className="flex items-center gap-1.5 text-xs text-amber-300/90">
+                                <Clock className="h-3.5 w-3.5" />
+                                <span>
+                                    Try again in{" "}
+                                    <span className="font-mono font-semibold text-amber-100">
+                                        {formatCooldown(cooldownSeconds)}
+                                    </span>
+                                </span>
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {!isLockedOut && error && (
+                    <div
+                        role="alert"
+                        className="rounded-xl border border-red-500/30 bg-red-950/25 px-4 py-3 text-sm text-red-300"
+                    >
                         {error}
                     </div>
                 )}
@@ -73,7 +160,7 @@ export function LoginView({ onAuthenticated }: Readonly<LoginViewProps>) {
                             type="text"
                             autoComplete="username"
                             value={username}
-                            onChange={(e) => setUsername(e.target.value)}
+                            onChange={(e) => handleUsernameChange(e.target.value)}
                             placeholder="admin"
                             className="w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
                         />
@@ -99,11 +186,11 @@ export function LoginView({ onAuthenticated }: Readonly<LoginViewProps>) {
 
                     <button
                         type="submit"
-                        disabled={submitting}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/25 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-60"
+                        disabled={submitting || isLockedOut}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/25 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         <LogIn className="h-4 w-4" />
-                        {submitting ? "Signing in..." : "Sign In"}
+                        {submitLabel}
                     </button>
                 </form>
 

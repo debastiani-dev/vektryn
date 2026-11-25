@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { vektrynApi } from "./api/client";
+import { registerSessionExpiredHandler, vektrynApi } from "./api/client";
 import { StackTrendsView } from "./components/analytics/StackTrendsView";
 import { LoginView } from "./components/auth/LoginView";
 import { type ActiveTab, AppShell } from "./components/layout/AppShell";
@@ -16,6 +16,7 @@ export function App() {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
     const [pendingRadarSearch, setPendingRadarSearch] = useState("");
     const [user, setUser] = useState<CurrentUser | null>(null);
+    const [sessionNotice, setSessionNotice] = useState<string | null>(null);
     const [checkingSession, setCheckingSession] = useState(true);
     const [activeNotificationMatch, setActiveNotificationMatch] = useState<MatchScore | null>(null);
     const [openingMatchId, setOpeningMatchId] = useState<string | null>(null);
@@ -65,19 +66,38 @@ export function App() {
         };
     }, []);
 
+    const clearClientSessionState = useCallback(() => {
+        clearPendingImport();
+        setUser(null);
+        setActiveTab("radar");
+        setActiveNotificationMatch(null);
+        setSavedJobIds(new Set());
+    }, []);
+
+    useEffect(() => {
+        return registerSessionExpiredHandler(() => {
+            setSessionNotice(
+                "Your session ended (for example, after a password change or timeout). Please sign in again.",
+            );
+            clearClientSessionState();
+        });
+    }, [clearClientSessionState]);
+
+    const handleAuthenticated = useCallback((authenticatedUser: CurrentUser) => {
+        setSessionNotice(null);
+        setUser(authenticatedUser);
+    }, []);
+
     const handleLogout = useCallback(async () => {
         try {
             await vektrynApi.logout();
         } catch {
             // Clear local session regardless of server response
         } finally {
-            clearPendingImport();
-            setUser(null);
-            setActiveTab("radar");
-            setActiveNotificationMatch(null);
-            setSavedJobIds(new Set());
+            setSessionNotice(null);
+            clearClientSessionState();
         }
-    }, []);
+    }, [clearClientSessionState]);
 
     const handleSaveJobToTracker = useCallback(
         async (jobPostingUuid: string, resumeProfileUuid?: string | null) => {
@@ -171,7 +191,7 @@ export function App() {
     }
 
     if (!user) {
-        return <LoginView onAuthenticated={setUser} />;
+        return <LoginView onAuthenticated={handleAuthenticated} sessionNotice={sessionNotice} />;
     }
 
     const activeMatchJobId = activeNotificationMatch?.job_posting.uuid ?? "";
