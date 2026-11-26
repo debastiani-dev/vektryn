@@ -11,6 +11,12 @@
     font-family: var(--font-sans);
   }
 
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
   body {
     background-color: var(--color-zinc-950);
     color: var(--color-zinc-100);
