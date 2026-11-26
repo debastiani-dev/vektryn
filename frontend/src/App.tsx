@@ -1,102 +1,202 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { registerSessionExpiredHandler, vektrynApi } from "./api/client";
-import { StackTrendsView } from "./components/analytics/StackTrendsView";
-import { LoginView } from "./components/auth/LoginView";
-import { type ActiveTab, AppShell } from "./components/layout/AppShell";
-import { GapAnalysisDrawer } from "./components/radar/GapAnalysisDrawer";
-import { JobRadarView } from "./components/radar/JobRadarView";
-import { ResumesView } from "./components/resumes/ResumesView";
-import { PipelineTrackerView } from "./components/tracker/PipelineTrackerView";
-import { useNotifications } from "./hooks/useNotifications";
-import type {
-    CurrentUser,
-    MatchScore,
-    NotificationItem,
-    UserProfileDetail,
-} from "./types/models";
-import { extractPayloadString } from "./utils/notifications";
+import { LandingPage } from "./components/landing/LandingPage";
+import type { CurrentUser, UserProfileDetail } from "./types/models";
 import { clearPendingImport } from "./utils/pendingImportStorage";
+import {
+    type AppRoute,
+    isRouteTransition,
+    normalizeRoute,
+    resolveInitialRoute,
+    shouldHydrateSessionOnBoot,
+} from "./utils/routing";
 import { syncSentryUser } from "./utils/sentry";
+import { clearSessionHint, hasSessionHint, setSessionHint } from "./utils/sessionHint";
+
+const LoginView = lazy(() => import("./components/auth/LoginView"));
+const AuthenticatedWorkspace = lazy(
+    () => import("./components/layout/AuthenticatedWorkspace"),
+);
+
+function DarkRouteFallback() {
+    return (
+        <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-sm text-zinc-500">
+            Loading...
+        </div>
+    );
+}
+
+interface BootSnapshot {
+    route: AppRoute;
+    needsPathNormalize: boolean;
+    shouldHydrate: boolean;
+}
+
+function captureBootSnapshot(): BootSnapshot {
+    const { route, needsPathNormalize } = resolveInitialRoute();
+    const shouldHydrate = shouldHydrateSessionOnBoot(route, hasSessionHint());
+    return { route, needsPathNormalize, shouldHydrate };
+}
 
 export function App() {
-    const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
-    const [pendingRadarSearch, setPendingRadarSearch] = useState("");
+    const [boot] = useState<BootSnapshot>(captureBootSnapshot);
+    const [route, setRoute] = useState<AppRoute>(boot.route);
     const [user, setUser] = useState<CurrentUser | null>(null);
     const [sessionNotice, setSessionNotice] = useState<string | null>(null);
-    const [checkingSession, setCheckingSession] = useState(true);
-    const [activeNotificationMatch, setActiveNotificationMatch] = useState<MatchScore | null>(null);
-    const [openingMatchId, setOpeningMatchId] = useState<string | null>(null);
-    const [savingJobId, setSavingJobId] = useState<string | null>(null);
-    const [savedJobIds, setSavedJobIds] = useState<Set<string>>(() => new Set());
+    const [hasCheckedSession, setHasCheckedSession] = useState(false);
 
-    const {
-        notifications,
-        unreadCount,
-        filter,
-        setFilter,
-        hasMore,
-        loading,
-        loadingMore,
-        error,
-        refresh,
-        loadMore,
-        markRead,
-        dismiss,
-        markAllRead,
-        toasts,
-        dismissToast,
-        sseConnected,
-    } = useNotifications(user?.stream_token ?? null);
+    const routeRef = useRef<AppRoute>(route);
+    const userRef = useRef<CurrentUser | null>(user);
+    const sessionCheckInFlightRef = useRef(false);
 
     useEffect(() => {
-        let cancelled = false;
-        async function fetchSession() {
-            try {
-                const me = await vektrynApi.getCurrentUser();
-                if (!cancelled) {
-                    setUser(me);
-                }
-            } catch {
-                if (!cancelled) {
-                    setUser(null);
-                }
-            } finally {
-                if (!cancelled) {
-                    setCheckingSession(false);
-                }
-            }
-        }
-        void fetchSession();
-        return () => {
-            cancelled = true;
-        };
-    }, []);
-
-    const clearClientSessionState = useCallback(() => {
-        clearPendingImport();
-        setUser(null);
-        setActiveTab("radar");
-        setActiveNotificationMatch(null);
-        setSavedJobIds(new Set());
-    }, []);
+        routeRef.current = route;
+    }, [route]);
 
     useEffect(() => {
+        userRef.current = user;
         syncSentryUser(user);
     }, [user]);
 
+    const navigate = useCallback((nextRoute: AppRoute, options?: { replace?: boolean }) => {
+        const previousRoute = routeRef.current;
+        if (typeof globalThis.window !== "undefined") {
+            const currentNormalized = normalizeRoute(globalThis.window.location.pathname);
+            if (currentNormalized !== nextRoute) {
+                if (options?.replace) {
+                    globalThis.window.history.replaceState(null, "", nextRoute);
+                } else {
+                    globalThis.window.history.pushState(null, "", nextRoute);
+                }
+            }
+            if (previousRoute !== nextRoute) {
+                globalThis.window.scrollTo(0, 0);
+            }
+        }
+        routeRef.current = nextRoute;
+        setRoute(nextRoute);
+    }, []);
+
+    useEffect(() => {
+        if (typeof globalThis.window === "undefined") {
+            return;
+        }
+        if (boot.needsPathNormalize) {
+            const hash = globalThis.window.location.hash || "";
+            globalThis.window.history.replaceState(null, "", `${boot.route}${hash}`);
+        }
+
+        function handlePopState() {
+            const rawPath = globalThis.window.location.pathname;
+            if (!isRouteTransition(routeRef.current, rawPath)) {
+                return;
+            }
+            const nextRoute = normalizeRoute(rawPath);
+            routeRef.current = nextRoute;
+            setRoute(nextRoute);
+            if (!globalThis.window.location.hash) {
+                globalThis.window.scrollTo(0, 0);
+            }
+        }
+
+        globalThis.window.addEventListener("popstate", handlePopState);
+        return () => globalThis.window.removeEventListener("popstate", handlePopState);
+    }, [boot.needsPathNormalize, boot.route]);
+
+    const needsSessionCheck =
+        !hasCheckedSession && !user && (boot.shouldHydrate || route === "/login" || route === "/app");
+
+    useEffect(() => {
+        if (!needsSessionCheck || sessionCheckInFlightRef.current) {
+            return;
+        }
+        let cancelled = false;
+        const autoRedirectHome = boot.shouldHydrate && boot.route === "/";
+        sessionCheckInFlightRef.current = true;
+
+        async function fetchSession() {
+            try {
+                const me = await vektrynApi.getCurrentUser();
+                if (cancelled) {
+                    return;
+                }
+                setSessionHint();
+                setUser(me);
+                const current = routeRef.current;
+                if (current === "/login" || (autoRedirectHome && current === "/")) {
+                    navigate("/app", { replace: true });
+                }
+            } catch {
+                if (cancelled) {
+                    return;
+                }
+                clearSessionHint();
+                setUser(null);
+                if (routeRef.current === "/app") {
+                    navigate("/login", { replace: true });
+                }
+            } finally {
+                sessionCheckInFlightRef.current = false;
+                if (!cancelled) {
+                    setHasCheckedSession(true);
+                }
+            }
+        }
+
+        void fetchSession();
+        return () => {
+            cancelled = true;
+            sessionCheckInFlightRef.current = false;
+        };
+    }, [needsSessionCheck, boot.shouldHydrate, boot.route, navigate]);
+
+    let effectiveRoute: AppRoute = route;
+    if (route === "/login" && user) {
+        effectiveRoute = "/app";
+    } else if (route === "/app" && !user && hasCheckedSession) {
+        effectiveRoute = "/login";
+    }
+
+    useEffect(() => {
+        if (typeof globalThis.window === "undefined") {
+            return;
+        }
+        const currentNormalized = normalizeRoute(globalThis.window.location.pathname);
+        if (currentNormalized !== effectiveRoute) {
+            globalThis.window.history.replaceState(null, "", effectiveRoute);
+            routeRef.current = effectiveRoute;
+        }
+    }, [effectiveRoute]);
+
+    const clearClientSessionState = useCallback(() => {
+        clearSessionHint();
+        clearPendingImport();
+        setUser(null);
+    }, []);
+
     useEffect(() => {
         return registerSessionExpiredHandler(() => {
+            if (!userRef.current) {
+                return;
+            }
             setSessionNotice(
                 "Your session ended (for example, after a password change or timeout). Please sign in again.",
             );
             clearClientSessionState();
+            navigate("/login", { replace: true });
         });
-    }, [clearClientSessionState]);
+    }, [clearClientSessionState, navigate]);
 
-    const handleAuthenticated = useCallback((authenticatedUser: CurrentUser) => {
-        setSessionNotice(null);
-        setUser(authenticatedUser);
-    }, []);
+    const handleAuthenticated = useCallback(
+        (authenticatedUser: CurrentUser) => {
+            setSessionHint();
+            setSessionNotice(null);
+            setUser(authenticatedUser);
+            setHasCheckedSession(true);
+            navigate("/app");
+        },
+        [navigate],
+    );
 
     const handleUserProfileSaved = useCallback((updatedProfile: UserProfileDetail) => {
         setUser((prev) => {
@@ -115,183 +215,61 @@ export function App() {
     }, []);
 
     const handleAccountDeactivated = useCallback(() => {
-        setSessionNotice(
-            "Your account has been deactivated and all active sessions were signed out.",
-        );
+        setSessionNotice(null);
         clearClientSessionState();
-    }, [clearClientSessionState]);
+        navigate("/", { replace: true });
+    }, [clearClientSessionState, navigate]);
 
     const handleLogout = useCallback(async () => {
         try {
             await vektrynApi.logout();
         } catch {
-            // Clear local session regardless of server response
+            // Clear local session regardless of server response.
         } finally {
             setSessionNotice(null);
             clearClientSessionState();
+            navigate("/", { replace: true });
         }
-    }, [clearClientSessionState]);
+    }, [clearClientSessionState, navigate]);
 
-    const handleSaveJobToTracker = useCallback(
-        async (jobPostingUuid: string, resumeProfileUuid?: string | null) => {
-            setSavingJobId(jobPostingUuid);
-            try {
-                await vektrynApi.createLead({
-                    job_posting: jobPostingUuid,
-                    resume_profile: resumeProfileUuid ?? null,
-                    status: "saved",
-                    priority: "medium",
-                });
-                setSavedJobIds((prev) => new Set(prev).add(jobPostingUuid));
-            } catch (err) {
-                const message = err instanceof Error ? err.message.toLowerCase() : "";
-                if (message.includes("already") || message.includes("unique")) {
-                    setSavedJobIds((prev) => new Set(prev).add(jobPostingUuid));
-                }
-            } finally {
-                setSavingJobId(null);
-            }
-        },
-        [],
-    );
-
-    const handleOpenGapFromNotification = useCallback(
-        async (item: NotificationItem) => {
-            const matchUuid = extractPayloadString(item, "match_score_uuid");
-            if (!matchUuid) return;
-            setOpeningMatchId(matchUuid);
-            try {
-                const match = await vektrynApi.getMatch(matchUuid);
-                setActiveNotificationMatch(match);
-                if (!item.is_read) {
-                    void markRead(item.uuid);
-                }
-            } finally {
-                setOpeningMatchId(null);
-            }
-        },
-        [markRead],
-    );
-
-    const handleSaveFromNotification = useCallback(
-        (item: NotificationItem) => {
-            const jobUuid = extractPayloadString(item, "job_posting_uuid");
-            if (!jobUuid) return;
-            const resumeUuid = extractPayloadString(item, "resume_profile_uuid");
-            void handleSaveJobToTracker(jobUuid, resumeUuid);
-            if (!item.is_read) {
-                void markRead(item.uuid);
-            }
-        },
-        [handleSaveJobToTracker, markRead],
-    );
-
-    const handleOpenTrackerFromNotification = useCallback(
-        (item: NotificationItem) => {
-            setActiveTab("tracker");
-            if (!item.is_read) {
-                void markRead(item.uuid);
-            }
-        },
-        [markRead],
-    );
-
-    const handleOpenRadarFromNotification = useCallback(
-        (item: NotificationItem) => {
-            setActiveTab("radar");
-            if (!item.is_read) {
-                void markRead(item.uuid);
-            }
-        },
-        [markRead],
-    );
-
-    const handleSearchSkillInRadar = useCallback((skill: string) => {
-        setPendingRadarSearch(skill);
-        setActiveTab("radar");
-    }, []);
-
-    const handleConsumeRadarSearch = useCallback(() => {
-        setPendingRadarSearch("");
-    }, []);
-
-    if (checkingSession) {
+    if (effectiveRoute === "/") {
         return (
-            <div className="flex min-h-screen items-center justify-center text-sm text-zinc-500">
-                Checking session...
-            </div>
+            <LandingPage
+                isAuthenticated={user !== null}
+                onSignIn={() => navigate("/login")}
+                onOpenWorkspace={() => navigate("/app")}
+            />
+        );
+    }
+
+    if (effectiveRoute === "/login") {
+        if (needsSessionCheck) {
+            return <DarkRouteFallback />;
+        }
+        return (
+            <Suspense fallback={<DarkRouteFallback />}>
+                <LoginView
+                    onAuthenticated={handleAuthenticated}
+                    onBackToHome={() => navigate("/")}
+                    sessionNotice={sessionNotice}
+                />
+            </Suspense>
         );
     }
 
     if (!user) {
-        return <LoginView onAuthenticated={handleAuthenticated} sessionNotice={sessionNotice} />;
+        return <DarkRouteFallback />;
     }
 
-    const activeMatchJobId = activeNotificationMatch?.job_posting.uuid ?? "";
-    const defaultCopilotTone = user.profile?.default_copilot_tone ?? "balanced";
-
     return (
-        <>
-            <AppShell
-                activeTab={activeTab}
-                onSelectTab={setActiveTab}
+        <Suspense fallback={<DarkRouteFallback />}>
+            <AuthenticatedWorkspace
                 user={user}
                 onUserProfileSaved={handleUserProfileSaved}
                 onAccountDeactivated={handleAccountDeactivated}
-                onLogout={() => void handleLogout()}
-                sseConnected={sseConnected}
-                alerts={toasts}
-                onDismissAlert={dismissToast}
-                notificationCenter={{
-                    notifications,
-                    unreadCount,
-                    filter,
-                    hasMore,
-                    loading,
-                    loadingMore,
-                    error,
-                    openingMatchId,
-                    savingJobId,
-                    savedJobIds,
-                    onFilterChange: setFilter,
-                    onRefresh: () => void refresh(),
-                    onLoadMore: () => void loadMore(),
-                    onMarkRead: (uuid) => void markRead(uuid),
-                    onDismiss: (uuid) => void dismiss(uuid),
-                    onMarkAllRead: () => void markAllRead(),
-                    onOpenGapDetails: (item) => void handleOpenGapFromNotification(item),
-                    onSaveToTracker: handleSaveFromNotification,
-                    onOpenTracker: handleOpenTrackerFromNotification,
-                    onOpenRadar: handleOpenRadarFromNotification,
-                }}
-            >
-                {activeTab === "radar" && (
-                    <JobRadarView
-                        initialSearch={pendingRadarSearch}
-                        onConsumeInitialSearch={handleConsumeRadarSearch}
-                        defaultCopilotTone={defaultCopilotTone}
-                    />
-                )}
-                {activeTab === "tracker" && (
-                    <PipelineTrackerView defaultCopilotTone={defaultCopilotTone} />
-                )}
-                {activeTab === "analytics" && (
-                    <StackTrendsView onSearchSkillInRadar={handleSearchSkillInRadar} />
-                )}
-                {activeTab === "resumes" && <ResumesView />}
-            </AppShell>
-
-            <GapAnalysisDrawer
-                match={activeNotificationMatch}
-                defaultCopilotTone={defaultCopilotTone}
-                saving={activeMatchJobId !== "" && savingJobId === activeMatchJobId}
-                saved={activeMatchJobId !== "" && savedJobIds.has(activeMatchJobId)}
-                onClose={() => setActiveNotificationMatch(null)}
-                onSaveLead={(match) =>
-                    void handleSaveJobToTracker(match.job_posting.uuid, match.resume_profile_uuid)
-                }
+                onLogout={handleLogout}
             />
-        </>
+        </Suspense>
     );
 }
 

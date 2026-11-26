@@ -1,10 +1,11 @@
-import { Clock, Info, Lock, LogIn, Radar, ShieldAlert } from "lucide-react";
-import { type SubmitEvent, useEffect, useState } from "react";
+import { ArrowLeft, Clock, Info, Lock, LogIn, Radar, ShieldAlert } from "lucide-react";
+import { type MouseEvent, type SubmitEvent, useEffect, useState } from "react";
 import { ApiError, vektrynApi } from "../../api/client";
 import type { CurrentUser } from "../../types/models";
 
 interface LoginViewProps {
     onAuthenticated: (user: CurrentUser) => void;
+    onBackToHome?: () => void;
     sessionNotice?: string | null;
 }
 
@@ -20,6 +21,7 @@ function formatCooldown(totalSeconds: number): string {
 
 export function LoginView({
     onAuthenticated,
+    onBackToHome,
     sessionNotice = null,
 }: Readonly<LoginViewProps>) {
     const [username, setUsername] = useState("");
@@ -91,9 +93,37 @@ export function LoginView({
         submitLabel = "Signing in...";
     }
 
+    function handleBackClick(event: MouseEvent<HTMLAnchorElement>) {
+        if (
+            !onBackToHome ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey ||
+            event.button !== 0
+        ) {
+            return;
+        }
+        event.preventDefault();
+        onBackToHome();
+    }
+
     return (
         <div className="flex min-h-screen items-center justify-center px-6 py-12 text-zinc-100">
             <div className="w-full max-w-md space-y-6 rounded-2xl border border-zinc-800/90 bg-zinc-900/70 p-8 shadow-2xl ring-1 ring-inset ring-white/[0.04] backdrop-blur-md">
+                {onBackToHome && (
+                    <div>
+                        <a
+                            href="/"
+                            onClick={handleBackClick}
+                            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg text-xs font-medium text-zinc-400 transition hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                        >
+                            <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                            <span>Back to Vektryn</span>
+                        </a>
+                    </div>
+                )}
+
                 <div className="flex flex-col items-center space-y-3 text-center">
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/25 to-fuchsia-500/15 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/15">
                         <Radar className="h-6 w-6 text-violet-300" />
@@ -202,3 +232,5 @@ export function LoginView({
         </div>
     );
 }
+
+export default LoginView;
