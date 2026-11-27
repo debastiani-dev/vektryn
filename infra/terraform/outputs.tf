@@ -52,3 +52,8 @@ output "data_node_instance" {
   description = "GCE instance name and zone for IAP SSH access"
   value       = "${module.data_node.instance_name} (${module.data_node.instance_zone})"
 }
+
+output "db_backups_bucket" {
+  description = "Private GCS bucket storing 14-day daily pg_dump backups"
+  value       = module.storage.db_backups_bucket_name
+}

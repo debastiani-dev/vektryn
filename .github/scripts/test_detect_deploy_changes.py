@@ -91,6 +91,17 @@ def test_terraform_only_change_skips_builds():
     assert plan.build_matrix == []
 
 
+def test_backup_script_change_triggers_terraform_and_data_node_refresh():
+    plan = classify_changes(
+        ["infra/terraform/modules/data_node/backup-postgres.sh"],
+        event_name="push",
+    )
+    assert plan.terraform is True
+    assert plan.worker_refresh is True
+    assert plan.has_builds is False
+    assert plan.has_deploy_work is True
+
+
 def test_test_only_and_docs_push_short_circuits_as_noop():
     plan = classify_changes(
         [

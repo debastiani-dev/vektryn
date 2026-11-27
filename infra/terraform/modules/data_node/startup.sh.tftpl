@@ -69,6 +69,7 @@ INGEST_API_KEY=$INGEST_API_KEY
 STREAM_AUTH_SECRET=$STREAM_AUTH_SECRET
 STORAGE_BACKEND=gcs
 GCS_SNAPSHOTS_BUCKET=${snapshots_bucket_name}
+GCS_DB_BACKUPS_BUCKET=${db_backups_bucket_name}
 SENTRY_DSN=$SENTRY_DSN
 SENTRY_ENVIRONMENT=production
 SENTRY_TRACES_SAMPLE_RATE=0.0
@@ -201,3 +202,39 @@ EOF
 cd /opt/vektryn
 docker compose pull enrichment-worker matcher-worker || true
 docker compose up -d
+
+# 4. Install daily PostgreSQL pg_dump backup script + systemd timer (05:00 UTC -> private GCS bucket, 14-day lifecycle)
+printf '%s' '${backup_script_b64}' | base64 -d > /opt/vektryn/backup-postgres.sh
+chmod 750 /opt/vektryn/backup-postgres.sh
+
+cat > /etc/systemd/system/vektryn-pg-backup.service <<'UNIT_EOF'
+[Unit]
+Description=Vektryn daily PostgreSQL pg_dump backup to private GCS bucket
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/vektryn/backup-postgres.sh
+Nice=19
+IOSchedulingClass=idle
+StandardOutput=journal
+StandardError=journal
+UNIT_EOF
+
+cat > /etc/systemd/system/vektryn-pg-backup.timer <<'TIMER_EOF'
+[Unit]
+Description=Run Vektryn daily PostgreSQL backup at 05:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+Unit=vektryn-pg-backup.service
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+systemctl daemon-reload
+systemctl enable --now vektryn-pg-backup.timer

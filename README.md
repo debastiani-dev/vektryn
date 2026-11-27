@@ -28,9 +28,9 @@
 | **Two-Stage Semantic Scoring & Rescoring** | Stage 1 `pgvector` HNSW cosine similarity filters candidate roles before Stage 2 structured Gemini fit/gap evaluation (`0–100 fit_score`, `matched_skills`, `missing_keywords`, `talking_points`, `gap_summary`), with `resume_content_hash` stale detection (`is_stale`) and automatic/on-demand retroactive rescoring via `jobs.rescore`. |
 | **Hybrid Keyword + Semantic Search** | Combines trigger-maintained PostgreSQL `tsvector` full-text search (GIN-indexed across `title`, `company_name`, `tech_stack`, `description_clean`) with `pgvector` HNSW cosine similarity via Reciprocal Rank Fusion (`RRF`, `k=60`), Redis-cached `gemini-embedding-001` query embeddings, graceful keyword-only fallback, and composable structured filters. |
 | **Radar Triage & Saved Filter Presets** | Per-user role dismissal (`DismissedJob`), normalized company muting (`MutedCompany`) with quick undo, `Unapplied Only` (`untracked_only`) filtering applied ahead of Hybrid RRF search and KPIs, and one-click named `SavedFilter` presets (`/api/v1/jobs/filters/`). |
-| **On-Demand AI Application Copilot** | Generates ready-to-use Markdown application drafts (`tailored_bullets`, `cover_letter`, `recruiter_outreach`, `interview_questions`) strictly on demand via Gemini, grounded in saved `UserProfile` identity/links, cached in PostgreSQL (`MatchArtifact`) per `(match_score, kind, resume_content_hash)`, with tone/guidance controls and per-user Redis rate limiting. |
+| **On-Demand AI Application Copilot** | Generates ready-to-use Markdown application drafts (`tailored_bullets`, `cover_letter`, `recruiter_outreach`, `interview_questions`, `questions_to_ask`) strictly on demand via BYOK Gemini, grounded in saved `UserProfile` identity/links, cached in PostgreSQL (`MatchArtifact`) per `(match_score, kind, resume_content_hash)`, with tone/guidance controls and per-user Redis rate limiting. |
 | **Kanban Tracker, Reminders & Export** | 8-stage Kanban pipeline (`discovered` → `saved` → `applied` → `screening` → `interviewing` → `offer` / `rejected` / `withdrawn`), scheduled `next_action_at` follow-up reminders (overdue highlights + automated `vektryn-lifecycle` alerts), and formula-safe CSV/JSON export (`/api/v1/leads/export/`). |
-| **Persistent Notification Center & SSE** | User-scoped PostgreSQL `Notification` inbox (`match_alert`, `tracked_job_closed`, `lead_followup_due`, `pipeline_error`, `rescore_completed`, `manual_import_ready`, `collector_sync_completed`) hydrated via REST and merged live with signed HMAC-SHA256 Server-Sent Events (`/stream/alerts` deduplicated by `notification_uuid`), plus daily 30-day retention pruning. |
+| **Persistent Notification Center & SSE** | User-scoped PostgreSQL `Notification` inbox (`match_alert`, `tracked_job_closed`, `lead_followup_due`, `pipeline_error`, `rescore_completed`, `manual_import_ready`, `collector_sync_completed`, `ai_quota_exhausted`, `ai_key_invalid`) hydrated via REST and merged live with signed HMAC-SHA256 Server-Sent Events (`/stream/alerts` deduplicated by `notification_uuid`), plus daily 30-day retention pruning. |
 | **Market & Personal Analytics** | Daily `StackTrendDaily` demand & normalized `median_annual_usd` benchmarks alongside PostgreSQL-aggregated user-scoped personal funnel conversion rates, channel performance (`ats_source` / `contract_type`), and recurring `missing_keywords` skill-gap charts with click-to-search jumps into `JobRadarView`. |
 | **In-App Pipeline Telemetry & DLQ Ops** | `PipelineStatusPopover` displays per-source `CollectorRunLog` metrics, backlog/rollup freshness, Redis-backed worker liveness heartbeats (`enrichment-worker`, `matcher-worker`), a staff manual collector trigger, and `DlqInspectorModal` for staff inspection, dry-run preview, topic-allowlisted replay, and dismissal of `jobs.dlq` messages. |
 | **Auth Hardening & Account Security** | Session authentication protected by proxy-aware Redis brute-force login throttling (`429 Too Many Requests` + `Retry-After`, fail-open resilience), self-service password rotation (`AUTH_PASSWORD_VALIDATORS` + `update_session_auth_hash`), and automatic SPA session-expiry handling. |
@@ -49,10 +49,10 @@ flowchart LR
         Jobs["Cloud Run Jobs\nvektryn-collect (4h)\nvektryn-rollup (1am)\nvektryn-lifecycle (3am)\nvektryn-migrate"]
     end
 
-    GCS[("Google Cloud Storage\nRaw HTML Snapshots &\nResume Files")]
+    GCS[("Google Cloud Storage\nRaw HTML Snapshots,\nResumes & DB Backups")]
     Gemini["Gemini API\ngemini-embedding-001 +\nStructured Fit/Gap & Copilot"]
 
-    subgraph DataNode["Private VPC e2-micro Data Node (10.8.0.10, Direct VPC Egress)"]
+    subgraph DataNode["Private VPC e2-micro Data Node (Direct VPC Egress)"]
         PG[("PostgreSQL 17 + pgvector\nHNSW Vectors, GIN tsvector,\nDomain Tables & Notifications")]
         Redis[("Redis 7\nSHA-256 Dedup, Login Throttle,\nWorker Heartbeats & Caches")]
         Kafka(("Apache Kafka 3.9 KRaft\njobs.raw | jobs.enriched\njobs.rescore | jobs.alerts | jobs.dlq"))
@@ -101,7 +101,7 @@ flowchart LR
 | **Async Edge & Workers** | FastAPI, Uvicorn, Pydantic v2, HTTPX, BeautifulSoup4, `confluent-kafka`, `psycopg` 3 |
 | **Event Streaming** | Apache Kafka 3.9 (KRaft mode — `jobs.raw`, `jobs.enriched`, `jobs.rescore`, `jobs.alerts`, `jobs.dlq`) |
 | **Data & Vector Store** | PostgreSQL 17 + `pgvector` (HNSW vector + GIN `tsvector`), Redis 7 |
-| **AI Pipeline** | Google Gemini API (`gemini-embedding-001` + Gemini Flash/Pro structured JSON & Markdown generation) |
+| **AI Pipeline** | Google Gemini API (`gemini-embedding-001` + tiered BYOK Gemini 3.5/3.8/4 structured JSON & Markdown generation) |
 | **Frontend** | React 19, TypeScript, Vite 8, Tailwind CSS v4, Lucide Icons, Nginx 1.27 |
 | **Observability** | In-app `PipelineStatusPopover` & `DlqInspectorModal`, GCP Cloud Run Logs/Metrics, Sentry (`sentry-sdk` 3 + `@sentry/react` 11) |
 | **Cloud, IaC & CI/CD** | GCP (Cloud Run Services/Jobs, Cloud Scheduler, Compute Engine `e2-micro`, GCS, Artifact Registry, Secret Manager, Direct VPC Egress, IAP OS Login, OIDC WIF), Terraform 1.11+, Docker BuildKit, GitHub Actions |
@@ -111,8 +111,8 @@ flowchart LR
 ```text
 vektryn/
 ├── .github/
-│   ├── scripts/                # Incremental CD change classifier (detect_deploy_changes.py) + pytest suite
-│   └── workflows/              # 4-job parallel PR CI (ci.yml) & incremental OIDC Cloud Run CD (deploy-gcp.yml)
+│   ├── scripts/                # Path-filtered PR CI (detect_ci_changes.py) & incremental CD (detect_deploy_changes.py) classifiers + pytest suites
+│   └── workflows/              # Path-filtered 4-job parallel CI (ci.yml) & incremental OIDC Cloud Run CD (deploy-gcp.yml)
 ├── packages/
 │   └── contracts/              # Shared Pydantic v2 Kafka events, enums, topic helpers & HMAC stream tokens
 ├── services/
@@ -196,7 +196,7 @@ services/stream-edge/src/stream_edge/
 - **Strict Tenant Isolation (IDOR Protection):** Every resume, match, artifact, lead, saved filter, dismissed job, muted company, notification, and personal analytics query is scoped strictly to `request.user`.
 - **SSRF & Payload Defenses:** Manual job URL import blocks private/link-local/loopback/metadata IP ranges across redirects (`169.254.169.254`, RFC1918, IPv6 equivalents); CSV lead exports neutralize spreadsheet formula injection (`=`, `+`, `-`, `@`); Markdown rendering in the SPA uses a zero-dependency XSS-safe renderer.
 - **Staff & Account Safety:** Soft-deactivation only (zero cascading hard deletes), eager session invalidation, read-only `is_superuser` from the API, and `select_for_update()` concurrency-safe guards preventing self-lockout or removing the last active staff/superuser account.
-- **Private Network & Secret Hygiene:** Postgres, Redis, Kafka, and workers run inside a private GCP VPC (`10.8.0.0/24`) with IAP-only SSH (`35.235.240.0/20`, zero public DB/broker/SSH ports); runtime secrets live exclusively in GCP Secret Manager; Sentry enforces zero PII/cookie/header/token/password/resume leakage.
+- **Private Network & Secret Hygiene:** Postgres, Redis, Kafka, and workers run inside a private GCP VPC with IAP-only SSH (zero public DB/broker/SSH ports); runtime secrets live exclusively in GCP Secret Manager; Sentry enforces zero PII/cookie/header/token/password/resume leakage.
 
 ---
 
@@ -208,11 +208,11 @@ services/stream-edge/src/stream_edge/
 - [Python](https://www.python.org/downloads/) 3.13+ and [Poetry](https://python-poetry.org/docs/#installation) 2.0+ (for host tests, linters, and CLIs)
 - [Node.js](https://nodejs.org/) 22+ and npm (for frontend Vitest, linting, or Vite HMR)
 - [Terraform](https://developer.hashicorp.com/terraform/install) 1.11+ (for GCP infrastructure)
-- A [Google AI Studio](https://aistudio.google.com/) `GEMINI_API_KEY`
+- A [Google AI Studio](https://aistudio.google.com/) `GEMINI_API_KEY` (and a generated Fernet `BYOK_ENCRYPTION_KEY` for user-scoped BYOK keys)
 
 ### Quickstart
 
-1. Clone the repository and create your local `.env` (set `GEMINI_API_KEY`):
+1. Clone the repository and create your local `.env` (set `GEMINI_API_KEY` and `BYOK_ENCRYPTION_KEY`):
 
 ```bash
 git clone https://github.com/debastiani-dev/vektryn.git
@@ -237,7 +237,7 @@ make migrate
 make createsuperuser
 ```
 
-4. Sign in at `http://localhost:3000/`, upload a resume in **Resumes**, and run `make collect` to ingest and score jobs.
+4. Sign in at `http://localhost:3000/`, add your Gemini API key in **Account Settings → AI & API Key**, upload a resume in **Resumes**, and run `make collect` to ingest and score jobs.
 
 ### Local Service URLs
 
@@ -272,16 +272,16 @@ Run `make help` at any time for the full target list.
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Enrichment Worker | Platform Google AI Studio key for automated job enrichment (`gemini-3.5-flash-lite` -> `gemini-3.8-flash`) and `gemini-embedding-001` vectors |
 | `BYOK_ENCRYPTION_KEY` | Control Plane & Matcher | Fernet symmetric key (`urlsafe_b64` of 32 bytes) for encrypting/decrypting per-user BYOK Gemini API keys |
-| `GEMINI_EMBEDDING_MODEL` / `GEMINI_SCORING_MODEL` / `GEMINI_FALLBACK_SCORING_MODEL` | Backend & Workers | Override default embedding and primary/fallback scoring Gemini models |
+| `GEMINI_EMBEDDING_MODEL` / `GEMINI_ENRICHMENT_MODEL` / `GEMINI_ENRICHMENT_FALLBACK_MODEL` / `ENRICHMENT_DAILY_CAP` | Backend & Workers | Override default embedding/enrichment Gemini models and daily enrichment quota cap |
 | `DATABASE_URL` / `POSTGRES_*` | Backend & Workers | PostgreSQL connection (`DATABASE_URL` with optional `?sslmode=` in Cloud Run; `POSTGRES_HOST=localhost` for host Make targets) |
 | `REDIS_URL` | Backend & Workers | Redis instance for SHA-256 job dedup, login throttling, worker heartbeats, query embedding & Copilot rate-limit caches |
-| `KAFKA_BOOTSTRAP_SERVERS` / `KAFKA_SECURITY_PROTOCOL` / `KAFKA_SASL_*` | Backend & Workers | Kafka broker address (`kafka:9092` in Docker, `localhost:29092` on host, `10.8.0.10:9092` in GCP VPC) and optional SASL/TLS settings |
+| `KAFKA_BOOTSTRAP_SERVERS` / `KAFKA_SECURITY_PROTOCOL` / `KAFKA_SASL_*` | Backend & Workers | Kafka broker address (`kafka:9092` in Docker, `localhost:29092` on host, private VPC host in GCP) and optional SASL/TLS settings |
 | `INGEST_API_KEY` | Control Plane & Stream Edge | Shared secret enforced via `X-Ingest-API-Key` on `POST /ingest/jobs` and `POST /internal/collect` |
 | `STREAM_AUTH_SECRET` | Control Plane & Stream Edge | HMAC-SHA256 signing secret shared between `/api/v1/auth/me/` and `GET /stream/alerts` |
-| `STORAGE_BACKEND` / `GCS_SNAPSHOTS_BUCKET` / `GCS_RESUMES_BUCKET` | Backend & Workers | `local` in dev (`.local_storage/`) or `gcs` with GCS buckets in production |
+| `STORAGE_BACKEND` / `GCS_SNAPSHOTS_BUCKET` / `GCS_RESUMES_BUCKET` / `GCS_DB_BACKUPS_BUCKET` | Backend, Workers & Backup | `local` in dev (`.local_storage/`) or `gcs` with GCS buckets in production (including daily `pg_dump` backups) |
 | `GREENHOUSE_BOARD_TOKENS` / `ASHBY_BOARD_TOKENS` | Collectors | Optional comma-separated pinned ATS board slugs merged into dynamic discovery |
 | `HYBRID_SEARCH_MIN_SIMILARITY` | Control Plane | Minimum cosine similarity threshold for semantic candidates in Hybrid RRF search (default `0.60`) |
-| `COPILOT_GEMINI_MODEL` / `COPILOT_GEMINI_FALLBACK_MODEL` / `COPILOT_GEMINI_TIMEOUT_MS` / `COPILOT_RATE_LIMIT_*` | Control Plane | Optional AI Application Copilot model override, timeout (`25000` ms), and per-user Redis rate limits (`15` req / `300s`) |
+| `COPILOT_GEMINI_TIMEOUT_MS` / `COPILOT_RATE_LIMIT_*` | Control Plane | Optional AI Application Copilot total request timeout (`50000` ms) and per-user Redis rate limits (`15` req / `300s`) |
 | `AUTH_LOGIN_ACCT_MAX_FAILURES` / `AUTH_LOGIN_IP_MAX_FAILURES` / `AUTH_LOGIN_LOCKOUT_WINDOW_SECONDS` / `AUTH_LOGIN_TRUSTED_PROXY_COUNT` | Control Plane | Redis brute-force login throttle thresholds (`5` acct, `20` IP, `900s` window, `1` trusted proxy hop) |
 | `SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_TRACES_SAMPLE_RATE` / `SENTRY_RELEASE` / `SENTRY_SERVICE_NAME` | Backend, Jobs & Workers | Optional Sentry error tracking (`traces_sample_rate` defaults to `0.0`; zero-op when `SENTRY_DSN` is blank) |
 | `VITE_SENTRY_DSN` / `VITE_SENTRY_ENVIRONMENT` / `VITE_SENTRY_RELEASE` | Frontend Build | Optional React Sentry DSN & release inlined at Vite build time (zero-op when blank) |
@@ -324,14 +324,14 @@ make lint
 
 Provisioned declaratively with Terraform ([infra/terraform/](infra/terraform/)) backed by GCS remote state in `us-central1`:
 
-- **Cloud Run Services:** `vektryn-frontend` (Nginx reverse proxy with custom domain `vektryn.debastiani.dev` and Google-managed TLS), `vektryn-control-plane`, and `vektryn-stream-edge` (3600s request timeout for long-lived SSE streams), connected over Direct VPC Egress (`10.8.0.0/24`).
+- **Cloud Run Services:** `vektryn-frontend` (Nginx reverse proxy with custom domain `vektryn.debastiani.dev` and Google-managed TLS), `vektryn-control-plane`, and `vektryn-stream-edge` (3600s request timeout for long-lived SSE streams), connected over Direct VPC Egress.
 - **Cloud Run Jobs & Cloud Scheduler:** `vektryn-migrate` (executed conditionally during CD when migrations change), `vektryn-collect` (`0 */4 * * *` UTC), `vektryn-rollup` (`0 1 * * *` UTC), and `vektryn-lifecycle` (`0 3 * * *` UTC).
-- **Private VPC Data & Worker Node (`vektryn-data-node`):** Compute Engine `e2-micro` VM (`us-central1-a`, static internal IP `10.8.0.10`, 30 GB `pd-standard`, 2 GB swap) running `pgvector/pgvector:pg17`, `redis:7-alpine`, `apache/kafka:3.9.0` (KRaft), `enrichment-worker`, and `matcher-worker`, with OS Login enabled and IAP-only SSH (`35.235.240.0/20`).
-- **Storage, Registry & Secrets:** GCS buckets (`raw-snapshots`, `resumes`, `tfstate`), Artifact Registry (`vektryn`), 9 GCP Secret Manager secrets with least-privilege `secretAccessor` bindings, and keyless GitHub Actions OIDC Workload Identity Federation (`vektryn-deployer`).
+- **Private VPC Data & Worker Node (`vektryn-data-node`):** Compute Engine `e2-micro` VM (static internal VPC IP, 30 GB `pd-standard`, 2 GB swap) running `pgvector/pgvector:pg17`, `redis:7-alpine`, `apache/kafka:3.9.0` (KRaft), `enrichment-worker`, and `matcher-worker`, with OS Login enabled and IAP-only SSH.
+- **Storage, Registry & Secrets:** GCS buckets (`raw-snapshots`, `resumes`, `db-backups` with 14-day lifecycle for daily `pg_dump` snapshots, `tfstate`), Artifact Registry (`vektryn`), 9 GCP Secret Manager secrets with least-privilege `secretAccessor` bindings, and keyless GitHub Actions OIDC Workload Identity Federation (`vektryn-deployer`).
 
 ### CI/CD Pipelines
 
-- **PR & Main CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): 4 required parallel jobs (`Contracts`, `Control Plane`, `Stream Edge`, `Frontend`) enforced via `main` branch protection.
+- **PR & Main CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): 4 required parallel jobs (`Contracts`, `Control Plane`, `Stream Edge`, `Frontend`) enforced via `main` branch protection, with path-filtered PR execution (`.github/scripts/detect_ci_changes.py`) and cached Poetry virtualenvs.
 - **Fast Incremental CD** ([.github/workflows/deploy-gcp.yml](.github/workflows/deploy-gcp.yml)): Uses `.github/scripts/detect_deploy_changes.py` to classify changed paths on push to `main` (plus `workflow_dispatch` force overrides):
   - Builds only affected Docker images in parallel with BuildKit GHA layer caching, baking immutable `SENTRY_RELEASE=<git_sha>` / `VITE_SENTRY_*` metadata into each image.
   - Runs `terraform apply` only when `infra/terraform/**` changes and executes `vektryn-migrate` only when Django migrations change.
@@ -341,4 +341,21 @@ Provisioned declaratively with Terraform ([infra/terraform/](infra/terraform/)) 
 
 - **In-App Pipeline Telemetry:** `PipelineStatusPopover` and `DlqInspectorModal` expose live collector run logs (`CollectorRunLog`), active/AI-scored/unscored backlogs, Redis worker liveness heartbeats (`enrichment-worker`, `matcher-worker`), and staff `jobs.dlq` inspection/replay/dismiss controls.
 - **GCP Cloud Run Logs & Metrics:** Built-in structured container logs, request latency, instance scaling, and Cloud Run Job execution history.
-- **Production Sentry Monitoring:** Covers all 9 runtimes (`control-plane`, `vektryn-migrate`, `stream-edge`, `enrichment-worker`, `matcher-worker`, `vektryn-collect`, `vektryn-rollup`, `vektryn-lifecycle`, and React SPA) with `traces_sample_rate=0.0`, profiling and session replays disabled, strict PII/cookie/header/HMAC-token/password/resume scrubbing, health-check and expected `4xx`/noise filtering, root `<Sentry.ErrorBoundary>` dark-mode recovery UI, immutable git-SHA release tracking, and controlled CLI verification (`python manage.py verify_sentry` / `python -m stream_edge.telemetry --verify`).
+- **Production Sentry Monitoring:** Covers all 9 runtimes (`control-plane`, `vektryn-migrate`, `stream-edge`, `enrichment-worker`, `matcher-worker`, `vektryn-collect`, `vektryn-rollup`, `vektryn-lifecycle`, and React SPA) plus daily `pg-backup` failure alerting, with `traces_sample_rate=0.0`, profiling and session replays disabled, strict PII/cookie/header/HMAC-token/password/resume scrubbing, health-check and expected `4xx`/noise filtering, root `<Sentry.ErrorBoundary>` dark-mode recovery UI, immutable git-SHA release tracking, and controlled CLI verification (`python manage.py verify_sentry` / `python -m stream_edge.telemetry --verify`).
+
+### PostgreSQL Backup & Restore Runbook
+
+- **Automated Daily Backups:** `vektryn-pg-backup.timer` runs `/opt/vektryn/backup-postgres.sh` daily at `05:00 UTC` (offset after `vektryn-rollup` `01:00`, `vektryn-lifecycle` `03:00`, and the `04:00` `vektryn-collect` wave) under `flock` + `nice -n 19` + `ionice -c 3`. It runs `pg_dump -Fc --compress=6 --no-owner --no-privileges`, validates the archive with `pg_restore --list`, uploads to `gs://<project_id>-db-backups/daily/vektryn-pg-YYYYMMDD-HHMMSSZ.dump` using `ifGenerationMatch=0` and append-only `roles/storage.objectCreator` IAM (14-day GCS lifecycle delete, `soft_delete_policy = 0s`, `public_access_prevention = "enforced"`), and reports any failure to Sentry (`service=pg-backup`).
+- **Offline Key Hygiene:** Keep a secure offline copy of `BYOK_ENCRYPTION_KEY` in a password manager alongside the GCS dumps; restoring `base_userprofile.gemini_api_key_encrypted` requires the matching Fernet key.
+- **Disaster-Recovery Restore Procedure:**
+  1. Download the desired archive using an operator account with bucket read access:
+     ```bash
+     gcloud storage ls gs://<project_id>-db-backups/daily/
+     gcloud storage cp gs://<project_id>-db-backups/daily/<archive>.dump /tmp/restore.dump
+     ```
+  2. Pause write workers on `vektryn-data-node` (`sudo docker compose -f /opt/vektryn/docker-compose.yml stop enrichment-worker matcher-worker`).
+  3. Ensure `vector` and `pgcrypto` extensions exist on the target PostgreSQL 17 database and restore cleanly:
+     ```bash
+     cat /tmp/restore.dump | sudo docker exec -i vektryn-postgres sh -c 'pg_restore --clean --if-exists --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+     ```
+  4. Restart workers (`sudo docker compose -f /opt/vektryn/docker-compose.yml start enrichment-worker matcher-worker`) and verify row counts, `https://vektryn.debastiani.dev/api/v1/health/`, and `GET /api/v1/system/status/`.
