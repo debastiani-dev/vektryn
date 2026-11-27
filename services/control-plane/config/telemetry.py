@@ -12,6 +12,7 @@ from django.core.exceptions import (
 from django.http import Http404
 import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.google_genai import GoogleGenAIIntegration
 from sentry_sdk.types import Event, Hint
 
 from vektryn_contracts.redaction import redact_secrets
@@ -354,6 +355,7 @@ def configure_sentry(service_name: str | None = None) -> bool:
         environment=environment,
         release=release,
         integrations=[DjangoIntegration()],
+        disabled_integrations=[GoogleGenAIIntegration()],
         traces_sample_rate=traces_sample_rate,
         profile_session_sample_rate=0.0,
         data_collection=_DATA_COLLECTION,

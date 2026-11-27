@@ -57,6 +57,7 @@ def test_configure_sentry_accepts_real_sentry_sdk_v3_init(monkeypatch):
         assert client.options["data_collection"]["user_info"] is False
         assert client.options["data_collection"]["cookies"] == {"mode": "off"}
         assert client.options["data_collection"]["http_bodies"] == []
+        assert "google_genai" not in client.integrations
     finally:
         cp_telemetry.sentry_sdk.init(dsn="")
         monkeypatch.setattr(cp_telemetry, "_SENTRY_CONFIGURED", False)

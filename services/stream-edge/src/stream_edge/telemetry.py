@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from fastapi.exceptions import RequestValidationError
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.google_genai import GoogleGenAIIntegration
 from sentry_sdk.types import Event, Hint
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -347,6 +348,7 @@ def configure_sentry(service_name: str, *, include_fastapi: bool = False) -> boo
         environment=environment,
         release=release,
         integrations=integrations,
+        disabled_integrations=[GoogleGenAIIntegration()],
         traces_sample_rate=traces_sample_rate,
         profile_session_sample_rate=0.0,
         data_collection=_DATA_COLLECTION,

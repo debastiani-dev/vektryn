@@ -22,7 +22,8 @@ from apps.matching.models.matching import MatchScore
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COPILOT_TIMEOUT_MS = 24000
+DEFAULT_COPILOT_TIMEOUT_MS = 50000
+DEFAULT_COPILOT_PER_ATTEMPT_TIMEOUT_MS = 35000
 DEFAULT_COPILOT_RATE_LIMIT_MAX = 15
 DEFAULT_COPILOT_RATE_LIMIT_WINDOW_SECONDS = 300
 MAX_RESUME_CONTEXT_CHARS = 8000
@@ -333,6 +334,7 @@ def invoke_copilot_gemini(
         int(getattr(settings, "COPILOT_GEMINI_TIMEOUT_MS", DEFAULT_COPILOT_TIMEOUT_MS)),
     )
     deadline_seconds = timeout_ms / 1000.0
+    per_attempt_timeout_ms = min(timeout_ms, DEFAULT_COPILOT_PER_ATTEMPT_TIMEOUT_MS)
     try:
         response, used_model = execute_user_gemini_generate(
             user=user,
@@ -340,7 +342,7 @@ def invoke_copilot_gemini(
             contents=prompt,
             system_instruction=_SYSTEM_INSTRUCTION,
             deadline_seconds=deadline_seconds,
-            per_attempt_timeout_ms=timeout_ms,
+            per_attempt_timeout_ms=per_attempt_timeout_ms,
             max_transient_retries=1,
             genai_client=genai_client,
         )
