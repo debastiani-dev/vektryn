@@ -48,13 +48,14 @@ module "secrets" {
 }
 
 module "iam" {
-  source           = "./modules/iam"
-  project_id       = var.project_id
-  github_repo      = var.github_repo
-  snapshots_bucket = module.storage.snapshots_bucket_name
-  resumes_bucket   = module.storage.resumes_bucket_name
-  secret_ids       = module.secrets.secret_ids
-  depends_on       = [module.storage, module.secrets]
+  source            = "./modules/iam"
+  project_id        = var.project_id
+  github_repo       = var.github_repo
+  snapshots_bucket  = module.storage.snapshots_bucket_name
+  resumes_bucket    = module.storage.resumes_bucket_name
+  db_backups_bucket = module.storage.db_backups_bucket_name
+  secret_ids        = module.secrets.secret_ids
+  depends_on        = [module.storage, module.secrets]
 }
 
 module "networking" {
@@ -81,6 +82,7 @@ module "data_node" {
   deployer_sa_email        = module.iam.deployer_sa_email
   stream_edge_latest_image = "${module.storage.artifact_registry_uri}/stream-edge:latest"
   snapshots_bucket_name    = module.storage.snapshots_bucket_name
+  db_backups_bucket_name   = module.storage.db_backups_bucket_name
 
   depends_on = [module.networking, module.iam, module.storage, module.secrets]
 }

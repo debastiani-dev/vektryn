@@ -160,8 +160,8 @@ jobs:
       (needs.build.result == 'success' || needs.build.result == 'skipped')
 
     steps:
-      - name: Checkout repository (Terraform)
-        if: needs.changes.outputs.terraform == 'true'
+      - name: Checkout repository (Terraform & Data Node Scripts)
+        if: needs.changes.outputs.terraform == 'true' || needs.changes.outputs.worker_refresh == 'true'
         uses: actions/checkout@v7
 
       - name: Authenticate to Google Cloud
@@ -308,6 +308,7 @@ jobs:
         run: |
           set -euo pipefail
           REGISTRY="${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.REPO }}"
+          BACKUP_SCRIPT_B64="$(base64 -w0 infra/terraform/modules/data_node/backup-postgres.sh)"
 
           gcloud compute ssh "${{ env.DATA_VM_NAME }}" \
             --project="${{ vars.GCP_PROJECT_ID }}" \
@@ -316,11 +317,12 @@ jobs:
             --quiet \
             --ssh-key-expire-after=5m \
             --ssh-flag="-T" \
-            --command="bash -s -- '${{ env.REGION }}' '${REGISTRY}/stream-edge:latest' '${{ vars.GCP_PROJECT_ID }}'" <<'REMOTE_EOF'
+            --command="bash -s -- '${{ env.REGION }}' '${REGISTRY}/stream-edge:latest' '${{ vars.GCP_PROJECT_ID }}' '${BACKUP_SCRIPT_B64}'" <<'REMOTE_EOF'
           set -euo pipefail
           REGION="$1"
           IMAGE_REF="$2"
           PROJECT_ID="$3"
+          BACKUP_SCRIPT_B64="$4"
 
           DOCKER_CFG="$(mktemp -d)"
           trap 'sudo rm -rf "${DOCKER_CFG}"' EXIT
@@ -349,7 +351,7 @@ jobs:
             echo "vektryn-data-node: BYOK_ENCRYPTION_KEY configured=no"
           fi
 
-          sudo SENTRY_DSN_VAL="${SENTRY_DSN}" BYOK_ENCRYPTION_KEY_VAL="${BYOK_ENCRYPTION_KEY}" python3 - <<'PY_EOF'
+          sudo SENTRY_DSN_VAL="${SENTRY_DSN}" BYOK_ENCRYPTION_KEY_VAL="${BYOK_ENCRYPTION_KEY}" DB_BACKUPS_BUCKET_VAL="${PROJECT_ID}-db-backups" python3 - <<'PY_EOF'
           import os
           from pathlib import Path
 
@@ -367,6 +369,7 @@ jobs:
               "SENTRY_RELEASE",
               "BYOK_ENCRYPTION_KEY",
               "ENRICHMENT_DAILY_CAP",
+              "GCS_DB_BACKUPS_BUCKET",
           }
           kept = [
               line
@@ -380,6 +383,7 @@ jobs:
                   "SENTRY_TRACES_SAMPLE_RATE=0.0",
                   f"BYOK_ENCRYPTION_KEY={os.environ.get('BYOK_ENCRYPTION_KEY_VAL', '')}",
                   "ENRICHMENT_DAILY_CAP=250",
+                  f"GCS_DB_BACKUPS_BUCKET={os.environ.get('DB_BACKUPS_BUCKET_VAL', '')}",
               ]
           )
           os.umask(0o077)
@@ -390,6 +394,39 @@ jobs:
           os.replace(tmp_path, env_path)
           os.chmod(env_path, 0o600)
           PY_EOF
+
+          printf '%s' "${BACKUP_SCRIPT_B64}" | base64 -d | sudo tee /opt/vektryn/backup-postgres.sh >/dev/null
+          sudo chmod 750 /opt/vektryn/backup-postgres.sh
+          sudo tee /etc/systemd/system/vektryn-pg-backup.service >/dev/null <<'UNIT_EOF'
+          [Unit]
+          Description=Vektryn daily PostgreSQL pg_dump backup to private GCS bucket
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/vektryn/backup-postgres.sh
+          Nice=19
+          IOSchedulingClass=idle
+          StandardOutput=journal
+          StandardError=journal
+          UNIT_EOF
+          sudo tee /etc/systemd/system/vektryn-pg-backup.timer >/dev/null <<'TIMER_EOF'
+          [Unit]
+          Description=Run Vektryn daily PostgreSQL backup at 05:00 UTC
+
+          [Timer]
+          OnCalendar=*-*-* 05:00:00 UTC
+          Persistent=true
+          RandomizedDelaySec=60
+          Unit=vektryn-pg-backup.service
+
+          [Install]
+          WantedBy=timers.target
+          TIMER_EOF
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now vektryn-pg-backup.timer
+          echo "vektryn-data-node: backup timer active=$(sudo systemctl is-active vektryn-pg-backup.timer)"
 
           printf '%s' "${TOKEN}" | sudo DOCKER_CONFIG="${DOCKER_CFG}" \
             docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"

@@ -2,6 +2,7 @@ variable "project_id" { type = string }
 variable "github_repo" { type = string }
 variable "snapshots_bucket" { type = string }
 variable "resumes_bucket" { type = string }
+variable "db_backups_bucket" { type = string }
 variable "secret_ids" { type = map(string) }
 
 resource "google_service_account" "control_plane" {
@@ -44,6 +45,12 @@ resource "google_storage_bucket_iam_member" "stream_edge_snapshots" {
 resource "google_storage_bucket_iam_member" "stream_edge_resumes_read" {
   bucket = var.resumes_bucket
   role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.stream_edge.email}"
+}
+
+resource "google_storage_bucket_iam_member" "stream_edge_db_backups" {
+  bucket = var.db_backups_bucket
+  role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.stream_edge.email}"
 }
 

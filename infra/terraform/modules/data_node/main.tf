@@ -10,6 +10,7 @@ variable "stream_edge_sa_email" { type = string }
 variable "deployer_sa_email" { type = string }
 variable "stream_edge_latest_image" { type = string }
 variable "snapshots_bucket_name" { type = string }
+variable "db_backups_bucket_name" { type = string }
 
 resource "google_compute_address" "data_node_internal" {
   name         = "vektryn-data-node-ip"
@@ -87,6 +88,8 @@ resource "google_compute_instance" "data_node" {
       internal_ip              = var.internal_ip
       stream_edge_latest_image = var.stream_edge_latest_image
       snapshots_bucket_name    = var.snapshots_bucket_name
+      db_backups_bucket_name   = var.db_backups_bucket_name
+      backup_script_b64        = filebase64("${path.module}/backup-postgres.sh")
     })
   }
 

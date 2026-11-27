@@ -144,6 +144,8 @@ def _apply_changed_path(flags: dict[str, bool], raw_path: str) -> None:
         return
     if path.startswith("infra/terraform/"):
         flags["terraform"] = True
+        if path == "infra/terraform/modules/data_node/backup-postgres.sh":
+            flags["worker_refresh"] = True
 
 
 def classify_changes(
