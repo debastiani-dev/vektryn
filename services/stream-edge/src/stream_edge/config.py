@@ -54,11 +54,13 @@ class StreamEdgeSettings(BaseSettings):
         ),
     )
 
-    # Gemini API
+    # Gemini API (platform key used ONLY by enrichment-worker; matcher uses per-user BYOK)
     gemini_api_key: str = ""
+    byok_encryption_key: str = ""
     gemini_embedding_model: str = "gemini-embedding-001"
-    gemini_scoring_model: str = "gemini-4-hydrogen"
-    gemini_fallback_scoring_model: str = "gemini-3.5-flash-lite"
+    gemini_enrichment_model: str = "gemini-3.5-flash-lite"
+    gemini_enrichment_fallback_model: str = "gemini-3.8-flash"
+    enrichment_daily_cap: int = 250
 
     # Two-stage matching thresholds
     cosine_similarity_threshold: float = 0.58

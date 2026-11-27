@@ -2,6 +2,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from cryptography.fernet import Fernet
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from django.utils import timezone
@@ -9,6 +10,7 @@ from google.genai import errors as genai_errors
 import pytest
 from rest_framework.test import APIClient
 
+from apps.base.models.user_profile import get_or_create_user_profile
 from apps.jobs.models.jobs import JobPosting
 from apps.jobs.models.triage import DismissedJob
 from apps.matching.models.artifacts import MatchArtifact, MatchArtifactKind
@@ -20,6 +22,7 @@ from apps.matching.services.copilot import (
     get_or_generate_match_artifact,
 )
 from apps.resumes.models.resumes import ResumeProfile
+from vektryn_contracts import encrypt_api_key
 from vektryn_contracts.enums import ATSSource, ContractType, SeniorityLevel
 
 User = get_user_model()
@@ -370,9 +373,8 @@ def test_rate_limit_429_and_redis_ttl_recovery(settings):
 @pytest.mark.django_db
 def test_unavailable_503_and_fallback_model_and_validation(settings):
     settings.REDIS_URL = ""
-    settings.GEMINI_API_KEY = ""
-    settings.COPILOT_GEMINI_MODEL = "gemini-primary-test"
-    settings.COPILOT_GEMINI_FALLBACK_MODEL = "gemini-fallback-test"
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    settings.BYOK_ENCRYPTION_KEY = fernet_key
 
     user, _, _, match = _create_match_fixture(
         username="copilot_503",
@@ -383,13 +385,14 @@ def test_unavailable_503_and_fallback_model_and_validation(settings):
     client.force_authenticate(user=user)
     url = f"/api/v1/matches/{match.uuid}/artifacts/"
 
-    # Missing GEMINI_API_KEY -> 503
+    # Missing user BYOK key -> 400 byok_missing
     res_missing = client.post(
         url,
         {"kind": MatchArtifactKind.TAILORED_BULLETS},
         format="json",
     )
-    assert res_missing.status_code == 503
+    assert res_missing.status_code == 400
+    assert res_missing.data["code"] == "byok_missing"
 
     # Validation errors -> 400
     assert client.post(url, {"kind": "unknown_kind"}, format="json").status_code == 400
@@ -410,17 +413,23 @@ def test_unavailable_503_and_fallback_model_and_validation(settings):
         == 400
     )
 
-    # Primary retryable error (503) falls back cleanly to COPILOT_GEMINI_FALLBACK_MODEL
-    settings.GEMINI_API_KEY = "test-live-key"
+    # Configure user's BYOK key; primary transient 503 cascades cleanly to gemini-3.8-flash
+    profile = get_or_create_user_profile(user)
+    profile.gemini_api_key_encrypted = encrypt_api_key(
+        "AQ.Ab8RN6-ValidCopilotTestKey123456", fernet_key
+    )
+    profile.gemini_api_key_last4 = "3456"
+    profile.save(update_fields=["gemini_api_key_encrypted", "gemini_api_key_last4"])
+
     fake_client = MagicMock()
     calls: list[str] = []
 
     def _side_effect(*, model, contents, config):
         calls.append(model)
-        if model == "gemini-primary-test":
+        if model == "gemini-4-hydrogen":
             raise genai_errors.APIError(
                 503,
-                {"error": {"message": "Overloaded"}},
+                {"error": {"message": "Overloaded", "status": "UNAVAILABLE"}},
                 None,
             )
         return SimpleNamespace(text="## Tailored Resume Bullets\n- Fallback bullet.")
@@ -428,9 +437,9 @@ def test_unavailable_503_and_fallback_model_and_validation(settings):
     fake_client.models.generate_content.side_effect = _side_effect
 
     with (
-        patch("apps.matching.services.copilot.time.sleep"),
+        patch("apps.base.services.byok.time.sleep"),
         patch(
-            "apps.matching.services.copilot._build_genai_client",
+            "apps.base.services.byok.genai.Client",
             return_value=fake_client,
         ),
     ):
@@ -441,11 +450,11 @@ def test_unavailable_503_and_fallback_model_and_validation(settings):
         )
 
     assert res_fb.status_code == 201
-    assert res_fb.data["model_name"] == "gemini-fallback-test"
+    assert res_fb.data["model_name"] == "gemini-3.8-flash"
     assert calls == [
-        "gemini-primary-test",
-        "gemini-primary-test",
-        "gemini-fallback-test",
+        "gemini-4-hydrogen",
+        "gemini-4-hydrogen",
+        "gemini-3.8-flash",
     ]
 
 

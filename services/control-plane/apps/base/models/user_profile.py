@@ -19,6 +19,16 @@ class CopilotToneChoice(models.TextChoices):
     CONVERSATIONAL = "conversational", "Conversational"
 
 
+class PreferredGeminiModelChoice(models.TextChoices):
+    AUTO = "auto", "Auto (Recommended)"
+    GEMINI_4_CARBON = "gemini-4-carbon", "Gemini 4 Carbon"
+    GEMINI_4_NEON = "gemini-4-neon", "Gemini 4 Neon"
+    GEMINI_4_ARGON = "gemini-4-argon", "Gemini 4 Argon"
+    GEMINI_4_HYDROGEN = "gemini-4-hydrogen", "Gemini 4 Hydrogen"
+    GEMINI_3_8_FLASH = "gemini-3.8-flash", "Gemini 3.8 Flash"
+    GEMINI_3_5_FLASH_LITE = "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"
+
+
 class UserProfile(BaseModel):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -40,9 +50,21 @@ class UserProfile(BaseModel):
     linkedin_url = models.URLField(max_length=300, blank=True, default="")
     github_url = models.URLField(max_length=300, blank=True, default="")
     portfolio_url = models.URLField(max_length=300, blank=True, default="")
+    gemini_api_key_encrypted = models.TextField(blank=True, default="")
+    gemini_api_key_last4 = models.CharField(max_length=4, blank=True, default="")
+    preferred_gemini_model = models.CharField(
+        max_length=48,
+        choices=PreferredGeminiModelChoice.choices,
+        default=PreferredGeminiModelChoice.AUTO,
+    )
+    allow_model_fallback = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["-created_at"]
+
+    @property
+    def has_gemini_api_key(self) -> bool:
+        return bool((self.gemini_api_key_encrypted or "").strip())
 
     def __str__(self) -> str:
         return f"UserProfile<{self.user_id}>"

@@ -1,37 +1,33 @@
 from contextlib import suppress
 from dataclasses import dataclass
 import logging
-import time
-from typing import Callable, TypeVar
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
 import redis
 
 from apps.base.models.user_profile import UserProfile
+from apps.base.services.byok import (
+    BYOKInvalidKeyError,
+    BYOKMissingError,
+    BYOKQuotaExhaustedError,
+    BYOKStorageUnavailableError,
+    BYOKTransientError,
+    execute_user_gemini_generate,
+)
 from apps.matching.models.artifacts import MatchArtifact, MatchArtifactKind
 from apps.matching.models.matching import MatchScore
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
-PLACEHOLDER_GEMINI_KEYS = frozenset({"", "your_gemini_api_key_here"})
-RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-DEFAULT_COPILOT_MODEL = "gemini-4-hydrogen"
-DEFAULT_COPILOT_FALLBACK_MODEL = "gemini-3.5-flash-lite"
-DEFAULT_COPILOT_TIMEOUT_MS = 25000
+DEFAULT_COPILOT_TIMEOUT_MS = 24000
 DEFAULT_COPILOT_RATE_LIMIT_MAX = 15
 DEFAULT_COPILOT_RATE_LIMIT_WINDOW_SECONDS = 300
 MAX_RESUME_CONTEXT_CHARS = 8000
 MAX_JOB_CONTEXT_CHARS = 8000
 MAX_GUIDANCE_CHARS = 300
-COPILOT_MAX_OUTPUT_TOKENS = 8192
-COPILOT_TEMPERATURE = 0.4
 
 COPILOT_TONE_BALANCED = "balanced"
 COPILOT_TONE_CHOICES: tuple[tuple[str, str], ...] = (
@@ -131,20 +127,6 @@ class CopilotArtifactResult:
     artifact: MatchArtifact
     cached: bool
     created: bool
-
-
-def _resolve_copilot_models() -> tuple[str, str]:
-    primary = (
-        getattr(settings, "COPILOT_GEMINI_MODEL", "")
-        or getattr(settings, "GEMINI_SCORING_MODEL", "")
-        or DEFAULT_COPILOT_MODEL
-    ).strip() or DEFAULT_COPILOT_MODEL
-    fallback = (
-        getattr(settings, "COPILOT_GEMINI_FALLBACK_MODEL", "")
-        or getattr(settings, "GEMINI_FALLBACK_SCORING_MODEL", "")
-        or DEFAULT_COPILOT_FALLBACK_MODEL
-    ).strip() or DEFAULT_COPILOT_FALLBACK_MODEL
-    return primary, fallback
 
 
 def _resolve_rate_limit_config() -> tuple[int, int]:
@@ -340,77 +322,38 @@ def build_copilot_prompt(
     return "\n".join(sections)
 
 
-def _call_with_retry(fn: Callable[[], T], max_attempts: int = 2) -> T:
-    last_exc: genai_errors.APIError | None = None
-    for attempt in range(max_attempts):
-        try:
-            return fn()
-        except genai_errors.APIError as exc:
-            last_exc = exc
-            if exc.code not in RETRYABLE_STATUS_CODES or attempt == max_attempts - 1:
-                raise
-            time.sleep(1.0 * (2**attempt))
-    raise last_exc  # type: ignore[misc]
-
-
-def _build_genai_client() -> genai.Client:
-    api_key = (getattr(settings, "GEMINI_API_KEY", "") or "").strip()
-    if api_key in PLACEHOLDER_GEMINI_KEYS:
-        raise CopilotUnavailableError(
-            "AI Copilot is unavailable because GEMINI_API_KEY is not configured."
-        )
+def invoke_copilot_gemini(
+    *,
+    user,
+    prompt: str,
+    genai_client: genai.Client | None = None,
+) -> tuple[str, str]:
     timeout_ms = max(
         5000,
         int(getattr(settings, "COPILOT_GEMINI_TIMEOUT_MS", DEFAULT_COPILOT_TIMEOUT_MS)),
     )
-    return genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=timeout_ms),
-    )
-
-
-def invoke_copilot_gemini(
-    *,
-    prompt: str,
-    genai_client: genai.Client | None = None,
-) -> tuple[str, str]:
-    client = genai_client if genai_client is not None else _build_genai_client()
-    primary_model, fallback_model = _resolve_copilot_models()
-    gen_config = types.GenerateContentConfig(
-        system_instruction=_SYSTEM_INSTRUCTION,
-        temperature=COPILOT_TEMPERATURE,
-        max_output_tokens=COPILOT_MAX_OUTPUT_TOKENS,
-    )
-
-    used_model = primary_model
+    deadline_seconds = timeout_ms / 1000.0
     try:
-        try:
-            response = _call_with_retry(
-                lambda: client.models.generate_content(
-                    model=primary_model,
-                    contents=prompt,
-                    config=gen_config,
-                ),
-                max_attempts=2,
-            )
-        except genai_errors.APIError as exc:
-            if (
-                exc.code in RETRYABLE_STATUS_CODES
-                and fallback_model
-                and fallback_model != primary_model
-            ):
-                used_model = fallback_model
-                response = client.models.generate_content(
-                    model=fallback_model,
-                    contents=prompt,
-                    config=gen_config,
-                )
-            else:
-                raise
-    except CopilotUnavailableError:
+        response, used_model = execute_user_gemini_generate(
+            user=user,
+            task="copilot",
+            contents=prompt,
+            system_instruction=_SYSTEM_INSTRUCTION,
+            deadline_seconds=deadline_seconds,
+            per_attempt_timeout_ms=timeout_ms,
+            max_transient_retries=1,
+            genai_client=genai_client,
+        )
+    except (
+        BYOKMissingError,
+        BYOKInvalidKeyError,
+        BYOKQuotaExhaustedError,
+        BYOKStorageUnavailableError,
+        CopilotUnavailableError,
+    ):
         raise
-    except genai_errors.APIError as exc:
-        logger.warning("Gemini API error in AI Copilot (%s): %s", exc.code, exc.message)
+    except BYOKTransientError as exc:
+        logger.warning("Gemini transient error in AI Copilot: %s", exc)
         raise CopilotUnavailableError(
             "AI Copilot is temporarily unavailable. Please try again shortly."
         ) from exc
@@ -543,6 +486,7 @@ def get_or_generate_match_artifact(
         user_profile=user_profile,
     )
     content_markdown, model_name = invoke_copilot_gemini(
+        user=user,
         prompt=prompt,
         genai_client=genai_client,
     )

@@ -21,14 +21,23 @@ class NotificationAdmin(admin.ModelAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
+    exclude = ("gemini_api_key_encrypted",)
+    readonly_fields = ("gemini_api_key_last4",)
     list_display = (
         "user",
         "display_name",
         "timezone",
         "preferred_currency",
         "default_copilot_tone",
+        "preferred_gemini_model",
+        "allow_model_fallback",
         "modified_at",
     )
-    list_filter = ("preferred_currency", "default_copilot_tone")
+    list_filter = (
+        "preferred_currency",
+        "default_copilot_tone",
+        "preferred_gemini_model",
+        "allow_model_fallback",
+    )
     search_fields = ("user__username", "user__email", "display_name")
     ordering = ("-modified_at",)

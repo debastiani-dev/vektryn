@@ -49,6 +49,8 @@ export class ApiError extends Error {
     readonly detail: string | null;
     readonly retryAfterSeconds: number | null;
     readonly fieldErrors: Record<string, string[]>;
+    readonly code: string | null;
+    readonly paymentRequired: boolean;
 
     constructor(
         status: number,
@@ -56,6 +58,8 @@ export class ApiError extends Error {
         detail: string | null,
         retryAfterSeconds: number | null,
         fieldErrors: Record<string, string[]> = {},
+        code: string | null = null,
+        paymentRequired = false,
     ) {
         super(`API ${status}: ${bodyText}`);
         this.name = "ApiError";
@@ -63,13 +67,20 @@ export class ApiError extends Error {
         this.detail = detail;
         this.retryAfterSeconds = retryAfterSeconds;
         this.fieldErrors = fieldErrors;
+        this.code = code;
+        this.paymentRequired = paymentRequired;
     }
 }
 
 function parseFieldErrors(parsed: Record<string, unknown>): Record<string, string[]> {
     const fieldErrors: Record<string, string[]> = {};
     for (const [key, value] of Object.entries(parsed)) {
-        if (key === "detail" || key === "retry_after_seconds") {
+        if (
+            key === "detail" ||
+            key === "retry_after_seconds" ||
+            key === "code" ||
+            key === "payment_required"
+        ) {
             continue;
         }
         if (Array.isArray(value)) {
@@ -93,10 +104,14 @@ function parseApiErrorMetadata(
     detail: string | null;
     retryAfterSeconds: number | null;
     fieldErrors: Record<string, string[]>;
+    code: string | null;
+    paymentRequired: boolean;
 } {
     let detail: string | null = null;
     let retryAfterSeconds: number | null = null;
     let fieldErrors: Record<string, string[]> = {};
+    let code: string | null = null;
+    let paymentRequired = false;
 
     if (retryAfterHeader) {
         const parsedHeader = Number.parseInt(retryAfterHeader, 10);
@@ -109,6 +124,12 @@ function parseApiErrorMetadata(
         const parsed = JSON.parse(bodyText) as Record<string, unknown>;
         if (typeof parsed.detail === "string" && parsed.detail.trim()) {
             detail = parsed.detail.trim();
+        }
+        if (typeof parsed.code === "string" && parsed.code.trim()) {
+            code = parsed.code.trim();
+        }
+        if (typeof parsed.payment_required === "boolean") {
+            paymentRequired = parsed.payment_required;
         }
         if (
             typeof parsed.retry_after_seconds === "number" &&
@@ -125,7 +146,7 @@ function parseApiErrorMetadata(
         // Non-JSON error body; fall back to header metadata only.
     }
 
-    return { detail, retryAfterSeconds, fieldErrors };
+    return { detail, retryAfterSeconds, fieldErrors, code, paymentRequired };
 }
 
 type SessionExpiredHandler = () => void;
@@ -195,6 +216,8 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
             meta.detail,
             meta.retryAfterSeconds,
             meta.fieldErrors,
+            meta.code,
+            meta.paymentRequired,
         );
     }
     if (res.status === 204) {

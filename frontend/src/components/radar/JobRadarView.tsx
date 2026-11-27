@@ -9,6 +9,7 @@ import {
     Clock,
     ExternalLink,
     EyeOff,
+    KeyRound,
     Loader2,
     Mail,
     MapPin,
@@ -17,6 +18,7 @@ import {
     RotateCcw,
     Search,
     Sparkles,
+    UserCog,
     X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -934,12 +936,16 @@ interface JobRadarViewProps {
     initialSearch?: string;
     onConsumeInitialSearch?: () => void;
     defaultCopilotTone?: CopilotTone;
+    hasGeminiApiKey?: boolean;
+    onOpenAccountSettings?: () => void;
 }
 
 export function JobRadarView({
     initialSearch = "",
     onConsumeInitialSearch,
     defaultCopilotTone,
+    hasGeminiApiKey = true,
+    onOpenAccountSettings,
 }: Readonly<JobRadarViewProps> = {}) {
     const trimmedInitialSearch = initialSearch.trim();
     const [matches, setMatches] = useState<MatchScore[]>([]);
@@ -1699,6 +1705,29 @@ export function JobRadarView({
                     </Tooltip>
                 </div>
 
+                {!hasGeminiApiKey && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-950/20 px-5 py-3.5 text-xs text-amber-200">
+                        <div className="flex items-start gap-2.5">
+                            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                            <span>
+                                Configure your personal Gemini API key to enable semantic hybrid
+                                search, Stage 2 AI fit scoring, and AI Copilot drafts. Job Radar
+                                search is currently running in keyword-only mode.
+                            </span>
+                        </div>
+                        {onOpenAccountSettings && (
+                            <button
+                                type="button"
+                                onClick={onOpenAccountSettings}
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 ring-1 ring-amber-500/40 transition hover:bg-amber-500/30"
+                            >
+                                <UserCog className="h-3.5 w-3.5" />
+                                <span>Open Account Settings</span>
+                            </button>
+                        )}
+                    </div>
+                )}
+
                 {importBanner && (
                     <ImportStatusBanner
                         banner={importBanner}
@@ -1845,6 +1874,8 @@ export function JobRadarView({
                 match={selectedGapMatch}
                 minAlertScore={resolveMinAlertScore(selectedGapMatch)}
                 defaultCopilotTone={defaultCopilotTone}
+                hasGeminiApiKey={hasGeminiApiKey}
+                onOpenAccountSettings={onOpenAccountSettings}
                 saving={
                     selectedGapMatch ? savingJobId === selectedGapMatch.job_posting.uuid : false
                 }

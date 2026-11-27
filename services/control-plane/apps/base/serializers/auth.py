@@ -2,11 +2,16 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from apps.base.models.user_profile import CopilotToneChoice, PreferredCurrency
+from apps.base.models.user_profile import (
+    CopilotToneChoice,
+    PreferredCurrency,
+    PreferredGeminiModelChoice,
+)
 from apps.base.services.user_management import (
     validate_http_url,
     validate_iana_timezone,
 )
+from vektryn_contracts import normalize_api_key
 
 
 class _StrictStringField(serializers.CharField):
@@ -116,9 +121,28 @@ class SelfProfileUpdateSerializer(ProfileFieldsValidationMixin, serializers.Seri
     linkedin_url = _StrictStringField(required=False, allow_blank=True, max_length=300)
     github_url = _StrictStringField(required=False, allow_blank=True, max_length=300)
     portfolio_url = _StrictStringField(required=False, allow_blank=True, max_length=300)
+    gemini_api_key = _StrictStringField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        trim_whitespace=False,
+    )
+    preferred_gemini_model = serializers.ChoiceField(
+        choices=PreferredGeminiModelChoice.choices, required=False
+    )
+    allow_model_fallback = serializers.BooleanField(required=False)
 
     def validate_email(self, value: str) -> str:
         return value.strip().lower()
+
+    def validate_gemini_api_key(self, value: str | None) -> str:
+        if value is None or not value.strip():
+            return ""
+        try:
+            return normalize_api_key(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class AccountDeactivateSerializer(serializers.Serializer):

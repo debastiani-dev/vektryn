@@ -161,14 +161,17 @@ def load_resume_criteria(
 ) -> ResumeFilterCriteria | None:
     """Load DB target constraints first, falling back to resume text inference when empty."""
     query = """
-        SELECT uuid, label, raw_text, extracted_skills, target_seniority, target_contract_types, target_regions
-        FROM resumes_resumeprofile
-        WHERE is_deleted = FALSE
-          AND is_active = TRUE
+        SELECT r.uuid, r.label, r.raw_text, r.extracted_skills, r.target_seniority, r.target_contract_types, r.target_regions
+        FROM resumes_resumeprofile r
+        INNER JOIN auth_user u
+          ON u.id = r.user_id
+         AND u.is_active = TRUE
+        WHERE r.is_deleted = FALSE
+          AND r.is_active = TRUE
     """
     params: list[object] = []
     if resume_id:
-        query += " AND uuid = %s"
+        query += " AND r.uuid = %s"
         params.append(uuid.UUID(str(resume_id).strip()))
 
     with psycopg.connect(settings.postgres_dsn) as conn, conn.cursor() as cur:

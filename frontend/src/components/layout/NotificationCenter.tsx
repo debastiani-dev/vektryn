@@ -9,11 +9,13 @@ import {
     Database,
     FileCheck2,
     Kanban,
+    KeyRound,
     Loader2,
     Radar,
     RefreshCw,
     ShieldAlert,
     Sparkles,
+    UserCog,
     X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -45,6 +47,7 @@ export interface NotificationCenterProps {
     onSaveToTracker: (item: NotificationItem) => void;
     onOpenTracker: (item: NotificationItem) => void;
     onOpenRadar: (item: NotificationItem) => void;
+    onOpenAccountSettings?: (item: NotificationItem) => void;
 }
 
 function NotificationKindBadge({ item }: Readonly<{ item: NotificationItem }>) {
@@ -115,10 +118,26 @@ function NotificationKindBadge({ item }: Readonly<{ item: NotificationItem }>) {
             </span>
         );
     }
+    if (item.kind === "ai_key_invalid") {
+        return (
+            <span className="inline-flex items-center gap-1 rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300 ring-1 ring-red-500/35">
+                <KeyRound className="h-3 w-3" />
+                <span>API Key Invalid</span>
+            </span>
+        );
+    }
+    if (item.kind === "ai_quota_exhausted") {
+        return (
+            <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300 ring-1 ring-amber-500/35">
+                <AlertTriangle className="h-3 w-3" />
+                <span>AI Quota / Credits</span>
+            </span>
+        );
+    }
     return (
         <span className="inline-flex items-center gap-1 rounded-md bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300 ring-1 ring-red-500/30">
             <ShieldAlert className="h-3 w-3" />
-            Pipeline Error
+            <span>Pipeline Error</span>
         </span>
     );
 }
@@ -132,6 +151,7 @@ interface NotificationCardProps {
     onSaveToTracker: (item: NotificationItem) => void;
     onOpenTracker: (item: NotificationItem) => void;
     onOpenRadar: (item: NotificationItem) => void;
+    onOpenAccountSettings?: (item: NotificationItem) => void;
     onMarkRead: (uuid: string) => void;
     onDismiss: (uuid: string) => void;
 }
@@ -155,6 +175,7 @@ function NotificationCard({
     onSaveToTracker,
     onOpenTracker,
     onOpenRadar,
+    onOpenAccountSettings,
     onMarkRead,
     onDismiss,
 }: Readonly<NotificationCardProps>) {
@@ -263,9 +284,21 @@ function NotificationCard({
                         className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-2.5 py-1.5 text-xs font-medium text-amber-200 ring-1 ring-amber-500/30 transition hover:bg-amber-500/30"
                     >
                         <Kanban className="h-3.5 w-3.5" />
-                        Open Tracker
+                        <span>Open Tracker</span>
                     </button>
                 )}
+
+                {(item.kind === "ai_key_invalid" || item.kind === "ai_quota_exhausted") &&
+                    onOpenAccountSettings && (
+                        <button
+                            type="button"
+                            onClick={() => onOpenAccountSettings(item)}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500"
+                        >
+                            <UserCog className="h-3.5 w-3.5" />
+                            <span>Open Account Settings</span>
+                        </button>
+                    )}
 
                 {!item.is_read && (
                     <button
@@ -303,6 +336,7 @@ export function NotificationCenter({
     onSaveToTracker,
     onOpenTracker,
     onOpenRadar,
+    onOpenAccountSettings,
 }: Readonly<NotificationCenterProps>) {
     const [open, setOpen] = useState(false);
 
@@ -330,6 +364,11 @@ export function NotificationCenter({
     const handleOpenRadar = (item: NotificationItem) => {
         setOpen(false);
         onOpenRadar(item);
+    };
+
+    const handleOpenAccountSettings = (item: NotificationItem) => {
+        setOpen(false);
+        onOpenAccountSettings?.(item);
     };
 
     return (
@@ -506,6 +545,11 @@ export function NotificationCenter({
                                             onSaveToTracker={onSaveToTracker}
                                             onOpenTracker={handleOpenTracker}
                                             onOpenRadar={handleOpenRadar}
+                                            onOpenAccountSettings={
+                                                onOpenAccountSettings
+                                                    ? handleOpenAccountSettings
+                                                    : undefined
+                                            }
                                             onMarkRead={onMarkRead}
                                             onDismiss={onDismiss}
                                         />

@@ -3,19 +3,24 @@ from io import BytesIO
 import logging
 from pathlib import Path
 import time
-from typing import BinaryIO, Callable, TypeVar
+from typing import BinaryIO
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser
 from django.db import transaction
 from docx import Document
 from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
 from pydantic import BaseModel as PydanticBaseModel
 from pypdf import PdfReader
 
 from apps.base.services.base_service import BaseService
+from apps.base.services.byok import (
+    BYOKError,
+    BYOKMissingError,
+    execute_user_gemini_embed,
+    execute_user_gemini_generate,
+    user_has_gemini_api_key,
+)
 from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.services.rescore_publisher import (
     RescoreBrokerError,
@@ -25,7 +30,6 @@ from apps.resumes.services.rescore_publisher import (
     release_rescore_cooldown,
 )
 from vektryn_contracts import JobRescoreEvent
-from vektryn_contracts.events import EMBEDDING_DIMENSIONS
 
 try:
     from google.cloud import storage as gcs_storage
@@ -35,11 +39,12 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-T = TypeVar("T")
-
-
 class GeminiServiceError(Exception):
-    """Raised when the upstream Gemini API fails after retries."""
+    """Raised when the upstream Gemini API fails after retries or BYOK checks fail."""
+
+    def __init__(self, message: str, *, code: str = "gemini_error") -> None:
+        self.code = code
+        super().__init__(message)
 
 
 class _ExtractedSkillsResponse(PydanticBaseModel):
@@ -48,8 +53,9 @@ class _ExtractedSkillsResponse(PydanticBaseModel):
 
 class ResumeService(BaseService):
     SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
-    PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here"}
-    RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+    PENDING_EMBED_MAX_RESUMES = 3
+    PENDING_EMBED_BUDGET_SECONDS = 10.0
+    PENDING_EMBED_CALL_TIMEOUT_MS = 5000
 
     def __init__(
         self,
@@ -58,32 +64,6 @@ class ResumeService(BaseService):
     ) -> None:
         super().__init__(user=user)
         self._genai_client = genai_client
-
-    @property
-    def genai_client(self) -> genai.Client | None:
-        if self._genai_client is not None:
-            return self._genai_client
-        api_key = (settings.GEMINI_API_KEY or "").strip()
-        if api_key in self.PLACEHOLDER_KEYS:
-            return None
-        self._genai_client = genai.Client(api_key=api_key)
-        return self._genai_client
-
-    @classmethod
-    def _call_with_retry(cls, fn: Callable[[], T], max_attempts: int = 3) -> T:
-        last_exc: genai_errors.APIError | None = None
-        for attempt in range(max_attempts):
-            try:
-                return fn()
-            except genai_errors.APIError as exc:
-                last_exc = exc
-                if (
-                    exc.code not in cls.RETRYABLE_STATUS_CODES
-                    or attempt == max_attempts - 1
-                ):
-                    raise
-                time.sleep(1.5 * (2**attempt))
-        raise last_exc  # type: ignore[misc]
 
     @staticmethod
     def compute_text_hash(raw_text: str) -> str:
@@ -147,66 +127,157 @@ class ResumeService(BaseService):
     def generate_embedding_and_skills(
         self,
         raw_text: str,
+        *,
+        deadline: float | None = None,
+        embed_timeout_ms: int = 8000,
+        embed_max_attempts: int = 2,
+        skill_deadline_seconds: float = 15.0,
+        allow_skills_fallback_empty: bool = False,
     ) -> tuple[list[float] | None, list[str]]:
-        client = self.genai_client
-        if client is None:
+        if self._genai_client is None and not user_has_gemini_api_key(self.user):
             return None, []
 
         try:
-            embed_res = self._call_with_retry(
-                lambda: client.models.embed_content(
-                    model=settings.GEMINI_EMBEDDING_MODEL,
-                    contents=raw_text,
-                    config=types.EmbedContentConfig(
-                        task_type="RETRIEVAL_DOCUMENT",
-                        output_dimensionality=EMBEDDING_DIMENSIONS,
-                    ),
-                )
+            embedding = execute_user_gemini_embed(
+                user=self.user,
+                contents=raw_text,
+                task_type="RETRIEVAL_DOCUMENT",
+                timeout_ms=embed_timeout_ms,
+                max_attempts=embed_max_attempts,
+                genai_client=self._genai_client,
+                deadline=deadline,
             )
-            embedding = list(embed_res.embeddings[0].values)
+        except BYOKMissingError:
+            return None, []
+        except BYOKError as exc:
+            raise GeminiServiceError(str(exc), code=exc.code) from exc
 
-            prompt = (
-                "Extract a deduplicated list of normalized lowercase technical skills "
-                "(programming languages, frameworks, databases, message brokers, cloud "
-                "providers, DevOps tools) explicitly evidenced in this resume:\n\n"
-                f"{raw_text}"
-            )
-            gen_config = types.GenerateContentConfig(
+        prompt = (
+            "Extract a deduplicated list of normalized lowercase technical skills "
+            "(programming languages, frameworks, databases, message brokers, cloud "
+            "providers, DevOps tools) explicitly evidenced in this resume:\n\n"
+            f"{raw_text}"
+        )
+        effective_skill_deadline = skill_deadline_seconds
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < 1.5:
+                return embedding, []
+            effective_skill_deadline = min(skill_deadline_seconds, remaining)
+
+        try:
+            skill_res, _used_model = execute_user_gemini_generate(
+                user=self.user,
+                task="resume_skills",
+                contents=prompt,
                 response_mime_type="application/json",
                 response_schema=_ExtractedSkillsResponse,
-                temperature=0.0,
+                deadline_seconds=effective_skill_deadline,
+                per_attempt_timeout_ms=embed_timeout_ms,
+                max_transient_retries=0 if deadline is not None else 1,
+                genai_client=self._genai_client,
             )
-
-            try:
-                skill_res = self._call_with_retry(
-                    lambda: client.models.generate_content(
-                        model=settings.GEMINI_SCORING_MODEL,
-                        contents=prompt,
-                        config=gen_config,
-                    )
+        except BYOKError as exc:
+            if allow_skills_fallback_empty:
+                logger.warning(
+                    "Resume skill extraction skipped after embedding succeeded: %s", exc
                 )
-            except genai_errors.APIError as exc:
-                if (
-                    exc.code in self.RETRYABLE_STATUS_CODES
-                    and settings.GEMINI_FALLBACK_SCORING_MODEL
-                ):
-                    skill_res = self._call_with_retry(
-                        lambda: client.models.generate_content(
-                            model=settings.GEMINI_FALLBACK_SCORING_MODEL,
-                            contents=prompt,
-                            config=gen_config,
-                        )
-                    )
-                else:
-                    raise
-        except genai_errors.APIError as exc:
-            raise GeminiServiceError(
-                f"Gemini API error ({exc.code}): {exc.message}"
-            ) from exc
+                return embedding, []
+            raise GeminiServiceError(str(exc), code=exc.code) from exc
 
         parsed = _ExtractedSkillsResponse.model_validate_json(skill_res.text)
         skills = sorted({s.strip().lower() for s in parsed.skills if s.strip()})
         return embedding, skills
+
+    def embed_pending_resumes(
+        self,
+        *,
+        max_resumes: int = PENDING_EMBED_MAX_RESUMES,
+        budget_seconds: float = PENDING_EMBED_BUDGET_SECONDS,
+    ) -> dict[str, object]:
+        """Embed up to `max_resumes` unembedded active resumes within a bounded request budget."""
+        if self.user is None:
+            return {
+                "pending_resumes_embedded": 0,
+                "pending_resumes_remaining": 0,
+                "embedding_warning": None,
+            }
+
+        pending = list(
+            ResumeProfile.objects.filter(
+                user=self.user,
+                is_active=True,
+                embedding__isnull=True,
+            ).order_by("-modified_at")
+        )
+        total_pending = len(pending)
+        if total_pending == 0:
+            return {
+                "pending_resumes_embedded": 0,
+                "pending_resumes_remaining": 0,
+                "embedding_warning": None,
+            }
+
+        deadline = time.monotonic() + max(2.0, float(budget_seconds))
+        embedded = 0
+        warning: str | None = None
+
+        for resume in pending[: max(1, int(max_resumes))]:
+            if deadline - time.monotonic() < 1.0:
+                warning = (
+                    "Key saved, but pending resume embedding reached the request time budget. "
+                    "Open Resumes to generate embeddings for the remaining profiles."
+                )
+                break
+            try:
+                embedding, extracted_skills = self.generate_embedding_and_skills(
+                    resume.raw_text,
+                    deadline=deadline,
+                    embed_timeout_ms=self.PENDING_EMBED_CALL_TIMEOUT_MS,
+                    embed_max_attempts=1,
+                    skill_deadline_seconds=5.0,
+                    allow_skills_fallback_empty=True,
+                )
+            except GeminiServiceError as exc:
+                warning = str(exc)
+                break
+
+            if embedding is None:
+                break
+
+            resume.embedding = embedding
+            resume.extracted_skills = extracted_skills
+            resume.content_hash = self.compute_text_hash(resume.raw_text)
+            resume.save(update_fields=["embedding", "extracted_skills", "content_hash"])
+            embedded += 1
+
+            event = JobRescoreEvent(
+                trace_id=current_trace_id(),
+                resume_profile_uuid=resume.uuid,
+                user_id=resume.user_id,
+                max_jobs=self.DEFAULT_RESCORE_MAX_JOBS,
+                force=False,
+            )
+            try:
+                publish_rescore_event(event, require_broker=False)
+            except RescoreBrokerError as exc:
+                logger.warning(
+                    "Post-key-save rescore publish failed for profile=%s: %s",
+                    resume.uuid,
+                    exc,
+                )
+
+        remaining = max(0, total_pending - embedded)
+        if remaining > 0 and not warning:
+            warning = (
+                f"Embedded {embedded} resume(s); {remaining} remaining. "
+                "Open Resumes and click Generate embedding for the remaining profiles."
+            )
+        return {
+            "pending_resumes_embedded": embedded,
+            "pending_resumes_remaining": remaining,
+            "embedding_warning": warning,
+        }
 
     def _enrich_if_content_changed(
         self,
@@ -305,6 +376,10 @@ class ResumeService(BaseService):
         if not instance.is_active:
             raise ValueError(
                 "Activate this resume profile before rescoring active jobs."
+            )
+        if not user_has_gemini_api_key(instance.user):
+            raise ValueError(
+                "Add your Google AI Studio Gemini API key in Account Settings before rescoring active jobs."
             )
         if instance.embedding is None:
             raise ValueError(

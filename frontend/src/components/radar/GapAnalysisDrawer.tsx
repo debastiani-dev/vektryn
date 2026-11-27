@@ -40,6 +40,8 @@ interface GapAnalysisDrawerProps {
     match: MatchScore | null;
     minAlertScore?: number;
     defaultCopilotTone?: CopilotTone;
+    hasGeminiApiKey?: boolean;
+    onOpenAccountSettings?: () => void;
     saving: boolean;
     saved: boolean;
     onClose: () => void;
@@ -355,6 +357,8 @@ function GapAnalysisDrawerContent({
     match,
     minAlertScore,
     defaultCopilotTone,
+    hasGeminiApiKey,
+    onOpenAccountSettings,
     saving,
     saved,
     onClose,
@@ -363,6 +367,8 @@ function GapAnalysisDrawerContent({
     match: MatchScore;
     minAlertScore?: number;
     defaultCopilotTone?: CopilotTone;
+    hasGeminiApiKey?: boolean;
+    onOpenAccountSettings?: () => void;
     saving: boolean;
     saved: boolean;
     onClose: () => void;
@@ -558,6 +564,15 @@ function GapAnalysisDrawerContent({
                             key={match.uuid}
                             match={match}
                             defaultTone={defaultCopilotTone}
+                            hasGeminiApiKey={hasGeminiApiKey}
+                            onOpenAccountSettings={
+                                onOpenAccountSettings
+                                    ? () => {
+                                          onClose();
+                                          onOpenAccountSettings();
+                                      }
+                                    : undefined
+                            }
                         />
                     ) : (
                         <GapAnalysisTabContent
@@ -586,6 +601,8 @@ export function GapAnalysisDrawer({
     match,
     minAlertScore,
     defaultCopilotTone,
+    hasGeminiApiKey,
+    onOpenAccountSettings,
     saving,
     saved,
     onClose,
@@ -612,6 +629,8 @@ export function GapAnalysisDrawer({
             match={match}
             minAlertScore={minAlertScore}
             defaultCopilotTone={defaultCopilotTone}
+            hasGeminiApiKey={hasGeminiApiKey}
+            onOpenAccountSettings={onOpenAccountSettings}
             saving={saving}
             saved={saved}
             onClose={onClose}

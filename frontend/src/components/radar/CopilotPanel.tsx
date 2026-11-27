@@ -4,15 +4,17 @@ import {
     Copy,
     FileText,
     HelpCircle,
+    KeyRound,
     ListChecks,
     Loader2,
     MessageSquareText,
     RefreshCw,
     Send,
     Sparkles,
+    UserCog,
 } from "lucide-react";
 import { useEffect, useState, type ComponentType, type SyntheticEvent } from "react";
-import { ApiError, vektrynApi } from "../../api/client";
+import { vektrynApi } from "../../api/client";
 import type {
     CopilotTone,
     MatchArtifact,
@@ -20,12 +22,15 @@ import type {
     MatchScore,
 } from "../../types/models";
 import { formatRelativeTime } from "../../utils/format";
+import { classifyCopilotError, type CopilotErrorInfo } from "../../utils/geminiModels";
 import { MarkdownContent } from "../ui/MarkdownContent";
 import { Tooltip } from "../ui/Tooltip";
 
 interface CopilotPanelProps {
     match: MatchScore;
     defaultTone?: CopilotTone;
+    hasGeminiApiKey?: boolean;
+    onOpenAccountSettings?: () => void;
 }
 
 interface ArtifactKindOption {
@@ -89,27 +94,6 @@ const TONE_OPTIONS: { value: CopilotTone; label: string }[] = [
 
 const MAX_GUIDANCE_LENGTH = 300;
 
-function formatCopilotError(err: unknown): string {
-    if (err instanceof ApiError) {
-        if (err.status === 429) {
-            if (err.retryAfterSeconds) {
-                return `Rate limit reached. Please wait ${err.retryAfterSeconds}s before generating another draft.`;
-            }
-            return err.detail || "Rate limit reached. Please wait a moment before trying again.";
-        }
-        if (err.status === 503) {
-            return (
-                err.detail ||
-                "AI Copilot is temporarily unavailable. Please try again in a moment."
-            );
-        }
-        if (err.detail) {
-            return err.detail;
-        }
-    }
-    return "Failed to communicate with AI Copilot. Please try again.";
-}
-
 function getKindDotColor(artifact: MatchArtifact | undefined): string | null {
     if (!artifact) return null;
     return artifact.is_stale ? "bg-amber-400" : "bg-emerald-400";
@@ -146,6 +130,8 @@ function renderActionIcon(generating: boolean, hasArtifact: boolean) {
 export function CopilotPanel({
     match,
     defaultTone = "balanced",
+    hasGeminiApiKey = true,
+    onOpenAccountSettings,
 }: Readonly<CopilotPanelProps>) {
     const [selectedKind, setSelectedKind] = useState<MatchArtifactKind>("tailored_bullets");
     const [artifactsByKind, setArtifactsByKind] = useState<
@@ -158,7 +144,7 @@ export function CopilotPanel({
     const [generatingKind, setGeneratingKind] = useState<MatchArtifactKind | null>(null);
     const [tone, setTone] = useState<CopilotTone>(defaultTone);
     const [guidance, setGuidance] = useState("");
-    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const [errorInfo, setErrorInfo] = useState<CopilotErrorInfo | null>(null);
     const [copiedKind, setCopiedKind] = useState<MatchArtifactKind | null>(null);
 
     useEffect(() => {
@@ -177,11 +163,11 @@ export function CopilotPanel({
                 }
                 setArtifactsByKind(mapped);
                 setLastSourceByKind(sources);
-                setErrorMessage(null);
+                setErrorInfo(null);
             })
             .catch((err) => {
                 if (!active) return;
-                setErrorMessage(formatCopilotError(err));
+                setErrorInfo(classifyCopilotError(err));
             })
             .finally(() => {
                 if (active) {
@@ -202,7 +188,7 @@ export function CopilotPanel({
     const isGeneratingAny = generatingKind !== null;
 
     async function handleGenerate(regenerate: boolean) {
-        setErrorMessage(null);
+        setErrorInfo(null);
         setGeneratingKind(selectedKind);
         try {
             const cleanGuidance = guidance.trim();
@@ -222,7 +208,7 @@ export function CopilotPanel({
                 [selectedKind]: cached ? "cached" : "fresh",
             }));
         } catch (err) {
-            setErrorMessage(formatCopilotError(err));
+            setErrorInfo(classifyCopilotError(err));
         } finally {
             setGeneratingKind(null);
         }
@@ -244,7 +230,10 @@ export function CopilotPanel({
                 setCopiedKind((prev) => (prev === selectedKind ? null : prev));
             }, 2000);
         } catch {
-            setErrorMessage("Could not copy to clipboard. Please select and copy manually.");
+            setErrorInfo({
+                message: "Could not copy to clipboard. Please select and copy manually.",
+                showSettingsAction: false,
+            });
         }
     }
 
@@ -260,6 +249,28 @@ export function CopilotPanel({
 
     return (
         <div className="space-y-5">
+            {!hasGeminiApiKey && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-950/20 px-4 py-3 text-xs text-amber-200">
+                    <div className="flex items-start gap-2.5">
+                        <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                        <span>
+                            Add your Google AI Studio Gemini API key to generate new AI Copilot
+                            drafts. Previously cached drafts remain viewable below.
+                        </span>
+                    </div>
+                    {onOpenAccountSettings && (
+                        <button
+                            type="button"
+                            onClick={onOpenAccountSettings}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 ring-1 ring-amber-500/40 transition hover:bg-amber-500/30"
+                        >
+                            <UserCog className="h-3.5 w-3.5" />
+                            <span>Open Account Settings</span>
+                        </button>
+                    )}
+                </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                 {ARTIFACT_KINDS.map((item) => {
                     const Icon = item.icon;
@@ -271,7 +282,7 @@ export function CopilotPanel({
                             type="button"
                             onClick={() => {
                                 setSelectedKind(item.kind);
-                                setErrorMessage(null);
+                                setErrorInfo(null);
                             }}
                             className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
                                 isActive
@@ -362,13 +373,25 @@ export function CopilotPanel({
                 </div>
             </form>
 
-            {errorMessage && (
+            {errorInfo && (
                 <div
                     role="alert"
-                    className="flex items-start gap-2.5 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-xs leading-relaxed text-rose-200"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-xs leading-relaxed text-rose-200"
                 >
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-                    <span>{errorMessage}</span>
+                    <div className="flex items-start gap-2.5">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                        <span>{errorInfo.message}</span>
+                    </div>
+                    {errorInfo.showSettingsAction && onOpenAccountSettings && (
+                        <button
+                            type="button"
+                            onClick={onOpenAccountSettings}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-100 ring-1 ring-rose-500/40 transition hover:bg-rose-500/30"
+                        >
+                            <UserCog className="h-3.5 w-3.5" />
+                            <span>Open Account Settings</span>
+                        </button>
+                    )}
                 </div>
             )}
 

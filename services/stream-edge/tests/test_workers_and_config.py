@@ -4,13 +4,14 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from cryptography.fernet import Fernet
 from fastapi import HTTPException
 import httpx
 import pytest
 
 from stream_edge import telemetry as edge_telemetry
 from stream_edge.api.alerts_sse import _resolve_stream_user_id
-from stream_edge.clients.gemini import GeminiStreamClient
+from stream_edge.clients.gemini import build_resume_fit_prompt
 from stream_edge.clients.kafka import (
     KafkaEventProducer,
     _kafka_base_config,
@@ -42,6 +43,7 @@ from vektryn_contracts import (
     EMBEDDING_DIMENSIONS,
     JobEnrichedEvent,
     compute_job_content_hash,
+    encrypt_api_key,
     JobRescoreEvent,
     KafkaTopic,
     sign_stream_token,
@@ -183,8 +185,9 @@ def test_matcher_handles_zero_active_resumes_without_unbound_local_error():
     ):
         _upsert_job_and_score_sync(
             enriched=enriched,
-            gemini=fake_gemini,
+            scoring_manager=fake_gemini,
             producer=fake_producer,
+            byok_encryption_key="",
         )
 
     fake_conn.commit.assert_called_once()
@@ -350,6 +353,10 @@ def test_stream_edge_sentry_gated_by_dsn(monkeypatch):
 
 
 def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    encrypted_user_key = encrypt_api_key(
+        "AQ.Ab8RN6-RescoreUserKey1234567890", fernet_key
+    )
     resume_uuid = uuid4()
     stale_job_uuid = uuid4()
     unscored_job_uuid = uuid4()
@@ -369,7 +376,7 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
 
     fake_cursor.execute.side_effect = _capture_execute
     # Sequence of fetchone/fetchall calls:
-    # 1. fetchone() -> ResumeProfile
+    # 1. fetchone() -> ResumeProfile + UserProfile BYOK cols
     # 2. fetchall() -> stale MatchScore candidate (1 row)
     # 3. fetchall() -> unscored active JobPosting candidate (1 row)
     # 4. fetchone() -> upsert returning (match_uuid, alert_sent_at) for stale job
@@ -386,6 +393,10 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
             ["brazil"],
             70,
             [0.01] * EMBEDDING_DIMENSIONS,
+            "Primary Resume",
+            encrypted_user_key,
+            "auto",
+            True,
         ),
         (uuid4(), None),
         (uuid4(), None),
@@ -435,9 +446,11 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
         fit_highlights=["Direct Python/Django ownership."],
         watchout_note="",
     )
-    fake_gemini = MagicMock()
-    fake_gemini.evaluate_resume_fit = AsyncMock(
-        return_value=(eval_result, "gemini-4-hydrogen")
+    fake_manager = MagicMock()
+    fake_manager.get_pause_state.return_value = None
+    fake_manager.evaluate_resume_fit_sync.return_value = (
+        eval_result,
+        "gemini-4-hydrogen",
     )
     fake_producer = MagicMock()
 
@@ -447,15 +460,16 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
     ):
         processed = _rescore_resume_sync(
             event=event,
-            gemini=fake_gemini,
+            scoring_manager=fake_manager,
             producer=fake_producer,
+            byok_encryption_key=fernet_key,
         )
 
     assert processed == 2
     assert fake_conn.commit.call_count == 3
     fake_producer.flush.assert_called_once()
     # Only the qualifying unscored job should trigger Gemini & emit an alert
-    fake_gemini.evaluate_resume_fit.assert_awaited_once()
+    fake_manager.evaluate_resume_fit_sync.assert_called_once()
     fake_producer._publish_sync.assert_called_once()
 
     # Verify both candidate queries use HNSW-compatible ORDER BY distance ASC
@@ -469,6 +483,10 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
 
 
 def test_matcher_rescore_force_watermark_and_consumer_poll_interval():
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    encrypted_user_key = encrypt_api_key(
+        "AQ.Ab8RN6-ForceRescoreKey123456789", fernet_key
+    )
     resume_uuid = uuid4()
     event = JobRescoreEvent(
         resume_profile_uuid=resume_uuid,
@@ -492,6 +510,10 @@ def test_matcher_rescore_force_watermark_and_consumer_poll_interval():
         [],
         70,
         [0.01] * EMBEDDING_DIMENSIONS,
+        "Primary",
+        encrypted_user_key,
+        "auto",
+        True,
     )
     fake_cursor.fetchall.return_value = []
 
@@ -499,12 +521,20 @@ def test_matcher_rescore_force_watermark_and_consumer_poll_interval():
     fake_conn.__enter__.return_value = fake_conn
     fake_conn.cursor.return_value = fake_cursor
 
+    fake_manager = MagicMock()
+    fake_manager.get_pause_state.return_value = None
+
     with (
         patch("stream_edge.workers.matcher.psycopg.connect", return_value=fake_conn),
         patch("stream_edge.workers.matcher.register_vector"),
     ):
         assert (
-            _rescore_resume_sync(event=event, gemini=MagicMock(), producer=MagicMock())
+            _rescore_resume_sync(
+                event=event,
+                scoring_manager=fake_manager,
+                producer=MagicMock(),
+                byok_encryption_key=fernet_key,
+            )
             == 0
         )
 
@@ -591,6 +621,10 @@ async def test_ingest_accepts_manual_source_and_lifecycle_skips_mailto(monkeypat
 
 
 def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    encrypted_user_key = encrypt_api_key(
+        "AQ.Ab8RN6-ManualJobUserKey12345678", fernet_key
+    )
     job_uuid = uuid4()
     resume_uuid = uuid4()
     event = JobEnrichedEvent(
@@ -630,6 +664,9 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
             ["brazil", "latam"],  # Does not overlap europe/emea
             70,
             0.73,
+            encrypted_user_key,
+            "auto",
+            True,
         )
     ]
     fake_conn = MagicMock()
@@ -645,9 +682,10 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
         fit_highlights=["Strong PostgreSQL and distributed systems background."],
         watchout_note="Go is not listed on your resume.",
     )
-    fake_gemini = MagicMock()
-    fake_gemini.evaluate_resume_fit = AsyncMock(
-        return_value=(eval_result, "gemini-4-hydrogen")
+    fake_manager = MagicMock()
+    fake_manager.evaluate_resume_fit_sync.return_value = (
+        eval_result,
+        "gemini-4-hydrogen",
     )
     fake_producer = MagicMock()
 
@@ -656,10 +694,13 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
         patch("stream_edge.workers.matcher.register_vector"),
     ):
         _upsert_job_and_score_sync(
-            enriched=event, gemini=fake_gemini, producer=fake_producer
+            enriched=event,
+            scoring_manager=fake_manager,
+            producer=fake_producer,
+            byok_encryption_key=fernet_key,
         )
 
-    fake_gemini.evaluate_resume_fit.assert_awaited_once()
+    fake_manager.evaluate_resume_fit_sync.assert_called_once()
     fake_producer._publish_sync.assert_called_once()
 
 
@@ -791,41 +832,8 @@ async def test_internal_collect_endpoint_auth_subprocess_and_single_flight(monke
     app.state.active_collect_proc = None
 
 
-async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused():
-    captured: dict[str, object] = {}
-
-    def _fake_generate_structured_sync(*, prompt: str, schema):
-        captured["prompt"] = prompt
-        captured["schema"] = schema
-        return (
-            json.dumps(
-                {
-                    "fit_score": 86,
-                    "matched_skills": ["typescript", "react"],
-                    "missing_keywords": ["graphql"],
-                    "talking_points": [
-                        "Highlight your React design system rollout.",
-                        "Discuss TypeScript migration impact.",
-                        "Frame frontend performance profiling wins.",
-                    ],
-                    "gap_summary": (
-                        "Your React and TypeScript background aligns directly with this role's "
-                        "core product engineering scope."
-                    ),
-                    "fit_highlights": [
-                        "Direct ownership of React UI architecture and component systems.",
-                        "Strong TypeScript tooling experience matching the target stack.",
-                    ],
-                    "watchout_note": "GraphQL query tuning is not explicitly highlighted on your resume.",
-                }
-            ),
-            "gemini-4-hydrogen",
-        )
-
-    client = GeminiStreamClient.__new__(GeminiStreamClient)
-    client._generate_structured_sync = _fake_generate_structured_sync  # type: ignore[method-assign]
-
-    evaluation, model_used = await client.evaluate_resume_fit(
+def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused():
+    prompt = build_resume_fit_prompt(
         resume_text="Senior Frontend Engineer building React and TypeScript web apps.",
         resume_skills=["react", "typescript"],
         job_title="Staff Frontend Engineer",
@@ -834,12 +842,6 @@ async def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused
         job_stack=["react", "typescript", "graphql"],
     )
 
-    prompt = str(captured["prompt"])
-    assert captured["schema"].__name__ == "ResumeGapEvaluation"
-    assert model_used == "gemini-4-hydrogen"
-    assert evaluation.fit_score == 86
-    assert len(evaluation.fit_highlights) == 2
-    assert evaluation.watchout_note.startswith("GraphQL")
     assert "core backend/architecture overlap" not in prompt
     assert "actual engineering discipline" in prompt
     assert "fit_highlights:" in prompt

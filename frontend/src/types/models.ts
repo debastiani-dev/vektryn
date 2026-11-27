@@ -185,7 +185,9 @@ export type NotificationKind =
     | "rescore_completed"
     | "manual_import_ready"
     | "collector_sync_completed"
-    | "lead_followup_due";
+    | "lead_followup_due"
+    | "ai_quota_exhausted"
+    | "ai_key_invalid";
 
 export interface NotificationPayload {
     job_posting_uuid?: string;
@@ -235,11 +237,27 @@ export interface ReadAllNotificationsResponse {
 
 export type PreferredCurrency = "USD" | "BRL" | "EUR" | "GBP";
 
-export interface UserProfileSummary {
+export type PreferredGeminiModel =
+    | "auto"
+    | "gemini-4-carbon"
+    | "gemini-4-neon"
+    | "gemini-4-argon"
+    | "gemini-4-hydrogen"
+    | "gemini-3.8-flash"
+    | "gemini-3.5-flash-lite";
+
+export interface BaseUserProfileSummary {
     display_name: string;
     timezone: string;
     preferred_currency: PreferredCurrency;
     default_copilot_tone: CopilotTone;
+}
+
+export interface UserProfileSummary extends BaseUserProfileSummary {
+    has_gemini_api_key?: boolean;
+    gemini_api_key_last4?: string;
+    preferred_gemini_model?: PreferredGeminiModel;
+    allow_model_fallback?: boolean;
 }
 
 export interface UserProfileDetail extends UserProfileSummary {
@@ -251,6 +269,13 @@ export interface UserProfileDetail extends UserProfileSummary {
     linkedin_url: string;
     github_url: string;
     portfolio_url: string;
+    has_gemini_api_key: boolean;
+    gemini_api_key_last4: string;
+    preferred_gemini_model: PreferredGeminiModel;
+    allow_model_fallback: boolean;
+    pending_resumes_embedded?: number;
+    pending_resumes_remaining?: number;
+    embedding_warning?: string | null;
     created_at: string;
     modified_at: string;
 }
@@ -264,6 +289,9 @@ export interface UserProfileUpdateInput {
     linkedin_url?: string;
     github_url?: string;
     portfolio_url?: string;
+    gemini_api_key?: string | null;
+    preferred_gemini_model?: PreferredGeminiModel;
+    allow_model_fallback?: boolean;
 }
 
 export interface CurrentUser {
@@ -290,7 +318,7 @@ export interface AccountDeactivateResponse {
     detail: string;
 }
 
-export interface StaffManagedUserProfile extends UserProfileSummary {
+export interface StaffManagedUserProfile extends BaseUserProfileSummary {
     linkedin_url: string;
     github_url: string;
     portfolio_url: string;

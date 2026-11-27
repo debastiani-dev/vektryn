@@ -2,6 +2,8 @@ import {
     CheckCircle2,
     FileText,
     FileUp,
+    KeyRound,
+    Loader2,
     PauseCircle,
     Pencil,
     PlayCircle,
@@ -9,9 +11,10 @@ import {
     RefreshCw,
     Sparkles,
     Trash2,
+    UserCog,
     X,
 } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type SubmitEvent, useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
 import type { ContractType, ResumeProfile, SeniorityLevel } from "../../types/models";
 import {
@@ -58,87 +61,220 @@ function toggleItem<T>(list: T[], item: T): T[] {
 
 interface ResumeCardProps {
     profile: ResumeProfile;
+    hasGeminiApiKey: boolean;
     busy: boolean;
+    embedding: boolean;
     rescoring: boolean;
     rescoreNotice: string | null;
+    onGenerateEmbedding: (profile: ResumeProfile) => void;
     onRescore: (profile: ResumeProfile) => void;
     onEdit: (profile: ResumeProfile) => void;
     onToggleActive: (profile: ResumeProfile) => void;
     onDelete: (profile: ResumeProfile) => void;
 }
 
+function getRescoreTooltip(hasGeminiApiKey: boolean, profile: ResumeProfile): string {
+    if (!hasGeminiApiKey) {
+        return "Add your Gemini API key in Account Settings before rescoring active jobs";
+    }
+    if (!profile.is_active) {
+        return "Activate this resume profile before rescoring active jobs";
+    }
+    if (!profile.has_embedding) {
+        return "Generate an embedding for this resume first";
+    }
+    return "Queue background rescoring against active jobs for this profile";
+}
+
+function ResumeStatusBadges({ profile }: Readonly<{ profile: ResumeProfile }>) {
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            <Tooltip
+                content={
+                    profile.is_active
+                        ? "Actively scored against incoming jobs"
+                        : "Paused — skipped by matching worker"
+                }
+            >
+                <span
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${
+                        profile.is_active
+                            ? "bg-emerald-500/12 text-emerald-300 ring-emerald-500/30"
+                            : "bg-zinc-800 text-zinc-400 ring-zinc-700"
+                    }`}
+                >
+                    <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            profile.is_active ? "bg-emerald-400" : "bg-zinc-500"
+                        }`}
+                    />
+                    <span>{profile.is_active ? "Active" : "Paused"}</span>
+                </span>
+            </Tooltip>
+
+            <Tooltip
+                content={
+                    profile.has_embedding
+                        ? "768-dim Gemini embedding ready for pgvector cosine matching"
+                        : "No embedding computed yet — add your Gemini API key in Account Settings and generate an embedding"
+                }
+            >
+                <span
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${
+                        profile.has_embedding
+                            ? "bg-violet-500/12 text-violet-300 ring-violet-500/30"
+                            : "bg-amber-500/12 text-amber-300 ring-amber-500/30"
+                    }`}
+                >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span>{profile.has_embedding ? "Embedded" : "No Embedding"}</span>
+                </span>
+            </Tooltip>
+
+            <Tooltip content="Minimum AI fit score required to trigger live SSE match alerts">
+                <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 font-mono text-xs tabular-nums text-zinc-300">
+                    Alert &ge; {profile.min_alert_score}%
+                </span>
+            </Tooltip>
+        </div>
+    );
+}
+
+interface ResumeCardActionsProps {
+    profile: ResumeProfile;
+    hasGeminiApiKey: boolean;
+    busy: boolean;
+    embedding: boolean;
+    rescoring: boolean;
+    onGenerateEmbedding: (profile: ResumeProfile) => void;
+    onRescore: (profile: ResumeProfile) => void;
+    onEdit: (profile: ResumeProfile) => void;
+    onToggleActive: (profile: ResumeProfile) => void;
+    onDelete: (profile: ResumeProfile) => void;
+}
+
+function ResumeCardActions({
+    profile,
+    hasGeminiApiKey,
+    busy,
+    embedding,
+    rescoring,
+    onGenerateEmbedding,
+    onRescore,
+    onEdit,
+    onToggleActive,
+    onDelete,
+}: Readonly<ResumeCardActionsProps>) {
+    const activeToggleTooltip = profile.is_active
+        ? "Pause scoring incoming jobs against this resume"
+        : "Activate scoring incoming jobs against this resume";
+    const canRescore = hasGeminiApiKey && profile.is_active && profile.has_embedding;
+    const rescoreTooltip = getRescoreTooltip(hasGeminiApiKey, profile);
+
+    return (
+        <div className="flex flex-wrap shrink-0 items-center gap-2">
+            {!profile.has_embedding && hasGeminiApiKey && (
+                <Tooltip content="Generate a 768-dim embedding and extract skills using your Gemini API key">
+                    <button
+                        type="button"
+                        disabled={busy || embedding || rescoring}
+                        onClick={() => onGenerateEmbedding(profile)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-xs font-medium text-amber-200 transition hover:border-amber-400/60 hover:bg-amber-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/70 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                        {embedding ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
+                        ) : (
+                            <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                        )}
+                        <span>{embedding ? "Embedding..." : "Generate Embedding"}</span>
+                    </button>
+                </Tooltip>
+            )}
+
+            <Tooltip content={rescoreTooltip}>
+                <button
+                    type="button"
+                    disabled={busy || embedding || rescoring || !canRescore}
+                    onClick={() => onRescore(profile)}
+                    aria-label="Rescore active jobs"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/35 bg-violet-500/12 px-3 py-2 text-xs font-medium text-violet-200 transition hover:border-violet-400/50 hover:bg-violet-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                    <RefreshCw
+                        className={`h-3.5 w-3.5 text-violet-300 ${rescoring ? "animate-spin" : ""}`}
+                    />
+                    <span>{rescoring ? "Rescoring..." : "Rescore Active Jobs"}</span>
+                </button>
+            </Tooltip>
+
+            <Tooltip content={activeToggleTooltip}>
+                <button
+                    type="button"
+                    disabled={busy || rescoring}
+                    onClick={() => onToggleActive(profile)}
+                    aria-label={profile.is_active ? "Pause profile" : "Activate profile"}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
+                >
+                    {profile.is_active ? (
+                        <>
+                            <PauseCircle className="h-4 w-4 text-amber-400" />
+                            <span>Pause</span>
+                        </>
+                    ) : (
+                        <>
+                            <PlayCircle className="h-4 w-4 text-emerald-400" />
+                            <span>Activate</span>
+                        </>
+                    )}
+                </button>
+            </Tooltip>
+
+            <Tooltip content="Edit resume text, upload new file, or adjust target filters">
+                <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onEdit(profile)}
+                    aria-label="Edit resume profile"
+                    className="rounded-xl border border-zinc-800 bg-zinc-900 p-2 text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
+                >
+                    <Pencil className="h-4 w-4" />
+                </button>
+            </Tooltip>
+
+            <Tooltip content="Delete resume profile">
+                <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onDelete(profile)}
+                    aria-label="Delete resume profile"
+                    className="rounded-xl border border-zinc-800 bg-zinc-900 p-2 text-zinc-400 transition hover:border-red-500/40 hover:bg-red-950/40 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/60 disabled:opacity-50"
+                >
+                    <Trash2 className="h-4 w-4" />
+                </button>
+            </Tooltip>
+        </div>
+    );
+}
+
 function ResumeProfileCard({
     profile,
+    hasGeminiApiKey,
     busy,
+    embedding,
     rescoring,
     rescoreNotice,
+    onGenerateEmbedding,
     onRescore,
     onEdit,
     onToggleActive,
     onDelete,
 }: Readonly<ResumeCardProps>) {
     const updatedDate = formatExactDate(profile.modified_at);
-    const activeToggleTooltip = profile.is_active
-        ? "Pause scoring incoming jobs against this resume"
-        : "Activate scoring incoming jobs against this resume";
-    const canRescore = profile.is_active && profile.has_embedding;
-    let rescoreTooltip = "Queue background rescoring against active jobs for this profile";
-    if (!profile.is_active) {
-        rescoreTooltip = "Activate this resume profile before rescoring active jobs";
-    } else if (!profile.has_embedding) {
-        rescoreTooltip = "Generate an embedding by saving or re-uploading this resume first";
-    }
 
     return (
         <article className="space-y-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-6 ring-1 ring-inset ring-white/[0.03] transition hover:border-zinc-700/90">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Tooltip
-                            content={
-                                profile.is_active
-                                    ? "Actively scored against incoming jobs"
-                                    : "Paused — skipped by matching worker"
-                            }
-                        >
-                            <span
-                                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${profile.is_active
-                                        ? "bg-emerald-500/12 text-emerald-300 ring-emerald-500/30"
-                                        : "bg-zinc-800 text-zinc-400 ring-zinc-700"
-                                    }`}
-                            >
-                                <span
-                                    className={`h-1.5 w-1.5 rounded-full ${profile.is_active ? "bg-emerald-400" : "bg-zinc-500"
-                                        }`}
-                                />
-                                {profile.is_active ? "Active" : "Paused"}
-                            </span>
-                        </Tooltip>
-
-                        <Tooltip
-                            content={
-                                profile.has_embedding
-                                    ? "768-dim Gemini embedding ready for pgvector cosine matching"
-                                    : "No embedding computed yet — check GEMINI_API_KEY"
-                            }
-                        >
-                            <span
-                                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium ring-1 ${profile.has_embedding
-                                        ? "bg-violet-500/12 text-violet-300 ring-violet-500/30"
-                                        : "bg-amber-500/12 text-amber-300 ring-amber-500/30"
-                                    }`}
-                            >
-                                <Sparkles className="h-3.5 w-3.5" />
-                                {profile.has_embedding ? "Embedded" : "No Embedding"}
-                            </span>
-                        </Tooltip>
-
-                        <Tooltip content="Minimum AI fit score required to trigger live SSE match alerts">
-                            <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 font-mono text-xs tabular-nums text-zinc-300">
-                                Alert &ge; {profile.min_alert_score}%
-                            </span>
-                        </Tooltip>
-                    </div>
+                    <ResumeStatusBadges profile={profile} />
 
                     <h2 className="text-lg font-semibold text-zinc-100">{profile.label}</h2>
 
@@ -148,75 +284,25 @@ function ResumeProfileCard({
                             <Tooltip content={profile.source_file_gcs_uri}>
                                 <span className="inline-flex items-center gap-1 text-zinc-400">
                                     <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                                    File snapshot stored
+                                    <span>File snapshot stored</span>
                                 </span>
                             </Tooltip>
                         )}
                     </div>
                 </div>
 
-                <div className="flex flex-wrap shrink-0 items-center gap-2">
-                    <Tooltip content={rescoreTooltip}>
-                        <button
-                            type="button"
-                            disabled={busy || rescoring || !canRescore}
-                            onClick={() => onRescore(profile)}
-                            aria-label="Rescore active jobs"
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/35 bg-violet-500/12 px-3 py-2 text-xs font-medium text-violet-200 transition hover:border-violet-400/50 hover:bg-violet-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed disabled:opacity-45"
-                        >
-                            <RefreshCw
-                                className={`h-3.5 w-3.5 text-violet-300 ${rescoring ? "animate-spin" : ""}`}
-                            />
-                            {rescoring ? "Rescoring..." : "Rescore Active Jobs"}
-                        </button>
-                    </Tooltip>
-
-                    <Tooltip content={activeToggleTooltip}>
-                        <button
-                            type="button"
-                            disabled={busy || rescoring}
-                            onClick={() => onToggleActive(profile)}
-                            aria-label={profile.is_active ? "Pause profile" : "Activate profile"}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
-                        >
-                            {profile.is_active ? (
-                                <>
-                                    <PauseCircle className="h-4 w-4 text-amber-400" />
-                                    Pause
-                                </>
-                            ) : (
-                                <>
-                                    <PlayCircle className="h-4 w-4 text-emerald-400" />
-                                    Activate
-                                </>
-                            )}
-                        </button>
-                    </Tooltip>
-
-                    <Tooltip content="Edit resume text, upload new file, or adjust target filters">
-                        <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => onEdit(profile)}
-                            aria-label="Edit resume profile"
-                            className="rounded-xl border border-zinc-800 bg-zinc-900 p-2 text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
-                        >
-                            <Pencil className="h-4 w-4" />
-                        </button>
-                    </Tooltip>
-
-                    <Tooltip content="Delete resume profile">
-                        <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => onDelete(profile)}
-                            aria-label="Delete resume profile"
-                            className="rounded-xl border border-zinc-800 bg-zinc-900 p-2 text-zinc-400 transition hover:border-red-500/40 hover:bg-red-950/40 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/60 disabled:opacity-50"
-                        >
-                            <Trash2 className="h-4 w-4" />
-                        </button>
-                    </Tooltip>
-                </div>
+                <ResumeCardActions
+                    profile={profile}
+                    hasGeminiApiKey={hasGeminiApiKey}
+                    busy={busy}
+                    embedding={embedding}
+                    rescoring={rescoring}
+                    onGenerateEmbedding={onGenerateEmbedding}
+                    onRescore={onRescore}
+                    onEdit={onEdit}
+                    onToggleActive={onToggleActive}
+                    onDelete={onDelete}
+                />
             </div>
 
             {rescoreNotice && (
@@ -317,11 +403,20 @@ function ResumeProfileCard({
     );
 }
 
-export function ResumesView() {
+interface ResumesViewProps {
+    hasGeminiApiKey?: boolean;
+    onOpenAccountSettings?: () => void;
+}
+
+export function ResumesView({
+    hasGeminiApiKey = true,
+    onOpenAccountSettings,
+}: Readonly<ResumesViewProps> = {}) {
     const [profiles, setProfiles] = useState<ResumeProfile[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
+    const [embeddingId, setEmbeddingId] = useState<string | null>(null);
     const [rescoringId, setRescoringId] = useState<string | null>(null);
     const [rescoreNoticeById, setRescoreNoticeById] = useState<Record<string, string>>({});
     const [formOpen, setFormOpen] = useState(false);
@@ -392,7 +487,7 @@ export function ResumesView() {
         setFormOpen(true);
     }
 
-    async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
         event.preventDefault();
         if (!label.trim()) {
             setError("Profile label is required.");
@@ -449,6 +544,28 @@ export function ResumesView() {
             setError(err instanceof Error ? err.message : "Failed to update profile status");
         } finally {
             setBusyId(null);
+        }
+    }
+
+    async function handleGenerateEmbedding(profile: ResumeProfile) {
+        setEmbeddingId(profile.uuid);
+        setError(null);
+        try {
+            const updated = await vektrynApi.updateResume(profile.uuid, {
+                raw_text: profile.raw_text,
+            });
+            setProfiles((prev) =>
+                prev.map((item) => (item.uuid === updated.uuid ? updated : item)),
+            );
+            setRescoreNoticeById((prev) => ({
+                ...prev,
+                [profile.uuid]:
+                    "Generated 768-dim embedding and extracted technical skills. Background matching queued.",
+            }));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to generate resume embedding");
+        } finally {
+            setEmbeddingId(null);
         }
     }
 
@@ -538,9 +655,12 @@ export function ResumesView() {
                     <ResumeProfileCard
                         key={profile.uuid}
                         profile={profile}
+                        hasGeminiApiKey={hasGeminiApiKey}
                         busy={busyId === profile.uuid}
+                        embedding={embeddingId === profile.uuid}
                         rescoring={rescoringId === profile.uuid}
                         rescoreNotice={rescoreNoticeById[profile.uuid] ?? null}
+                        onGenerateEmbedding={(p) => void handleGenerateEmbedding(p)}
                         onRescore={(p) => void handleRescore(p)}
                         onEdit={openEditForm}
                         onToggleActive={(p) => void handleToggleActive(p)}
@@ -575,6 +695,29 @@ export function ResumesView() {
                         </button>
                     </Tooltip>
                 </div>
+
+                {!hasGeminiApiKey && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-950/20 px-5 py-3.5 text-xs text-amber-200">
+                        <div className="flex items-start gap-2.5">
+                            <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                            <span>
+                                You can upload and save resume profiles anytime, but generating
+                                vector embeddings, extracting skills, and rescoring active jobs
+                                require your personal Gemini API key.
+                            </span>
+                        </div>
+                        {onOpenAccountSettings && (
+                            <button
+                                type="button"
+                                onClick={onOpenAccountSettings}
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 ring-1 ring-amber-500/40 transition hover:bg-amber-500/30"
+                            >
+                                <UserCog className="h-3.5 w-3.5" />
+                                <span>Open Account Settings</span>
+                            </button>
+                        )}
+                    </div>
+                )}
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
@@ -810,15 +953,18 @@ export function ResumesView() {
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800 pt-4">
-                        <label className="inline-flex cursor-pointer items-center gap-2.5 text-sm text-zinc-300">
+                        <div className="inline-flex items-center gap-2.5 text-sm text-zinc-300">
                             <input
+                                id="resume-active-checkbox"
                                 type="checkbox"
                                 checked={isActive}
                                 onChange={(e) => setIsActive(e.target.checked)}
                                 className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 accent-violet-500"
                             />
-                            Active for real-time job matching
-                        </label>
+                            <label htmlFor="resume-active-checkbox" className="cursor-pointer">
+                                Active for real-time job matching
+                            </label>
+                        </div>
 
                         <div className="flex items-center gap-3">
                             <button

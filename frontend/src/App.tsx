@@ -209,6 +209,10 @@ export function App() {
                     timezone: updatedProfile.timezone,
                     preferred_currency: updatedProfile.preferred_currency,
                     default_copilot_tone: updatedProfile.default_copilot_tone,
+                    has_gemini_api_key: updatedProfile.has_gemini_api_key,
+                    gemini_api_key_last4: updatedProfile.gemini_api_key_last4,
+                    preferred_gemini_model: updatedProfile.preferred_gemini_model,
+                    allow_model_fallback: updatedProfile.allow_model_fallback,
                 },
             };
         });

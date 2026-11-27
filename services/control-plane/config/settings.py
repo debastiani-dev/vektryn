@@ -49,13 +49,9 @@ class ControlPlaneSettings(BaseSettings):
     kafka_sasl_username: str = ""
     kafka_sasl_password: str = ""
 
-    gemini_api_key: str = ""
+    byok_encryption_key: str = ""
     gemini_embedding_model: str = "gemini-embedding-001"
-    gemini_scoring_model: str = "gemini-4-hydrogen"
-    gemini_fallback_scoring_model: str = "gemini-3.5-flash-lite"
-    copilot_gemini_model: str = ""
-    copilot_gemini_fallback_model: str = ""
-    copilot_gemini_timeout_ms: int = 25000
+    copilot_gemini_timeout_ms: int = 24000
     copilot_rate_limit_max_requests: int = 15
     copilot_rate_limit_window_seconds: int = 300
     auth_login_acct_max_failures: int = 5
@@ -251,20 +247,8 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOW_CREDENTIALS = True
 
-GEMINI_API_KEY = env.gemini_api_key
-GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model
-GEMINI_SCORING_MODEL = env.gemini_scoring_model
-GEMINI_FALLBACK_SCORING_MODEL = env.gemini_fallback_scoring_model
-COPILOT_GEMINI_MODEL = (
-    env.copilot_gemini_model.strip()
-    or env.gemini_scoring_model.strip()
-    or "gemini-4-hydrogen"
-)
-COPILOT_GEMINI_FALLBACK_MODEL = (
-    env.copilot_gemini_fallback_model.strip()
-    or env.gemini_fallback_scoring_model.strip()
-    or "gemini-3.5-flash-lite"
-)
+BYOK_ENCRYPTION_KEY = env.byok_encryption_key.strip()
+GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model.strip() or "gemini-embedding-001"
 COPILOT_GEMINI_TIMEOUT_MS = max(5000, int(env.copilot_gemini_timeout_ms))
 COPILOT_RATE_LIMIT_MAX_REQUESTS = max(1, int(env.copilot_rate_limit_max_requests))
 COPILOT_RATE_LIMIT_WINDOW_SECONDS = max(1, int(env.copilot_rate_limit_window_seconds))

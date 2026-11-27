@@ -103,6 +103,10 @@ def test_auth_me_and_self_profile_validation_and_updates():
         "timezone": "UTC",
         "preferred_currency": "USD",
         "default_copilot_tone": "balanced",
+        "has_gemini_api_key": False,
+        "gemini_api_key_last4": "",
+        "preferred_gemini_model": "auto",
+        "allow_model_fallback": True,
     }
 
     get_res = client.get("/api/v1/auth/profile/")
@@ -201,7 +205,7 @@ def test_copilot_profile_grounding_default_tone_and_cache_stability(settings):
 
     captured_prompts: list[str] = []
 
-    def _fake_generate(*, prompt: str, genai_client=None):
+    def _fake_generate(*, user, prompt: str, genai_client=None):
         captured_prompts.append(prompt)
         return (
             "## Cover Letter\nGrounded draft for Rafa Debastiani.",

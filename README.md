@@ -270,7 +270,8 @@ Run `make help` at any time for the full target list.
 
 | Variable | Scope | Purpose |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | Backend & Workers | Google AI Studio key for `gemini-embedding-001` vectors, structured fit/gap scoring, and AI Copilot |
+| `GEMINI_API_KEY` | Enrichment Worker | Platform Google AI Studio key for automated job enrichment (`gemini-3.5-flash-lite` -> `gemini-3.8-flash`) and `gemini-embedding-001` vectors |
+| `BYOK_ENCRYPTION_KEY` | Control Plane & Matcher | Fernet symmetric key (`urlsafe_b64` of 32 bytes) for encrypting/decrypting per-user BYOK Gemini API keys |
 | `GEMINI_EMBEDDING_MODEL` / `GEMINI_SCORING_MODEL` / `GEMINI_FALLBACK_SCORING_MODEL` | Backend & Workers | Override default embedding and primary/fallback scoring Gemini models |
 | `DATABASE_URL` / `POSTGRES_*` | Backend & Workers | PostgreSQL connection (`DATABASE_URL` with optional `?sslmode=` in Cloud Run; `POSTGRES_HOST=localhost` for host Make targets) |
 | `REDIS_URL` | Backend & Workers | Redis instance for SHA-256 job dedup, login throttling, worker heartbeats, query embedding & Copilot rate-limit caches |
@@ -326,7 +327,7 @@ Provisioned declaratively with Terraform ([infra/terraform/](infra/terraform/)) 
 - **Cloud Run Services:** `vektryn-frontend` (Nginx reverse proxy with custom domain `vektryn.debastiani.dev` and Google-managed TLS), `vektryn-control-plane`, and `vektryn-stream-edge` (3600s request timeout for long-lived SSE streams), connected over Direct VPC Egress (`10.8.0.0/24`).
 - **Cloud Run Jobs & Cloud Scheduler:** `vektryn-migrate` (executed conditionally during CD when migrations change), `vektryn-collect` (`0 */4 * * *` UTC), `vektryn-rollup` (`0 1 * * *` UTC), and `vektryn-lifecycle` (`0 3 * * *` UTC).
 - **Private VPC Data & Worker Node (`vektryn-data-node`):** Compute Engine `e2-micro` VM (`us-central1-a`, static internal IP `10.8.0.10`, 30 GB `pd-standard`, 2 GB swap) running `pgvector/pgvector:pg17`, `redis:7-alpine`, `apache/kafka:3.9.0` (KRaft), `enrichment-worker`, and `matcher-worker`, with OS Login enabled and IAP-only SSH (`35.235.240.0/20`).
-- **Storage, Registry & Secrets:** GCS buckets (`raw-snapshots`, `resumes`, `tfstate`), Artifact Registry (`vektryn`), 8 GCP Secret Manager secrets with least-privilege `secretAccessor` bindings, and keyless GitHub Actions OIDC Workload Identity Federation (`vektryn-deployer`).
+- **Storage, Registry & Secrets:** GCS buckets (`raw-snapshots`, `resumes`, `tfstate`), Artifact Registry (`vektryn`), 9 GCP Secret Manager secrets with least-privilege `secretAccessor` bindings, and keyless GitHub Actions OIDC Workload Identity Federation (`vektryn-deployer`).
 
 ### CI/CD Pipelines
 

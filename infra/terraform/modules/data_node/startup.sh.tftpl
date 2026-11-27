@@ -48,6 +48,7 @@ echo "$ACCESS_TOKEN" | docker login -u oauth2accesstoken --password-stdin "https
 
 DATABASE_URL=$(fetch_secret "vektryn-database-url")
 GEMINI_API_KEY=$(fetch_secret "vektryn-gemini-api-key")
+BYOK_ENCRYPTION_KEY=$(fetch_secret "vektryn-byok-encryption-key" 2>/dev/null || true)
 INGEST_API_KEY=$(fetch_secret "vektryn-ingest-api-key")
 STREAM_AUTH_SECRET=$(fetch_secret "vektryn-stream-auth-secret")
 SENTRY_DSN=$(fetch_secret "vektryn-sentry-dsn" 2>/dev/null || true)
@@ -62,6 +63,8 @@ POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_DB=$POSTGRES_DB
 DATABASE_URL=postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB
 GEMINI_API_KEY=$GEMINI_API_KEY
+BYOK_ENCRYPTION_KEY=$BYOK_ENCRYPTION_KEY
+ENRICHMENT_DAILY_CAP=250
 INGEST_API_KEY=$INGEST_API_KEY
 STREAM_AUTH_SECRET=$STREAM_AUTH_SECRET
 STORAGE_BACKEND=gcs

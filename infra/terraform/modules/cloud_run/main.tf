@@ -144,10 +144,10 @@ resource "google_cloud_run_v2_service" "control_plane" {
       }
 
       env {
-        name = "GEMINI_API_KEY"
+        name = "BYOK_ENCRYPTION_KEY"
         value_source {
           secret_key_ref {
-            secret  = var.secret_ids["vektryn-gemini-api-key"]
+            secret  = var.secret_ids["vektryn-byok-encryption-key"]
             version = "latest"
           }
         }
