@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
 import { useNotifications } from "../../hooks/useNotifications";
 import type {
@@ -30,6 +30,10 @@ export function AuthenticatedWorkspace({
 }: Readonly<AuthenticatedWorkspaceProps>) {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
     const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+
+    useEffect(() => {
+        globalThis.scrollTo?.({ top: 0, behavior: "instant" });
+    }, [activeTab]);
     const [pendingRadarSearch, setPendingRadarSearch] = useState("");
     const [pendingRadarResume, setPendingRadarResume] = useState("");
     const [activeNotificationMatch, setActiveNotificationMatch] = useState<MatchScore | null>(null);
