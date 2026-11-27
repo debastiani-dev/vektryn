@@ -21,7 +21,7 @@ type SortColumn = "mention_count" | "unique_companies_count" | "median_annual_us
 type SortDirection = "asc" | "desc";
 
 interface StackTrendsViewProps {
-    onSearchSkillInRadar?: (skill: string) => void;
+    onSearchSkillInRadar?: (skill: string, resumeProfileUuid?: string) => void;
 }
 
 const CATEGORIES: Array<{ id: TechCategory | "all"; label: string }> = [
@@ -95,35 +95,35 @@ function AnalyticsTabHeader({
             <div
                 role="tablist"
                 aria-label="Analytics views"
-                className="inline-flex rounded-xl border border-zinc-800/90 bg-zinc-900/70 p-1"
+                className="flex w-full rounded-xl border border-zinc-800/90 bg-zinc-900/70 p-1 sm:inline-flex sm:w-auto"
             >
                 <button
                     type="button"
                     role="tab"
                     aria-selected={isMarket}
                     onClick={() => onSelectSubTab("market")}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                    className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 sm:flex-initial sm:px-3.5 ${
                         isMarket
                             ? "bg-violet-600 text-white shadow-sm shadow-violet-600/25"
                             : "text-zinc-400 hover:text-zinc-200"
                     }`}
                 >
-                    <BarChart3 className="h-3.5 w-3.5" />
-                    Market Trends
+                    <BarChart3 className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">Market Trends</span>
                 </button>
                 <button
                     type="button"
                     role="tab"
                     aria-selected={!isMarket}
                     onClick={() => onSelectSubTab("personal")}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                    className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 sm:flex-initial sm:px-3.5 ${
                         !isMarket
                             ? "bg-violet-600 text-white shadow-sm shadow-violet-600/25"
                             : "text-zinc-400 hover:text-zinc-200"
                     }`}
                 >
-                    <Target className="h-3.5 w-3.5" />
-                    My Pipeline & Skill Gaps
+                    <Target className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">My Pipeline & Skill Gaps</span>
                 </button>
             </div>
         </div>
@@ -425,7 +425,7 @@ export function StackTrendsView({
     }
 
     return (
-        <div className="space-y-8">
+        <div className="min-w-0 space-y-8">
             <header className="space-y-5">
                 <AnalyticsTabHeader
                     activeSubTab={activeSubTab}
@@ -433,7 +433,7 @@ export function StackTrendsView({
                 />
 
                 {activeSubTab === "market" && (
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <Tooltip
                             content="Distinct technology trend rows in the current category filter"
                             className="block"

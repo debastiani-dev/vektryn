@@ -31,6 +31,7 @@ export function AuthenticatedWorkspace({
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
     const [settingsModalOpen, setSettingsModalOpen] = useState(false);
     const [pendingRadarSearch, setPendingRadarSearch] = useState("");
+    const [pendingRadarResume, setPendingRadarResume] = useState("");
     const [activeNotificationMatch, setActiveNotificationMatch] = useState<MatchScore | null>(null);
     const [openingMatchId, setOpeningMatchId] = useState<string | null>(null);
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
@@ -129,13 +130,18 @@ export function AuthenticatedWorkspace({
         [markRead],
     );
 
-    const handleSearchSkillInRadar = useCallback((skill: string) => {
-        setPendingRadarSearch(skill);
-        setActiveTab("radar");
-    }, []);
+    const handleSearchSkillInRadar = useCallback(
+        (skill: string, resumeProfileUuid?: string) => {
+            setPendingRadarSearch(skill);
+            setPendingRadarResume(resumeProfileUuid ?? "");
+            setActiveTab("radar");
+        },
+        [],
+    );
 
     const handleConsumeRadarSearch = useCallback(() => {
         setPendingRadarSearch("");
+        setPendingRadarResume("");
     }, []);
 
     const handleOpenSettingsFromNotification = useCallback(
@@ -199,6 +205,7 @@ export function AuthenticatedWorkspace({
                 {activeTab === "radar" && (
                     <JobRadarView
                         initialSearch={pendingRadarSearch}
+                        initialResumeFilter={pendingRadarResume}
                         onConsumeInitialSearch={handleConsumeRadarSearch}
                         defaultCopilotTone={defaultCopilotTone}
                         hasGeminiApiKey={hasGeminiApiKey}
