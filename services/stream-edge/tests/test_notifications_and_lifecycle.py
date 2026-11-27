@@ -3,6 +3,9 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 import uuid
 
+from psycopg._queries import PostgresQuery
+from psycopg.adapt import Transformer
+
 from stream_edge.api.alerts_sse import _format_alert_sse
 from stream_edge.clients import notifications as notif_client
 from stream_edge.workers import lifecycle, matcher
@@ -178,6 +181,27 @@ def test_matcher_commits_before_publishing_alerts(monkeypatch) -> None:
         producer=producer,
     )
     assert call_order == ["commit", "publish", "flush"]
+
+
+def test_lifecycle_sql_queries_parse_with_psycopg_placeholders() -> None:
+    now = datetime(2026, 11, 27, 3, 0, tzinfo=UTC)
+    sample_uuid = str(uuid.uuid4())
+
+    fetch_query = PostgresQuery(Transformer())
+    fetch_query.convert(lifecycle._FETCH_ACTIVE_SQL, (200,))
+    assert b"apply_url ILIKE 'http://%'" in fetch_query.query
+    assert b"apply_url ILIKE 'https://%'" in fetch_query.query
+    assert b"LIMIT $1" in fetch_query.query
+
+    PostgresQuery(Transformer()).convert(
+        lifecycle._MARK_CLOSED_SQL, (now, now, [sample_uuid])
+    )
+    PostgresQuery(Transformer()).convert(
+        lifecycle._ACTIVE_LEADS_FOR_JOBS_SQL, ([sample_uuid],)
+    )
+    PostgresQuery(Transformer()).convert(
+        lifecycle._CLAIM_DUE_FOLLOWUPS_SQL, (now, now, now)
+    )
 
 
 def test_lifecycle_notifies_active_leads_and_always_runs_retention(monkeypatch) -> None:

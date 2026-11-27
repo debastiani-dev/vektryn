@@ -36,7 +36,7 @@ _FETCH_ACTIVE_SQL = """
     FROM jobs_jobposting
     WHERE is_active = TRUE
       AND is_deleted = FALSE
-      AND (apply_url LIKE 'http://%' OR apply_url LIKE 'https://%')
+      AND (apply_url ILIKE 'http://%%' OR apply_url ILIKE 'https://%%')
     ORDER BY COALESCE(modified_at, created_at) ASC
     LIMIT %s
 """
