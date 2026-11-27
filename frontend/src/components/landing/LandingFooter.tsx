@@ -1,4 +1,5 @@
-import { ArrowRight, ExternalLink, LogIn, Radar } from "lucide-react";
+import { ArrowRight, ExternalLink, LogIn } from "lucide-react";
+import { VektrynLogo } from "../ui/VektrynLogo";
 import { VEKTRYN_GITHUB_URL } from "./landingPreviewData";
 
 interface LandingFooterProps {
@@ -54,7 +55,7 @@ export function LandingFooter({
                 <div className="mt-10 flex flex-col gap-6 border-t border-zinc-800/80 pt-8 sm:flex-row sm:items-center sm:justify-between">
                     <div className="space-y-1.5">
                         <div className="flex items-center gap-2">
-                            <Radar className="h-4 w-4 text-violet-400" aria-hidden="true" />
+                            <VektrynLogo className="h-5 w-5" />
                             <span className="font-mono text-sm font-semibold text-zinc-100">
                                 vektryn
                             </span>

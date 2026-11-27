@@ -1,5 +1,6 @@
-import { ArrowRight, ExternalLink, LogIn, Menu, Radar, X } from "lucide-react";
+import { ArrowRight, ExternalLink, LogIn, Menu, X } from "lucide-react";
 import { useState } from "react";
+import { VektrynLogo } from "../ui/VektrynLogo";
 import { VEKTRYN_GITHUB_URL } from "./landingPreviewData";
 
 interface LandingNavbarProps {
@@ -40,8 +41,8 @@ export function LandingNavbar({
                     href="#top"
                     className="inline-flex min-h-11 items-center gap-2.5 rounded-lg pr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                 >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500/25 to-fuchsia-500/15 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/15">
-                        <Radar className="h-4 w-4 text-violet-300" aria-hidden="true" />
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
+                        <VektrynLogo className="h-7 w-7" />
                     </span>
                     <span className="font-mono text-base font-semibold tracking-tight text-zinc-100">
                         vektryn
