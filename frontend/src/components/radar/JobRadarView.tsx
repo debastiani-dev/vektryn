@@ -934,6 +934,7 @@ function buildMatchesQueryParams(opts: {
 
 interface JobRadarViewProps {
     initialSearch?: string;
+    initialResumeFilter?: string;
     onConsumeInitialSearch?: () => void;
     defaultCopilotTone?: CopilotTone;
     hasGeminiApiKey?: boolean;
@@ -942,12 +943,14 @@ interface JobRadarViewProps {
 
 export function JobRadarView({
     initialSearch = "",
+    initialResumeFilter = "",
     onConsumeInitialSearch,
     defaultCopilotTone,
     hasGeminiApiKey = true,
     onOpenAccountSettings,
 }: Readonly<JobRadarViewProps> = {}) {
     const trimmedInitialSearch = initialSearch.trim();
+    const trimmedInitialResume = initialResumeFilter.trim();
     const [matches, setMatches] = useState<MatchScore[]>([]);
     const [totalCount, setTotalCount] = useState(0);
     const [aiScoredCount, setAiScoredCount] = useState(0);
@@ -957,7 +960,7 @@ export function JobRadarView({
     const [hasPrevious, setHasPrevious] = useState(false);
     const [page, setPage] = useState(1);
     const [resumes, setResumes] = useState<ResumeProfile[]>([]);
-    const [resumeFilter, setResumeFilter] = useState("");
+    const [resumeFilter, setResumeFilter] = useState(trimmedInitialResume);
     const [evaluatedOnly, setEvaluatedOnly] = useState(false);
     const [untrackedOnly, setUntrackedOnly] = useState(false);
     const [hideDismissed, setHideDismissed] = useState(true);
@@ -968,10 +971,10 @@ export function JobRadarView({
     const [debouncedSearch, setDebouncedSearch] = useState(trimmedInitialSearch);
 
     useEffect(() => {
-        if (trimmedInitialSearch) {
+        if (trimmedInitialSearch || trimmedInitialResume) {
             onConsumeInitialSearch?.();
         }
-    }, [trimmedInitialSearch, onConsumeInitialSearch]);
+    }, [trimmedInitialSearch, trimmedInitialResume, onConsumeInitialSearch]);
     const [searchMode, setSearchMode] = useState<HybridSearchMode | null>(null);
     const [metadataFilters, setMetadataFilters] = useState<RadarMetadataFilters>(
         EMPTY_METADATA_FILTERS,

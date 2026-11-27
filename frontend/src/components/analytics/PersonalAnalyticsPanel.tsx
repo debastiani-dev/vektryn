@@ -23,7 +23,7 @@ import { formatAtsSource, formatContractType } from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
 
 interface PersonalAnalyticsPanelProps {
-    onSearchSkillInRadar?: (skill: string) => void;
+    onSearchSkillInRadar?: (skill: string, resumeProfileUuid?: string) => void;
 }
 
 const WINDOW_OPTIONS: ReadonlyArray<{ value: PersonalAnalyticsWindow; label: string }> = [
@@ -52,8 +52,8 @@ function formatDays(value: number | null): string {
 
 function PersonalSkeleton() {
     return (
-        <div className="space-y-6" aria-label="Loading personal analytics">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="min-w-0 space-y-6" aria-label="Loading personal analytics">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {[0, 1, 2, 3].map((idx) => (
                     <div
                         key={idx}
@@ -62,7 +62,7 @@ function PersonalSkeleton() {
                 ))}
             </div>
             <div className="h-56 animate-pulse rounded-2xl border border-zinc-800/80 bg-zinc-900/45" />
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <div className="h-64 animate-pulse rounded-2xl border border-zinc-800/80 bg-zinc-900/45" />
                 <div className="h-64 animate-pulse rounded-2xl border border-zinc-800/80 bg-zinc-900/45" />
             </div>
@@ -77,7 +77,7 @@ function FunnelSection({ funnel }: Readonly<{ funnel: PersonalFunnelMetrics }>) 
     const discoveredCount = funnel.status_counts.discovered ?? 0;
 
     return (
-        <section className="space-y-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+        <section className="min-w-0 space-y-5 overflow-hidden rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                     <TrendingUp className="h-4 w-4 text-violet-400" />
@@ -114,7 +114,7 @@ function FunnelSection({ funnel }: Readonly<{ funnel: PersonalFunnelMetrics }>) 
                             FUNNEL_BAR_COLORS[stage.key] ?? "from-violet-500 to-violet-400";
                         return (
                             <div key={stage.key} className="space-y-1.5">
-                                <div className="flex items-center justify-between gap-2 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs">
                                     <span className="font-medium text-zinc-200">{stage.label}</span>
                                     <div className="flex items-center gap-3 font-mono tabular-nums">
                                         {stage.conversion_from_previous_pct !== null && (
@@ -155,9 +155,9 @@ function ChannelPerformanceCard({
     formatKey: (key: string) => string;
 }>) {
     return (
-        <section className="space-y-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+        <section className="min-w-0 space-y-4 overflow-hidden rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
             <div className="flex items-center gap-2">
-                <Layers className="h-4 w-4 text-sky-400" />
+                <Layers className="h-4 w-4 shrink-0 text-sky-400" />
                 <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
             </div>
 
@@ -166,7 +166,7 @@ function ChannelPerformanceCard({
                     {emptyLabel}
                 </p>
             ) : (
-                <div className="overflow-x-auto">
+                <div className="w-full max-w-full overflow-x-auto">
                     <table className="w-full border-collapse text-left text-xs">
                         <thead>
                             <tr className="border-b border-zinc-800 text-[11px] uppercase tracking-wider text-zinc-400">
@@ -230,13 +230,13 @@ function SkillGapListCard({
         : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200";
 
     return (
-        <section className="space-y-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+        <section className="min-w-0 space-y-4 overflow-hidden rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
             <div className="space-y-1">
                 <div className="flex items-center gap-2">
                     {isMissing ? (
-                        <AlertCircle className="h-4 w-4 text-amber-400" />
+                        <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
                     ) : (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
                     )}
                     <h2 className="text-sm font-semibold text-zinc-100">{title}</h2>
                 </div>
@@ -263,9 +263,9 @@ function SkillGapListCard({
                                 key={item.skill}
                                 type="button"
                                 onClick={() => onSelectSkill?.(item.skill)}
-                                className="group block w-full rounded-xl border border-zinc-800/80 bg-zinc-950/55 px-3.5 py-2.5 text-left transition hover:border-violet-500/45 hover:bg-zinc-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                                className="group block w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-950/55 px-3.5 py-2.5 text-left transition hover:border-violet-500/45 hover:bg-zinc-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                             >
-                                <div className="flex items-center justify-between gap-2 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 text-xs">
                                     <span className="flex min-w-0 items-center gap-2">
                                         <span
                                             className={`truncate rounded-md border px-2 py-0.5 font-mono text-[11px] font-medium ${pillClass}`}
@@ -368,8 +368,8 @@ export function PersonalAnalyticsPanel({
             : null;
 
     return (
-        <div className="space-y-6">
-            <div className="flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 space-y-6">
+            <div className="flex min-w-0 flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
                     <Filter className="mr-1 h-4 w-4 text-zinc-500" />
                     {WINDOW_OPTIONS.map((opt) => {
@@ -394,9 +394,12 @@ export function PersonalAnalyticsPanel({
                     })}
                 </div>
 
-                <div className="flex items-center gap-2 text-xs">
-                    <FileText className="h-4 w-4 text-zinc-500" />
-                    <label htmlFor="personal-analytics-resume" className="text-zinc-400">
+                <div className="flex w-full min-w-0 items-center gap-2 text-xs sm:w-auto">
+                    <FileText className="h-4 w-4 shrink-0 text-zinc-500" />
+                    <label
+                        htmlFor="personal-analytics-resume"
+                        className="shrink-0 text-zinc-400"
+                    >
                         Resume
                     </label>
                     <select
@@ -406,7 +409,7 @@ export function PersonalAnalyticsPanel({
                             setResumeProfileUuid(e.target.value);
                             setLoading(true);
                         }}
-                        className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-xs text-zinc-200 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                        className="min-w-0 max-w-full flex-1 truncate rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-xs text-zinc-200 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25 sm:w-56 sm:flex-initial"
                     >
                         <option value="">All Resumes</option>
                         {resumes.map((profile) => (
@@ -427,13 +430,13 @@ export function PersonalAnalyticsPanel({
             {loading && !data && <PersonalSkeleton />}
 
             {data && (
-                <div className="space-y-6">
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="min-w-0 space-y-6">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <Tooltip
                             content="Total tracked applications created in the selected time window"
-                            className="block"
+                            className="block min-w-0"
                         >
-                            <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="min-w-0 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
                                 <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
                                     Tracked / Applied
                                 </p>
@@ -445,9 +448,9 @@ export function PersonalAnalyticsPanel({
 
                         <Tooltip
                             content="Share of applied roles that reached interviewing or offer"
-                            className="block"
+                            className="block min-w-0"
                         >
-                            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="min-w-0 rounded-2xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
                                 <p className="text-xs font-medium uppercase tracking-wider text-emerald-300/80">
                                     Interview Rate
                                 </p>
@@ -459,9 +462,9 @@ export function PersonalAnalyticsPanel({
 
                         <Tooltip
                             content="Median elapsed days since applied_at across applied leads in this window"
-                            className="block"
+                            className="block min-w-0"
                         >
-                            <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="min-w-0 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
                                 <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
                                     Median Age Applied
                                 </p>
@@ -473,11 +476,11 @@ export function PersonalAnalyticsPanel({
 
                         <Tooltip
                             content="High-fit AI-scored matches meeting your resume alert threshold"
-                            className="block"
+                            className="block min-w-0"
                         >
-                            <div className="rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
+                            <div className="min-w-0 rounded-2xl border border-violet-500/20 bg-violet-950/15 px-5 py-4 ring-1 ring-inset ring-white/[0.03]">
                                 <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-violet-300/80">
-                                    <Target className="h-3.5 w-3.5" />
+                                    <Target className="h-3.5 w-3.5 shrink-0" />
                                     High-Fit Matches
                                 </div>
                                 <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-violet-300">
@@ -489,7 +492,7 @@ export function PersonalAnalyticsPanel({
 
                     <FunnelSection funnel={data.funnel} />
 
-                    <div className="grid gap-6 lg:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                         <ChannelPerformanceCard
                             title="Performance by ATS Source"
                             emptyLabel="No channel data recorded for this window."
@@ -504,22 +507,26 @@ export function PersonalAnalyticsPanel({
                         />
                     </div>
 
-                    <div className="grid gap-6 lg:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                         <SkillGapListCard
                             title="Top Missing Skills"
                             subtitle={`Most recurring gaps across ${data.skill_gaps.high_fit_match_count} high-fit matches. Click a skill to search Job Radar.`}
                             variant="missing"
                             items={data.skill_gaps.missing_keywords}
                             emptyMessage="No recurring skill gaps found in high-fit matches for this window."
-                            onSelectSkill={onSearchSkillInRadar}
+                            onSelectSkill={(skill) =>
+                                onSearchSkillInRadar?.(skill, resumeProfileUuid || undefined)
+                            }
                         />
                         <SkillGapListCard
                             title="Top Matched Strengths"
-                            subtitle={`Most frequently matched skills across ${data.skill_gaps.high_fit_match_count} high-fit matches.`}
+                            subtitle={`Most frequently matched skills across ${data.skill_gaps.high_fit_match_count} high-fit matches. Click a skill to search Job Radar.`}
                             variant="matched"
                             items={data.skill_gaps.matched_skills}
                             emptyMessage="No high-fit matched skills recorded in this window yet."
-                            onSelectSkill={onSearchSkillInRadar}
+                            onSelectSkill={(skill) =>
+                                onSearchSkillInRadar?.(skill, resumeProfileUuid || undefined)
+                            }
                         />
                     </div>
                 </div>

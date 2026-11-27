@@ -787,6 +787,19 @@ export function LandingPreviewShowcase() {
         >
             <div className="mx-auto max-w-6xl px-4 sm:px-6">
                 <h2 className="sr-only">Interactive Workspace Preview</h2>
+                <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                    <p className="inline-flex items-center gap-2 font-mono text-xs text-zinc-400">
+                        <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+                            <span className="absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-70 motion-safe:animate-ping" />
+                            <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-400" />
+                        </span>
+                        <span className="font-medium text-zinc-300">Interactive preview</span>
+                        <span aria-hidden="true" className="text-zinc-600">
+                            ·
+                        </span>
+                        <span>Click tabs and filters to explore</span>
+                    </p>
+                </div>
                 <div className="relative">
                     <div
                         aria-hidden="true"
@@ -837,17 +850,17 @@ export function LandingPreviewShowcase() {
                                                     tabIndex={selected ? 0 : -1}
                                                     onClick={() => setActiveTab(tab.id)}
                                                     onKeyDown={(e) => handleTabKeyDown(e, tab.id)}
-                                                    className={`inline-flex min-h-9 items-center gap-2 rounded-xl px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                                    className={`group inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-xl border px-3 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
                                                         selected
-                                                            ? "bg-zinc-900 text-zinc-100 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/10"
-                                                            : "text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-200"
+                                                            ? "border-violet-500/40 bg-zinc-900 text-zinc-100 shadow-sm shadow-violet-500/10"
+                                                            : "border-transparent text-zinc-400 hover:border-violet-500/30 hover:bg-violet-500/10 hover:text-zinc-100"
                                                     }`}
                                                 >
                                                     <Icon
-                                                        className={`h-3.5 w-3.5 ${
+                                                        className={`h-3.5 w-3.5 transition ${
                                                             selected
                                                                 ? "text-violet-400"
-                                                                : "text-zinc-500"
+                                                                : "text-zinc-500 group-hover:text-violet-300"
                                                         }`}
                                                         aria-hidden="true"
                                                     />

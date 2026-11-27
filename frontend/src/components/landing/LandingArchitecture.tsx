@@ -19,7 +19,7 @@ const PIPELINE_STAGES = [
         step: "03",
         title: "Score",
         summary:
-            "pgvector filters high-similarity candidates before Gemini runs structured fit and gap analysis.",
+            "pgvector filters high-similarity candidates before per-user BYOK Gemini keys run structured fit and gap analysis.",
         topic: "jobs.alerts",
     },
     {
@@ -34,8 +34,8 @@ const PIPELINE_STAGES = [
 const STACK_LAYERS = [
     {
         icon: Server,
-        label: "Backend & APIs",
-        value: "Python 3.13, Django / DRF, FastAPI, Pydantic v2",
+        label: "Backend & AI",
+        value: "Python 3.13, Django / DRF, FastAPI, BYOK Gemini 3.5/4",
     },
     {
         icon: Database,
@@ -44,8 +44,8 @@ const STACK_LAYERS = [
     },
     {
         icon: Layers,
-        label: "AI & Frontend",
-        value: "Gemini API, React 19, TypeScript, Vite, Tailwind CSS",
+        label: "Frontend",
+        value: "React 19, TypeScript, Vite, Tailwind CSS",
     },
     {
         icon: Cloud,

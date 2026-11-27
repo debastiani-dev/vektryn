@@ -10,6 +10,7 @@ import {
     ShieldAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { vektrynApi } from "../../api/client";
 import type {
     CollectorSourceLog,
@@ -20,6 +21,7 @@ import type {
     WorkerLivenessStatus,
 } from "../../types/models";
 import { formatAtsSource, formatExactDate, formatRelativeTime } from "../../utils/format";
+import { type PopoverCoords, computePopoverCoords } from "../../utils/popoverPosition";
 import { Tooltip } from "../ui/Tooltip";
 import { DlqInspectorModal } from "./DlqInspectorModal";
 
@@ -254,7 +256,7 @@ function SourceBreakdownList({ sources }: Readonly<{ sources: ReadonlyArray<Coll
             {sources.map((src) => (
                 <div
                     key={src.source}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-2.5 py-1.5 text-xs"
+                    className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 rounded-lg border border-zinc-800/70 bg-zinc-950/60 px-2.5 py-1.5 text-xs"
                 >
                     <div className="min-w-0 truncate">
                         <span className="font-medium text-zinc-200">
@@ -313,8 +315,23 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
     const [error, setError] = useState<string | null>(null);
     const [triggering, setTriggering] = useState(false);
     const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+    const [popoverCoords, setPopoverCoords] = useState<PopoverCoords | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
+    const triggerRef = useRef<HTMLButtonElement | null>(null);
+    const dialogRef = useRef<HTMLDialogElement | null>(null);
     const wasRunningRef = useRef(false);
+
+    const updatePopoverCoords = useCallback(() => {
+        const triggerEl = triggerRef.current;
+        if (!triggerEl) return;
+        setPopoverCoords(
+            computePopoverCoords(
+                triggerEl.getBoundingClientRect(),
+                window.innerWidth,
+                window.innerHeight,
+            ),
+        );
+    }, []);
 
     const applyStatusResponse = useCallback((res: PipelineStatusResponse) => {
         const now = Date.now();
@@ -384,8 +401,12 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
 
     useEffect(() => {
         if (!open) return;
+        updatePopoverCoords();
         const handleClickOutside = (event: MouseEvent) => {
-            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+            const target = event.target as Node;
+            const insideTrigger = containerRef.current?.contains(target) ?? false;
+            const insideDialog = dialogRef.current?.contains(target) ?? false;
+            if (!insideTrigger && !insideDialog) {
                 setOpen(false);
             }
         };
@@ -394,11 +415,15 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
         };
         document.addEventListener("mousedown", handleClickOutside);
         window.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("resize", updatePopoverCoords);
+        window.addEventListener("scroll", updatePopoverCoords, true);
         return () => {
             document.removeEventListener("mousedown", handleClickOutside);
             window.removeEventListener("keydown", handleKeyDown);
+            window.removeEventListener("resize", updatePopoverCoords);
+            window.removeEventListener("scroll", updatePopoverCoords, true);
         };
-    }, [open]);
+    }, [open, updatePopoverCoords]);
 
     async function handleTriggerSync() {
         setTriggering(true);
@@ -432,13 +457,17 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
         <div ref={containerRef} className="relative">
             <Tooltip content="Inspect collector sync telemetry, job backlog, and DLQ health" side="bottom">
                 <button
+                    ref={triggerRef}
                     type="button"
                     aria-expanded={open}
                     aria-haspopup="dialog"
                     onClick={() => {
                         const nextOpen = !open;
+                        if (nextOpen) {
+                            updatePopoverCoords();
+                            void fetchStatus();
+                        }
                         setOpen(nextOpen);
-                        if (nextOpen) void fetchStatus();
                     }}
                     className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-medium ring-1 ring-inset transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${theme.pill}`}
                 >
@@ -454,12 +483,21 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                 </button>
             </Tooltip>
 
-            {open && (
-                <dialog
-                    open
-                    aria-label="Pipeline telemetry"
-                    className="absolute right-0 left-auto z-40 m-0 mt-2.5 w-[340px] rounded-2xl border border-zinc-800 bg-zinc-950/95 p-4 text-left text-zinc-100 shadow-2xl shadow-black/70 backdrop-blur-md sm:w-[400px]"
-                >
+            {open &&
+                popoverCoords &&
+                createPortal(
+                    <dialog
+                        ref={dialogRef}
+                        open
+                        aria-label="Pipeline telemetry"
+                        style={{
+                            top: `${popoverCoords.top}px`,
+                            left: `${popoverCoords.left}px`,
+                            width: `${popoverCoords.width}px`,
+                            maxHeight: `${popoverCoords.maxHeight}px`,
+                        }}
+                        className="fixed z-50 m-0 overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/95 p-4 text-left text-zinc-100 shadow-2xl shadow-black/70 backdrop-blur-md"
+                    >
                     <div className="flex items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
                         <div className="flex items-center gap-2">
                             <Database className="h-4 w-4 text-violet-400" />
@@ -635,7 +673,8 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                             )}
                         </div>
                     )}
-                </dialog>
+                </dialog>,
+                document.body,
             )}
 
             <DlqInspectorModal

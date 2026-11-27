@@ -22,7 +22,7 @@ export function LandingFooter({
                     <h2 className="text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">
                         Ready to inspect your semantic job radar?
                     </h2>
-                    <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-zinc-400">
+                    <p className="mx-auto mt-3 max-w-lg text-balance text-sm leading-relaxed text-zinc-400">
                         Sign in to open your live workspace, or explore the full monorepo source on
                         GitHub.
                     </p>

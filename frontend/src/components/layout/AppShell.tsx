@@ -228,9 +228,9 @@ export function AppShell({
         : "Real-time SSE alert stream disconnected — retrying automatically";
 
     return (
-        <div className="min-h-screen text-zinc-100">
+        <div className="min-h-screen overflow-x-clip text-zinc-100">
             <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md">
-                <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-6 py-4 sm:px-8 lg:px-10">
+                <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-8 lg:px-10">
                     <div className="flex flex-wrap items-center gap-6 sm:gap-8">
                         <Tooltip
                             content="Vektryn — Job intelligence & career radar"
@@ -272,7 +272,7 @@ export function AppShell({
                         </nav>
                     </div>
 
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                         <PipelineStatusPopover isStaff={Boolean(user?.is_staff)} />
 
                         <Tooltip content={streamTooltip} side="bottom">
@@ -313,7 +313,7 @@ export function AppShell({
 
             <LiveAlertBanner alerts={alerts} onDismiss={onDismissAlert} />
 
-            <main className="mx-auto max-w-[1600px] px-6 py-8 sm:px-8 sm:py-10 lg:px-10 lg:py-12">
+            <main className="mx-auto w-full min-w-0 max-w-[1600px] px-4 py-6 sm:px-8 sm:py-10 lg:px-10 lg:py-12">
                 {children}
             </main>
 
