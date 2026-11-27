@@ -11,7 +11,7 @@ from apps.resumes.services.rescore_publisher import (
     RescoreBrokerError,
     RescoreCooldownError,
 )
-from apps.resumes.services.resume_service import ResumeService
+from apps.resumes.services.resume_service import GeminiServiceError, ResumeService
 
 
 class ResumeProfileViewSet(viewsets.ModelViewSet):
@@ -24,6 +24,17 @@ class ResumeProfileViewSet(viewsets.ModelViewSet):
         if getattr(self, "swagger_fake_view", False):
             return ResumeProfile.objects.none()
         return ResumeProfile.objects.filter(user=self.request.user)
+
+    def handle_exception(self, exc):
+        if isinstance(exc, GeminiServiceError):
+            payload: dict[str, object] = {
+                "detail": str(exc),
+                "code": exc.code,
+            }
+            if exc.payment_required:
+                payload["payment_required"] = True
+            return Response(payload, status=exc.http_status)
+        return super().handle_exception(exc)
 
     @action(detail=True, methods=["post"], url_path="rescore")
     def rescore(self, request, uuid=None):

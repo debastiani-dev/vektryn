@@ -42,8 +42,17 @@ logger = logging.getLogger(__name__)
 class GeminiServiceError(Exception):
     """Raised when the upstream Gemini API fails after retries or BYOK checks fail."""
 
-    def __init__(self, message: str, *, code: str = "gemini_error") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "gemini_error",
+        http_status: int = 503,
+        payment_required: bool = False,
+    ) -> None:
         self.code = code
+        self.http_status = http_status
+        self.payment_required = payment_required
         super().__init__(message)
 
 
@@ -131,7 +140,8 @@ class ResumeService(BaseService):
         deadline: float | None = None,
         embed_timeout_ms: int = 8000,
         embed_max_attempts: int = 2,
-        skill_deadline_seconds: float = 15.0,
+        skill_timeout_ms: int = 20000,
+        skill_deadline_seconds: float = 30.0,
         allow_skills_fallback_empty: bool = False,
     ) -> tuple[list[float] | None, list[str]]:
         if self._genai_client is None and not user_has_gemini_api_key(self.user):
@@ -150,7 +160,12 @@ class ResumeService(BaseService):
         except BYOKMissingError:
             return None, []
         except BYOKError as exc:
-            raise GeminiServiceError(str(exc), code=exc.code) from exc
+            raise GeminiServiceError(
+                str(exc),
+                code=exc.code,
+                http_status=exc.http_status,
+                payment_required=bool(getattr(exc, "payment_required", False)),
+            ) from exc
 
         prompt = (
             "Extract a deduplicated list of normalized lowercase technical skills "
@@ -173,7 +188,7 @@ class ResumeService(BaseService):
                 response_mime_type="application/json",
                 response_schema=_ExtractedSkillsResponse,
                 deadline_seconds=effective_skill_deadline,
-                per_attempt_timeout_ms=embed_timeout_ms,
+                per_attempt_timeout_ms=skill_timeout_ms,
                 max_transient_retries=0 if deadline is not None else 1,
                 genai_client=self._genai_client,
             )
@@ -183,7 +198,12 @@ class ResumeService(BaseService):
                     "Resume skill extraction skipped after embedding succeeded: %s", exc
                 )
                 return embedding, []
-            raise GeminiServiceError(str(exc), code=exc.code) from exc
+            raise GeminiServiceError(
+                str(exc),
+                code=exc.code,
+                http_status=exc.http_status,
+                payment_required=bool(getattr(exc, "payment_required", False)),
+            ) from exc
 
         parsed = _ExtractedSkillsResponse.model_validate_json(skill_res.text)
         skills = sorted({s.strip().lower() for s in parsed.skills if s.strip()})
@@ -235,6 +255,7 @@ class ResumeService(BaseService):
                     deadline=deadline,
                     embed_timeout_ms=self.PENDING_EMBED_CALL_TIMEOUT_MS,
                     embed_max_attempts=1,
+                    skill_timeout_ms=10000,
                     skill_deadline_seconds=5.0,
                     allow_skills_fallback_empty=True,
                 )

@@ -15,7 +15,7 @@ import {
     X,
 } from "lucide-react";
 import { type SubmitEvent, useEffect, useState } from "react";
-import { vektrynApi } from "../../api/client";
+import { ApiError, formatApiError, vektrynApi } from "../../api/client";
 import type { ContractType, ResumeProfile, SeniorityLevel } from "../../types/models";
 import {
     formatContractType,
@@ -415,6 +415,26 @@ export function ResumesView({
     const [profiles, setProfiles] = useState<ResumeProfile[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [errorShowSettings, setErrorShowSettings] = useState(false);
+
+    function setResumeError(err: unknown, fallback: string) {
+        setError(formatApiError(err, fallback));
+        const isByokError =
+            err instanceof ApiError &&
+            Boolean(
+                err.code &&
+                    (err.code === "byok_missing" ||
+                        err.code === "byok_invalid" ||
+                        err.code === "byok_quota_exhausted" ||
+                        err.code === "byok_transient"),
+            );
+        setErrorShowSettings(isByokError);
+    }
+
+    function clearError() {
+        setError(null);
+        setErrorShowSettings(false);
+    }
     const [busyId, setBusyId] = useState<string | null>(null);
     const [embeddingId, setEmbeddingId] = useState<string | null>(null);
     const [rescoringId, setRescoringId] = useState<string | null>(null);
@@ -443,9 +463,7 @@ export function ResumesView({
             })
             .catch((err) => {
                 if (!cancelled) {
-                    setError(
-                        err instanceof Error ? err.message : "Failed to load resume profiles",
-                    );
+                    setResumeError(err, "Failed to load resume profiles");
                 }
             })
             .finally(() => {
@@ -469,7 +487,7 @@ export function ResumesView({
         setTargetContracts([]);
         setTargetRegions([]);
         setIsActive(true);
-        setError(null);
+        clearError();
         setFormOpen(true);
     }
 
@@ -483,7 +501,7 @@ export function ResumesView({
         setTargetContracts(profile.target_contract_types);
         setTargetRegions(profile.target_regions);
         setIsActive(profile.is_active);
-        setError(null);
+        clearError();
         setFormOpen(true);
     }
 
@@ -491,15 +509,17 @@ export function ResumesView({
         event.preventDefault();
         if (!label.trim()) {
             setError("Profile label is required.");
+            setErrorShowSettings(false);
             return;
         }
         if (!editingProfile && !selectedFile && !rawText.trim()) {
             setError("Upload a resume file (.pdf, .docx, .txt, .md) or paste resume text.");
+            setErrorShowSettings(false);
             return;
         }
 
         setSubmitting(true);
-        setError(null);
+        clearError();
         try {
             const payload = {
                 label: label.trim(),
@@ -524,7 +544,7 @@ export function ResumesView({
             setFormOpen(false);
             setEditingProfile(null);
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to save resume profile");
+            setResumeError(err, "Failed to save resume profile");
         } finally {
             setSubmitting(false);
         }
@@ -532,7 +552,7 @@ export function ResumesView({
 
     async function handleToggleActive(profile: ResumeProfile) {
         setBusyId(profile.uuid);
-        setError(null);
+        clearError();
         try {
             const updated = await vektrynApi.updateResume(profile.uuid, {
                 is_active: !profile.is_active,
@@ -541,7 +561,7 @@ export function ResumesView({
                 prev.map((item) => (item.uuid === updated.uuid ? updated : item)),
             );
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to update profile status");
+            setResumeError(err, "Failed to update profile status");
         } finally {
             setBusyId(null);
         }
@@ -549,7 +569,7 @@ export function ResumesView({
 
     async function handleGenerateEmbedding(profile: ResumeProfile) {
         setEmbeddingId(profile.uuid);
-        setError(null);
+        clearError();
         try {
             const updated = await vektrynApi.updateResume(profile.uuid, {
                 raw_text: profile.raw_text,
@@ -563,7 +583,7 @@ export function ResumesView({
                     "Generated 768-dim embedding and extracted technical skills. Background matching queued.",
             }));
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to generate resume embedding");
+            setResumeError(err, "Failed to generate resume embedding");
         } finally {
             setEmbeddingId(null);
         }
@@ -571,7 +591,7 @@ export function ResumesView({
 
     async function handleRescore(profile: ResumeProfile) {
         setRescoringId(profile.uuid);
-        setError(null);
+        clearError();
         try {
             const res = await vektrynApi.rescoreResume(profile.uuid);
             setRescoreNoticeById((prev) => ({
@@ -579,11 +599,14 @@ export function ResumesView({
                 [profile.uuid]: `Queued background rescoring for up to ${res.max_jobs} active jobs — refresh Job Radar shortly to see updated scores.`,
             }));
         } catch (err) {
-            const raw = err instanceof Error ? err.message : "Failed to queue rescoring";
-            if (raw.includes("API 429")) {
-                setError("Rescoring was already queued recently for this profile. Please wait a moment before retrying.");
+            if (err instanceof ApiError && err.status === 429) {
+                setError(
+                    err.detail ||
+                        "Rescoring was already queued recently for this profile. Please wait a moment before retrying.",
+                );
+                setErrorShowSettings(false);
             } else {
-                setError(raw);
+                setResumeError(err, "Failed to queue rescoring");
             }
         } finally {
             setRescoringId(null);
@@ -592,12 +615,12 @@ export function ResumesView({
 
     async function handleDelete(profile: ResumeProfile) {
         setBusyId(profile.uuid);
-        setError(null);
+        clearError();
         try {
             await vektrynApi.deleteResume(profile.uuid);
             setProfiles((prev) => prev.filter((item) => item.uuid !== profile.uuid));
         } catch (err) {
-            setError(err instanceof Error ? err.message : "Failed to delete resume profile");
+            setResumeError(err, "Failed to delete resume profile");
         } finally {
             setBusyId(null);
         }
@@ -756,8 +779,21 @@ export function ResumesView({
             </header>
 
             {error && (
-                <div className="rounded-2xl border border-red-500/30 bg-red-950/20 px-5 py-4 text-sm text-red-300">
-                    {error}
+                <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-500/30 bg-red-950/20 px-5 py-4 text-sm text-red-300"
+                >
+                    <span>{error}</span>
+                    {errorShowSettings && onOpenAccountSettings && (
+                        <button
+                            type="button"
+                            onClick={onOpenAccountSettings}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-red-500/20 px-3 py-1.5 text-xs font-semibold text-red-100 ring-1 ring-red-500/40 transition hover:bg-red-500/30"
+                        >
+                            <UserCog className="h-3.5 w-3.5" />
+                            <span>Open Account Settings</span>
+                        </button>
+                    )}
                 </div>
             )}
 

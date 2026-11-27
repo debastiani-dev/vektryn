@@ -12,6 +12,7 @@ from rest_framework.test import APIClient
 
 from apps.base.models.notification import Notification
 from apps.base.models.user_profile import UserProfile, get_or_create_user_profile
+from apps.base.services.byok import execute_user_gemini_generate
 from apps.jobs.models.jobs import JobPosting
 from apps.jobs.services import hybrid_search
 from apps.matching.models.artifacts import MatchArtifactKind
@@ -521,3 +522,113 @@ def test_copilot_504_deadline_exceeded_falls_back_immediately_and_disables_sdk_r
         assert opts.retry_options is not None
         assert opts.retry_options.attempts == 1
         assert opts.timeout <= 35000
+
+
+@pytest.mark.django_db
+def test_resume_upload_enforces_min_10s_generate_timeout_and_formats_gemini_errors(
+    settings,
+):
+    """Resume skill extraction enforces Gemini's >=10s server deadline and surfaces structured errors."""
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    settings.BYOK_ENCRYPTION_KEY = fernet_key
+    settings.REDIS_URL = ""
+    user = User.objects.create_user(username="resume_deadline_user", password="pw")
+    profile = _set_user_key(user, "AIzaSyResumeDeadlineKey1234567890", fernet_key)
+    profile.preferred_gemini_model = "gemini-4-carbon"
+    profile.allow_model_fallback = True
+    profile.save(update_fields=["preferred_gemini_model", "allow_model_fallback"])
+
+    seen_timeouts: list[int | None] = []
+
+    fake_genai_client = MagicMock()
+    fake_genai_client.models.embed_content.return_value = SimpleNamespace(
+        embeddings=[SimpleNamespace(values=[0.1] * 768)]
+    )
+    fake_genai_client.models.generate_content.return_value = SimpleNamespace(
+        text='{"skills": ["python", "django"]}'
+    )
+
+    def _capture_client(*, api_key, http_options):
+        seen_timeouts.append(http_options.timeout)
+        return fake_genai_client
+
+    api_client = APIClient()
+    api_client.force_authenticate(user=user)
+    with (
+        patch("apps.base.services.byok.genai.Client", side_effect=_capture_client),
+        patch("apps.resumes.services.resume_service.publish_rescore_event"),
+    ):
+        resp = api_client.post(
+            "/api/v1/resumes/",
+            {
+                "label": "Senior Backend",
+                "raw_text": "Senior Python and Django engineer with PostgreSQL.",
+            },
+            format="json",
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["extracted_skills"] == ["django", "python"]
+    assert len(seen_timeouts) == 2
+    # Embed timeout (8000ms) followed by generate_content timeout (>= 10000ms)
+    assert seen_timeouts[1] is not None
+    assert seen_timeouts[1] >= 10_000
+
+    # Fatal 400 from Gemini returns structured JSON (detail + code) without leaking secrets
+    fake_genai_client.models.generate_content.side_effect = genai_errors.ClientError(
+        400,
+        {
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": "Invalid content payload.",
+            }
+        },
+        None,
+    )
+    with patch("apps.base.services.byok.genai.Client", side_effect=_capture_client):
+        err_resp = api_client.post(
+            "/api/v1/resumes/",
+            {
+                "label": "Second Resume",
+                "raw_text": "Staff backend engineer.",
+            },
+            format="json",
+        )
+
+    assert err_resp.status_code == 503
+    body = err_resp.json()
+    assert body["code"] == "byok_transient"
+    assert "gemini-4-carbon" in body["detail"]
+    assert "Invalid content payload." in body["detail"]
+
+
+@pytest.mark.django_db
+def test_generate_clamps_short_per_attempt_timeout_to_10s_minimum(settings):
+    """execute_user_gemini_generate never sends <10000ms to Google's generateContent API."""
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    settings.BYOK_ENCRYPTION_KEY = fernet_key
+    settings.REDIS_URL = ""
+    user = User.objects.create_user(username="clamp_timeout_user", password="pw")
+    _set_user_key(user, "AIzaSyClampTimeoutKey1234567890", fernet_key)
+
+    seen_timeouts: list[int | None] = []
+    fake_genai_client = MagicMock()
+    fake_genai_client.models.generate_content.return_value = SimpleNamespace(
+        text='{"skills": ["python"]}'
+    )
+
+    def _capture_client(*, api_key, http_options):
+        seen_timeouts.append(http_options.timeout)
+        return fake_genai_client
+
+    with patch("apps.base.services.byok.genai.Client", side_effect=_capture_client):
+        execute_user_gemini_generate(
+            user=user,
+            task="resume_skills",
+            contents="Senior Python engineer",
+            deadline_seconds=5.0,
+            per_attempt_timeout_ms=5000,
+        )
+
+    assert seen_timeouts == [10_000]

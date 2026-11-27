@@ -4,6 +4,7 @@ import {
     ApiError,
     fetchAllPages,
     fetchAllPagesWithCount,
+    formatApiError,
     registerSessionExpiredHandler,
     vektrynApi,
 } from "./client";
@@ -968,5 +969,56 @@ describe("vektrynApi", () => {
         const deactivated = await vektrynApi.deactivateUser(2);
         expect(deactivated.is_active).toBe(false);
         expect((fetchMock.mock.calls[6] as [string, RequestInit])[1].method).toBe("DELETE");
+    });
+
+    it("parses DRF JSON array bodies and formats clean user-facing error messages", async () => {
+        vi.stubGlobal("document", { cookie: "csrftoken=resume-csrf" });
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(JSON.stringify(["Gemini request failed on gemini-4-carbon (400)."]), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                }),
+            )
+            .mockResolvedValueOnce(
+                new Response(
+                    JSON.stringify({
+                        file: ["Could not extract any readable text from the uploaded file."],
+                    }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                ),
+            );
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            await vektrynApi.createResume({ label: "CV", raw_text: "Python" });
+            expect.unreachable("Expected 400 ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            const apiErr = err as ApiError;
+            expect(apiErr.detail).toBe("Gemini request failed on gemini-4-carbon (400).");
+            expect(apiErr.fieldErrors).toEqual({});
+            expect(formatApiError(apiErr, "Fallback")).toBe(
+                "Gemini request failed on gemini-4-carbon (400).",
+            );
+        }
+
+        try {
+            await vektrynApi.createResume({ label: "CV", raw_text: "Python" });
+            expect.unreachable("Expected 400 field ApiError");
+        } catch (err) {
+            expect(err).toBeInstanceOf(ApiError);
+            expect(formatApiError(err, "Fallback")).toBe(
+                "Could not extract any readable text from the uploaded file.",
+            );
+        }
+
+        expect(formatApiError(new ApiError(500, "<html>500</html>", null, null), "Fallback")).toBe(
+            "Fallback",
+        );
     });
 });

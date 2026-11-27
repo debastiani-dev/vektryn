@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.resumes.models.resumes import ResumeProfile
-from apps.resumes.services.resume_service import GeminiServiceError, ResumeService
+from apps.resumes.services.resume_service import ResumeService
 
 
 def _as_list(value: object) -> list:
@@ -122,8 +122,6 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
             )
         except ValueError as exc:
             raise serializers.ValidationError({"file": str(exc)}) from exc
-        except GeminiServiceError as exc:
-            raise serializers.ValidationError(str(exc)) from exc
 
     def update(self, instance: ResumeProfile, validated_data: dict) -> ResumeProfile:
         uploaded_file = validated_data.pop("file", None)
@@ -136,5 +134,3 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
             )
         except ValueError as exc:
             raise serializers.ValidationError({"file": str(exc)}) from exc
-        except GeminiServiceError as exc:
-            raise serializers.ValidationError(str(exc)) from exc

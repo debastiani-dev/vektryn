@@ -249,7 +249,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 BYOK_ENCRYPTION_KEY = env.byok_encryption_key.strip()
 GEMINI_EMBEDDING_MODEL = env.gemini_embedding_model.strip() or "gemini-embedding-001"
-COPILOT_GEMINI_TIMEOUT_MS = max(5000, int(env.copilot_gemini_timeout_ms))
+COPILOT_GEMINI_TIMEOUT_MS = max(10000, int(env.copilot_gemini_timeout_ms))
 COPILOT_RATE_LIMIT_MAX_REQUESTS = max(1, int(env.copilot_rate_limit_max_requests))
 COPILOT_RATE_LIMIT_WINDOW_SECONDS = max(1, int(env.copilot_rate_limit_window_seconds))
 AUTH_LOGIN_ACCT_MAX_FAILURES = max(1, int(env.auth_login_acct_max_failures))
