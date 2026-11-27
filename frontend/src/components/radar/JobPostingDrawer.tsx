@@ -15,6 +15,7 @@ import {
     X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { vektrynApi } from "../../api/client";
 import type {
     ContractType,
@@ -194,24 +195,24 @@ function JobDrawerFooter({
         : "Save this role to your Pipeline Tracker";
 
     return (
-        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
-            <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col-reverse gap-2.5 border-t border-zinc-800/90 bg-zinc-900/80 px-4 py-3.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4 sm:px-8 sm:py-5">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 {onSaveLead && (
-                    <Tooltip content={saveTooltip}>
+                    <Tooltip content={saveTooltip} className="inline-flex flex-1 sm:flex-initial">
                         <button
                             type="button"
                             disabled={saving || saved}
                             onClick={onSaveLead}
-                            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${
+                            className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed sm:w-auto sm:px-4 ${
                                 saved
                                     ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
                                     : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
                             }`}
                         >
                             {saved ? (
-                                <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+                                <BookmarkCheck className="h-4 w-4 shrink-0 text-emerald-400" />
                             ) : (
-                                <BookmarkPlus className="h-4 w-4 text-violet-400" />
+                                <BookmarkPlus className="h-4 w-4 shrink-0 text-violet-400" />
                             )}
                             {getSaveButtonLabel(saved, saving)}
                         </button>
@@ -219,13 +220,16 @@ function JobDrawerFooter({
                 )}
 
                 {onOpenGapDetails && (
-                    <Tooltip content="Switch to AI skill gap analysis and talking points">
+                    <Tooltip
+                        content="Switch to AI skill gap analysis and talking points"
+                        className="inline-flex flex-1 sm:flex-initial"
+                    >
                         <button
                             type="button"
                             onClick={onOpenGapDetails}
-                            className="inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-2.5 text-sm font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 sm:w-auto sm:px-4"
                         >
-                            <Sparkles className="h-4 w-4 text-violet-400" />
+                            <Sparkles className="h-4 w-4 shrink-0 text-violet-400" />
                             Gap Details
                         </button>
                     </Tooltip>
@@ -237,18 +241,19 @@ function JobDrawerFooter({
                     applyUrl,
                     "Open the job application page in a new tab",
                 )}
+                className="inline-flex w-full sm:w-auto"
             >
                 <a
                     href={applyUrl}
                     target={isEmailApply ? undefined : "_blank"}
                     rel={isEmailApply ? undefined : "noreferrer"}
-                    className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 sm:w-auto sm:px-5"
                 >
                     {formatApplyLinkLabel(applyUrl, "Open Original Posting")}{" "}
                     {isEmailApply ? (
-                        <Mail className="h-4 w-4" />
+                        <Mail className="h-4 w-4 shrink-0" />
                     ) : (
-                        <ExternalLink className="h-4 w-4" />
+                        <ExternalLink className="h-4 w-4 shrink-0" />
                     )}
                 </a>
             </Tooltip>
@@ -278,13 +283,18 @@ export function JobPostingDrawer({
 
     useEffect(() => {
         if (!jobPreview) return;
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
         function handleKeyDown(event: KeyboardEvent) {
             if (event.key === "Escape") {
                 onClose();
             }
         }
         window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener("keydown", handleKeyDown);
+        };
     }, [jobPreview, onClose]);
 
     useEffect(() => {
@@ -341,8 +351,8 @@ export function JobPostingDrawer({
         (match?.matched_skills ?? []).map((skill) => skill.toLowerCase()),
     );
 
-    return (
-        <div className="fixed inset-0 z-50 flex justify-end">
+    const drawerContent = (
+        <div className="fixed inset-0 z-50 flex justify-end overflow-hidden">
             <button
                 type="button"
                 aria-label="Close job listing drawer"
@@ -353,11 +363,11 @@ export function JobPostingDrawer({
                 open
                 aria-modal="true"
                 aria-labelledby="job-drawer-title"
-                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-full max-h-none w-full max-w-3xl flex-col border-0 border-l border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl"
+                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-dvh max-h-none w-full max-w-[min(48rem,100vw)] min-w-0 flex-col overflow-x-hidden border-0 border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl sm:h-full sm:border-l"
             >
-                <div className="flex items-start justify-between gap-4 border-b border-zinc-800/90 bg-zinc-950/90 px-6 py-5 sm:px-8 sm:py-6">
-                    <div className="min-w-0 space-y-2.5">
-                        <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-start justify-between gap-3 border-b border-zinc-800/90 bg-zinc-950/90 px-4 py-3.5 sm:gap-4 sm:px-8 sm:py-6">
+                    <div className="min-w-0 flex-1 space-y-2 sm:space-y-2.5">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                             <Tooltip
                                 content={
                                     isActive
@@ -418,37 +428,37 @@ export function JobPostingDrawer({
 
                         <h2
                             id="job-drawer-title"
-                            className="text-xl font-semibold leading-snug text-zinc-100"
+                            className="break-words text-base font-semibold leading-snug text-zinc-100 sm:text-xl"
                         >
                             {job.title}
                         </h2>
 
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-zinc-400">
-                            <span className="inline-flex items-center gap-1.5 font-medium text-zinc-200">
-                                <Building2 className="h-4 w-4 text-zinc-500" />
-                                {job.company_name}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400 sm:text-sm">
+                            <span className="inline-flex min-w-0 items-center gap-1.5 font-medium text-zinc-200">
+                                <Building2 className="h-4 w-4 shrink-0 text-zinc-500" />
+                                <span className="break-words">{job.company_name}</span>
                             </span>
-                            <span className="inline-flex items-center gap-1.5">
-                                <MapPin className="h-4 w-4 text-zinc-500" />
-                                {job.location_raw || "Remote"}
+                            <span className="inline-flex min-w-0 items-center gap-1.5">
+                                <MapPin className="h-4 w-4 shrink-0 text-zinc-500" />
+                                <span className="break-words">{job.location_raw || "Remote"}</span>
                             </span>
                         </div>
                     </div>
 
-                    <Tooltip content="Close job listing (Esc)" side="bottom">
+                    <Tooltip content="Close job listing (Esc)" side="bottom" className="inline-flex shrink-0">
                         <button
                             type="button"
                             onClick={onClose}
                             aria-label="Close job listing drawer"
-                            className="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                            className="shrink-0 rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                         >
                             <X className="h-5 w-5" />
                         </button>
                     </Tooltip>
                 </div>
 
-                <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-7">
-                    <section className="grid gap-4 sm:grid-cols-2">
+                <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
+                    <section className="grid min-w-0 gap-3.5 sm:grid-cols-2 sm:gap-4">
                         <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
                             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
                                 <Banknote className="h-4 w-4 text-emerald-400" />
@@ -561,4 +571,8 @@ export function JobPostingDrawer({
             </dialog>
         </div>
     );
+
+    return typeof document === "undefined"
+        ? drawerContent
+        : createPortal(drawerContent, document.body);
 }

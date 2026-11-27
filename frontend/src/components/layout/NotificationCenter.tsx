@@ -410,7 +410,7 @@ export function NotificationCenter({
 
             {open &&
                 createPortal(
-                    <div className="fixed inset-0 z-50 flex justify-end">
+                    <div className="fixed inset-0 z-50 flex justify-end overflow-hidden">
                         <button
                             type="button"
                             aria-label="Close notifications drawer"
@@ -421,7 +421,7 @@ export function NotificationCenter({
                             open
                             aria-modal="true"
                             aria-labelledby="notification-drawer-title"
-                            className="animate-drawer-in relative inset-auto z-10 m-0 flex h-full max-h-none w-full max-w-md flex-col border-0 border-l border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl"
+                            className="animate-drawer-in relative inset-auto z-10 m-0 flex h-dvh max-h-none w-full max-w-[min(28rem,100vw)] min-w-0 flex-col overflow-x-hidden border-0 border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl sm:h-full sm:border-l"
                         >
                             <div className="space-y-3 border-b border-zinc-800/90 bg-zinc-950/95 px-5 py-4">
                                 <div className="flex items-center justify-between gap-2">

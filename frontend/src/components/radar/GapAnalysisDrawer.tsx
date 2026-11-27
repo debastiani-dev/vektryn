@@ -15,6 +15,7 @@ import {
     XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CopilotTone, MatchScore } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
@@ -75,22 +76,22 @@ function GapDrawerFooter({
         : "Save this role to your Pipeline Tracker";
 
     return (
-        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-zinc-800/90 bg-zinc-900/80 px-6 py-5 sm:px-8">
-            <Tooltip content={saveTooltip}>
+        <div className="flex flex-col-reverse gap-2.5 border-t border-zinc-800/90 bg-zinc-900/80 px-4 py-3.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4 sm:px-8 sm:py-5">
+            <Tooltip content={saveTooltip} className="inline-flex w-full sm:w-auto">
                 <button
                     type="button"
                     disabled={saving || saved}
                     onClick={onSaveLead}
-                    className={`inline-flex items-center gap-2 rounded-xl border px-5 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed ${
+                    className={`inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed sm:w-auto sm:px-5 ${
                         saved
                             ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-200"
                             : "border-zinc-700 bg-zinc-800 text-zinc-100 hover:bg-zinc-700 disabled:opacity-50"
                     }`}
                 >
                     {saved ? (
-                        <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+                        <BookmarkCheck className="h-4 w-4 shrink-0 text-emerald-400" />
                     ) : (
-                        <BookmarkPlus className="h-4 w-4 text-violet-400" />
+                        <BookmarkPlus className="h-4 w-4 shrink-0 text-violet-400" />
                     )}
                     {getSaveButtonLabel(saved, saving)}
                 </button>
@@ -101,18 +102,19 @@ function GapDrawerFooter({
                     applyUrl,
                     "Open the job application page in a new tab",
                 )}
+                className="inline-flex w-full sm:w-auto"
             >
                 <a
                     href={applyUrl}
                     target={isEmailApply ? undefined : "_blank"}
                     rel={isEmailApply ? undefined : "noreferrer"}
-                    className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm shadow-violet-600/20 transition hover:bg-violet-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 sm:w-auto sm:px-5"
                 >
                     {formatApplyLinkLabel(applyUrl, "Open Original Posting")}{" "}
                     {isEmailApply ? (
-                        <Mail className="h-4 w-4" />
+                        <Mail className="h-4 w-4 shrink-0" />
                     ) : (
-                        <ExternalLink className="h-4 w-4" />
+                        <ExternalLink className="h-4 w-4 shrink-0" />
                     )}
                 </a>
             </Tooltip>
@@ -145,16 +147,16 @@ function FitSummarySection({
         : splitLegacySummaryParagraphs(cleanSummary);
 
     return (
-        <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+        <section className="min-w-0 rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
             <div className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-violet-300">
-                <Sparkles className="h-4 w-4" />
-                Fit Summary ({scoringModel || "gemini"})
+                <Sparkles className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 truncate">Fit Summary ({scoringModel || "gemini"})</span>
             </div>
 
             {hasStructuredFields ? (
                 <div className="space-y-3.5">
                     {cleanSummary && (
-                        <p className="text-[14.5px] font-medium leading-relaxed text-zinc-100">
+                        <p className="break-words text-sm font-medium leading-relaxed text-zinc-100 sm:text-[14.5px]">
                             {cleanSummary}
                         </p>
                     )}
@@ -162,18 +164,18 @@ function FitSummarySection({
                     {cleanHighlights.length > 0 && (
                         <ul className="space-y-2.5 border-t border-zinc-800/80 pt-3.5 text-sm leading-relaxed text-zinc-300">
                             {cleanHighlights.map((point) => (
-                                <li key={point} className="flex gap-3">
+                                <li key={point} className="flex min-w-0 gap-3">
                                     <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/90" />
-                                    <span>{point}</span>
+                                    <span className="min-w-0 break-words">{point}</span>
                                 </li>
                             ))}
                         </ul>
                     )}
 
                     {cleanWatchout && (
-                        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-950/20 px-3.5 py-2.5 text-xs leading-relaxed text-amber-200/90">
+                        <div className="flex min-w-0 items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-950/20 px-3.5 py-2.5 text-xs leading-relaxed text-amber-200/90">
                             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
-                            <p>
+                            <p className="min-w-0 break-words">
                                 <span className="font-semibold uppercase tracking-wider text-amber-300">
                                     Note:{" "}
                                 </span>
@@ -189,8 +191,8 @@ function FitSummarySection({
                             key={paragraph}
                             className={
                                 index === 0
-                                    ? "text-[14.5px] font-medium leading-relaxed text-zinc-100"
-                                    : "text-sm leading-relaxed text-zinc-300"
+                                    ? "break-words text-sm font-medium leading-relaxed text-zinc-100 sm:text-[14.5px]"
+                                    : "break-words text-sm leading-relaxed text-zinc-300"
                             }
                         >
                             {paragraph}
@@ -228,7 +230,7 @@ function GapAnalysisTabContent({
 
     return (
         <>
-            <section className="grid gap-5 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:grid-cols-2 sm:p-6">
+            <section className="grid min-w-0 gap-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:grid-cols-2 sm:gap-5 sm:p-6">
                 <Tooltip content={aiFitTooltip} className="block">
                     <div className="space-y-2">
                         <div className="flex items-center justify-between text-xs">
@@ -279,10 +281,10 @@ function GapAnalysisTabContent({
                 />
             )}
 
-            <div className="grid gap-5 sm:grid-cols-2">
-                <section className="rounded-2xl border border-emerald-500/20 bg-emerald-950/15 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                    <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                        <CheckCircle2 className="h-4 w-4" />
+            <div className="grid min-w-0 gap-4 sm:grid-cols-2 sm:gap-5">
+                <section className="min-w-0 rounded-2xl border border-emerald-500/20 bg-emerald-950/15 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                    <h3 className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300 sm:mb-4">
+                        <CheckCircle2 className="h-4 w-4 shrink-0" />
                         Matched Skills ({match.matched_skills.length})
                     </h3>
                     <div className="flex flex-wrap gap-2">
@@ -292,7 +294,7 @@ function GapAnalysisTabContent({
                                     key={skill}
                                     content="Skill matched between your resume and this role"
                                 >
-                                    <span className="rounded-lg border border-emerald-500/25 bg-emerald-500/15 px-3 py-1.5 font-mono text-xs text-emerald-200">
+                                    <span className="max-w-full break-words rounded-lg border border-emerald-500/25 bg-emerald-500/15 px-2.5 py-1 font-mono text-xs text-emerald-200 sm:px-3 sm:py-1.5">
                                         {skill}
                                     </span>
                                 </Tooltip>
@@ -305,9 +307,9 @@ function GapAnalysisTabContent({
                     </div>
                 </section>
 
-                <section className="rounded-2xl border border-amber-500/20 bg-amber-950/15 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                    <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-300">
-                        <XCircle className="h-4 w-4" />
+                <section className="min-w-0 rounded-2xl border border-amber-500/20 bg-amber-950/15 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                    <h3 className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-300 sm:mb-4">
+                        <XCircle className="h-4 w-4 shrink-0" />
                         Missing Keywords ({match.missing_keywords.length})
                     </h3>
                     <div className="flex flex-wrap gap-2">
@@ -317,7 +319,7 @@ function GapAnalysisTabContent({
                                     key={kw}
                                     content="Keyword requested in posting but absent from your resume"
                                 >
-                                    <span className="rounded-lg border border-amber-500/25 bg-amber-500/15 px-3 py-1.5 font-mono text-xs text-amber-200">
+                                    <span className="max-w-full break-words rounded-lg border border-amber-500/25 bg-amber-500/15 px-2.5 py-1 font-mono text-xs text-amber-200 sm:px-3 sm:py-1.5">
                                         {kw}
                                     </span>
                                 </Tooltip>
@@ -331,17 +333,17 @@ function GapAnalysisTabContent({
                 </section>
             </div>
 
-            <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-5 ring-1 ring-inset ring-white/[0.03] sm:p-6">
-                <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
-                    <MessageSquareQuote className="h-4 w-4 text-violet-400" />
+            <section className="min-w-0 rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03] sm:p-6">
+                <h3 className="mb-3.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300 sm:mb-4">
+                    <MessageSquareQuote className="h-4 w-4 shrink-0 text-violet-400" />
                     Interview Talking Points
                 </h3>
                 {match.talking_points.length > 0 ? (
                     <ul className="space-y-3 text-sm leading-relaxed text-zinc-300">
                         {match.talking_points.map((point) => (
-                            <li key={point} className="flex gap-3">
+                            <li key={point} className="flex min-w-0 gap-3">
                                 <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />
-                                <span>{point}</span>
+                                <span className="min-w-0 break-words">{point}</span>
                             </li>
                         ))}
                     </ul>
@@ -404,8 +406,8 @@ function GapAnalysisDrawerContent({
     const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
     const alertTooltip = `Meets or exceeds your ${effectiveMinAlertScore}% alert threshold for this resume profile.`;
 
-    return (
-        <div className="fixed inset-0 z-50 flex justify-end">
+    const drawerContent = (
+        <div className="fixed inset-0 z-50 flex justify-end overflow-hidden">
             <button
                 type="button"
                 aria-label="Close drawer"
@@ -416,11 +418,11 @@ function GapAnalysisDrawerContent({
                 open
                 aria-modal="true"
                 aria-labelledby="gap-drawer-title"
-                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-full max-h-none w-full max-w-3xl flex-col border-0 border-l border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl"
+                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-dvh max-h-none w-full max-w-[min(48rem,100vw)] min-w-0 flex-col overflow-x-hidden border-0 border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl sm:h-full sm:border-l"
             >
-                <div className="flex items-start justify-between gap-4 border-b border-zinc-800/90 bg-zinc-950/90 px-6 py-5 sm:px-8 sm:py-6">
-                    <div className="min-w-0 space-y-2.5">
-                        <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-start justify-between gap-3 border-b border-zinc-800/90 bg-zinc-950/90 px-4 py-3.5 sm:gap-4 sm:px-8 sm:py-6">
+                    <div className="min-w-0 flex-1 space-y-2 sm:space-y-2.5">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                             {isAlert && (
                                 <Tooltip content={alertTooltip} side="bottom">
                                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300 ring-1 ring-violet-500/35">
@@ -507,21 +509,21 @@ function GapAnalysisDrawerContent({
 
                         <h2
                             id="gap-drawer-title"
-                            className="text-xl font-semibold leading-snug text-zinc-100"
+                            className="break-words text-base font-semibold leading-snug text-zinc-100 sm:text-xl"
                         >
                             {job.title}
                         </h2>
-                        <p className="text-sm text-zinc-400">
+                        <p className="break-words text-xs text-zinc-400 sm:text-sm">
                             {job.company_name} · {job.location_raw || "Remote"}
                         </p>
                     </div>
 
-                    <Tooltip content="Close gap analysis (Esc)" side="bottom">
+                    <Tooltip content="Close gap analysis (Esc)" side="bottom" className="inline-flex shrink-0">
                         <button
                             type="button"
                             onClick={onClose}
                             aria-label="Close drawer"
-                            className="rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
+                            className="shrink-0 rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                         >
                             <X className="h-5 w-5" />
                         </button>
@@ -531,7 +533,7 @@ function GapAnalysisDrawerContent({
                 <div
                     role="tablist"
                     aria-label="Match analysis views"
-                    className="flex items-center gap-1 border-b border-zinc-800/90 bg-zinc-950/80 px-6 sm:px-8"
+                    className="flex items-center gap-1 border-b border-zinc-800/90 bg-zinc-950/80 px-4 sm:px-8"
                 >
                     <button
                         type="button"
@@ -568,7 +570,7 @@ function GapAnalysisDrawerContent({
                     </button>
                 </div>
 
-                <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8 sm:py-7">
+                <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
                     {activeTab === "copilot" ? (
                         <CopilotPanel
                             key={match.uuid}
@@ -605,6 +607,10 @@ function GapAnalysisDrawerContent({
             </dialog>
         </div>
     );
+
+    return typeof document === "undefined"
+        ? drawerContent
+        : createPortal(drawerContent, document.body);
 }
 
 export function GapAnalysisDrawer({
@@ -620,13 +626,18 @@ export function GapAnalysisDrawer({
 }: Readonly<GapAnalysisDrawerProps>) {
     useEffect(() => {
         if (!match) return;
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = "hidden";
         function handleKeyDown(event: KeyboardEvent) {
             if (event.key === "Escape") {
                 onClose();
             }
         }
         window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener("keydown", handleKeyDown);
+        };
     }, [match, onClose]);
 
     if (!match) {

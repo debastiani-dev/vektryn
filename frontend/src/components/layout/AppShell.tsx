@@ -9,8 +9,10 @@ import {
     UserCog,
     Users,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CurrentUser, LiveMatchAlert, UserProfileDetail } from "../../types/models";
+import { type PopoverCoords, computePopoverCoords } from "../../utils/popoverPosition";
 import { Tooltip } from "../ui/Tooltip";
 import { VektrynLogo } from "../ui/VektrynLogo";
 import { AccountSettingsModal } from "./AccountSettingsModal";
@@ -77,6 +79,13 @@ interface UserAccountMenuProps {
     onLogout: () => void;
 }
 
+const PROFILE_MENU_POSITION_OPTIONS = {
+    desktopWidth: 240,
+    mobileWidth: 240,
+    minWidth: 220,
+    offsetY: 8,
+} as const;
+
 function UserAccountMenu({
     user,
     onOpenSettings,
@@ -84,14 +93,34 @@ function UserAccountMenu({
     onLogout,
 }: Readonly<UserAccountMenuProps>) {
     const [menuOpen, setMenuOpen] = useState(false);
-    const menuRef = useRef<HTMLDivElement>(null);
+    const [menuCoords, setMenuCoords] = useState<PopoverCoords | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
+
+    const updateMenuCoords = useCallback(() => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+        setMenuCoords(
+            computePopoverCoords(
+                trigger.getBoundingClientRect(),
+                globalThis.innerWidth,
+                globalThis.innerHeight,
+                PROFILE_MENU_POSITION_OPTIONS,
+            ),
+        );
+    }, []);
 
     useEffect(() => {
         if (!menuOpen) {
             return;
         }
+        updateMenuCoords();
         function handlePointerDown(event: MouseEvent) {
-            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+            const target = event.target as Node;
+            const insideTrigger = containerRef.current?.contains(target) ?? false;
+            const insidePanel = panelRef.current?.contains(target) ?? false;
+            if (!insideTrigger && !insidePanel) {
                 setMenuOpen(false);
             }
         }
@@ -102,25 +131,36 @@ function UserAccountMenu({
         }
         document.addEventListener("mousedown", handlePointerDown);
         globalThis.addEventListener("keydown", handleKeyDown);
+        globalThis.addEventListener("resize", updateMenuCoords);
+        globalThis.addEventListener("scroll", updateMenuCoords, true);
         return () => {
             document.removeEventListener("mousedown", handlePointerDown);
             globalThis.removeEventListener("keydown", handleKeyDown);
+            globalThis.removeEventListener("resize", updateMenuCoords);
+            globalThis.removeEventListener("scroll", updateMenuCoords, true);
         };
-    }, [menuOpen]);
+    }, [menuOpen, updateMenuCoords]);
 
     const displayLabel = user.profile?.display_name || user.username;
 
     return (
-        <div ref={menuRef} className="relative">
+        <div ref={containerRef} className="relative">
             <button
+                ref={triggerRef}
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                onClick={() => setMenuOpen((prev) => !prev)}
+                onClick={() => {
+                    const nextOpen = !menuOpen;
+                    if (nextOpen) {
+                        updateMenuCoords();
+                    }
+                    setMenuOpen(nextOpen);
+                }}
                 className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 py-1.5 pr-2.5 pl-3 text-xs text-zinc-200 transition hover:border-zinc-700 hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
             >
-                <User className="h-3.5 w-3.5 text-zinc-400" />
-                <span className="max-w-32 truncate font-medium">{displayLabel}</span>
+                <User className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                <span className="max-w-24 truncate font-medium sm:max-w-32">{displayLabel}</span>
                 <ChevronDown
                     className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${
                         menuOpen ? "rotate-180" : ""
@@ -128,80 +168,90 @@ function UserAccountMenu({
                 />
             </button>
 
-            {menuOpen && (
-                <div
-                    role="menu"
-                    className="absolute right-0 mt-2 w-60 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/95 p-1.5 shadow-2xl ring-1 ring-inset ring-white/[0.04] backdrop-blur-md"
-                >
-                    <div className="border-b border-zinc-800/80 px-3 py-2">
-                        <div className="flex items-center gap-2">
-                            <span className="truncate text-xs font-semibold text-zinc-100">
-                                {displayLabel}
-                            </span>
-                            {user.is_staff && (
-                                <span className="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300 ring-1 ring-violet-500/30">
-                                    Staff
+            {menuOpen &&
+                menuCoords &&
+                createPortal(
+                    <div
+                        ref={panelRef}
+                        role="menu"
+                        style={{
+                            top: `${menuCoords.top}px`,
+                            left: `${menuCoords.left}px`,
+                            width: `${menuCoords.width}px`,
+                            maxHeight: `${menuCoords.maxHeight}px`,
+                        }}
+                        className="fixed z-50 overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950/95 p-1.5 shadow-2xl shadow-black/70 ring-1 ring-inset ring-white/[0.04] backdrop-blur-md"
+                    >
+                        <div className="border-b border-zinc-800/80 px-3 py-2">
+                            <div className="flex items-center gap-2">
+                                <span className="truncate text-xs font-semibold text-zinc-100">
+                                    {displayLabel}
                                 </span>
+                                {user.is_staff && (
+                                    <span className="rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300 ring-1 ring-violet-500/30">
+                                        Staff
+                                    </span>
+                                )}
+                            </div>
+                            {user.profile?.display_name && (
+                                <p className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
+                                    @{user.username}
+                                </p>
+                            )}
+                            {user.email && (
+                                <p className="mt-0.5 truncate text-[11px] text-zinc-500">
+                                    {user.email}
+                                </p>
                             )}
                         </div>
-                        {user.profile?.display_name && (
-                            <p className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
-                                @{user.username}
-                            </p>
-                        )}
-                        {user.email && (
-                            <p className="mt-0.5 truncate text-[11px] text-zinc-500">
-                                {user.email}
-                            </p>
-                        )}
-                    </div>
 
-                    <div className="space-y-0.5 py-1">
-                        <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                                setMenuOpen(false);
-                                onOpenSettings();
-                            }}
-                            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 hover:text-white"
-                        >
-                            <UserCog className="h-3.5 w-3.5 text-violet-400" />
-                            <span>Account Settings</span>
-                        </button>
-
-                        {user.is_staff && (
+                        <div className="space-y-0.5 py-1">
                             <button
                                 type="button"
                                 role="menuitem"
                                 onClick={() => {
                                     setMenuOpen(false);
-                                    onOpenUserManagement();
+                                    onOpenSettings();
                                 }}
                                 className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 hover:text-white"
                             >
-                                <Users className="h-3.5 w-3.5 text-violet-400" />
-                                <span>Manage Users</span>
+                                <UserCog className="h-3.5 w-3.5 text-violet-400" />
+                                <span>Account Settings</span>
                             </button>
-                        )}
-                    </div>
 
-                    <div className="border-t border-zinc-800/80 pt-1">
-                        <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                                setMenuOpen(false);
-                                onLogout();
-                            }}
-                            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-400 transition hover:bg-red-950/35 hover:text-red-300"
-                        >
-                            <LogOut className="h-3.5 w-3.5" />
-                            <span>Sign Out</span>
-                        </button>
-                    </div>
-                </div>
-            )}
+                            {user.is_staff && (
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={() => {
+                                        setMenuOpen(false);
+                                        onOpenUserManagement();
+                                    }}
+                                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-200 transition hover:bg-zinc-900 hover:text-white"
+                                >
+                                    <Users className="h-3.5 w-3.5 text-violet-400" />
+                                    <span>Manage Users</span>
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="border-t border-zinc-800/80 pt-1">
+                            <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                    setMenuOpen(false);
+                                    onLogout();
+                                }}
+                                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-zinc-400 transition hover:bg-red-950/35 hover:text-red-300"
+                            >
+                                <LogOut className="h-3.5 w-3.5" />
+                                <span>Sign Out</span>
+                            </button>
+                        </div>
+                    </div>,
+                    document.body,
+                )}
         </div>
     );
 }
@@ -231,13 +281,13 @@ export function AppShell({
     return (
         <div className="min-h-screen overflow-x-clip text-zinc-100">
             <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md">
-                <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-8 lg:px-10">
-                    <div className="flex flex-wrap items-center gap-6 sm:gap-8">
+                <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-3 sm:gap-x-4 sm:gap-y-3 sm:px-8 sm:py-4 lg:px-10">
+                    <div className="order-1 flex items-center">
                         <Tooltip
                             content="Vektryn — Job intelligence & career radar"
                             side="bottom"
                         >
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2.5 sm:gap-3">
                                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
                                     <VektrynLogo className="h-7 w-7" />
                                 </div>
@@ -246,34 +296,50 @@ export function AppShell({
                                 </span>
                             </div>
                         </Tooltip>
-
-                        <nav aria-label="Primary" className="flex flex-wrap items-center gap-2">
-                            {NAV_ITEMS.map(({ id, label, tooltip, icon: Icon }) => {
-                                const active = activeTab === id;
-                                return (
-                                    <Tooltip key={id} content={tooltip} side="bottom">
-                                        <button
-                                            type="button"
-                                            aria-current={active ? "page" : undefined}
-                                            onClick={() => onSelectTab(id)}
-                                            className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 ${
-                                                active
-                                                    ? "bg-zinc-900 text-zinc-100 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/10"
-                                                    : "text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-200"
-                                            }`}
-                                        >
-                                            <Icon
-                                                className={`h-4 w-4 ${active ? "text-violet-400" : "text-zinc-500"}`}
-                                            />
-                                            {label}
-                                        </button>
-                                    </Tooltip>
-                                );
-                            })}
-                        </nav>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <div className="order-2 ml-auto flex items-center gap-2 sm:gap-2.5 xl:order-4 xl:ml-0">
+                        <NotificationCenter {...notificationCenter} />
+
+                        {user && (
+                            <UserAccountMenu
+                                user={user}
+                                onOpenSettings={onOpenSettings}
+                                onOpenUserManagement={() => setUserMgmtModalOpen(true)}
+                                onLogout={onLogout}
+                            />
+                        )}
+                    </div>
+
+                    <nav
+                        aria-label="Primary"
+                        className="order-3 flex w-full flex-wrap items-center gap-1.5 sm:gap-2 xl:order-2 xl:ml-4 xl:w-auto"
+                    >
+                        {NAV_ITEMS.map(({ id, label, tooltip, icon: Icon }) => {
+                            const active = activeTab === id;
+                            return (
+                                <Tooltip key={id} content={tooltip} side="bottom">
+                                    <button
+                                        type="button"
+                                        aria-current={active ? "page" : undefined}
+                                        onClick={() => onSelectTab(id)}
+                                        className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 sm:gap-2.5 sm:px-4 sm:py-2 ${
+                                            active
+                                                ? "bg-zinc-900 text-zinc-100 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/10"
+                                                : "text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-200"
+                                        }`}
+                                    >
+                                        <Icon
+                                            className={`h-4 w-4 ${active ? "text-violet-400" : "text-zinc-500"}`}
+                                        />
+                                        {label}
+                                    </button>
+                                </Tooltip>
+                            );
+                        })}
+                    </nav>
+
+                    <div className="order-4 flex w-full flex-wrap items-center gap-2 border-t border-zinc-800/60 pt-2.5 sm:gap-3 xl:order-3 xl:ml-auto xl:w-auto xl:border-t-0 xl:pt-0">
                         <PipelineStatusPopover isStaff={Boolean(user?.is_staff)} />
 
                         <Tooltip content={streamTooltip} side="bottom">
@@ -297,17 +363,6 @@ export function AppShell({
                                 <span>{sseConnected ? "Live Stream" : "Stream Offline"}</span>
                             </div>
                         </Tooltip>
-
-                        <NotificationCenter {...notificationCenter} />
-
-                        {user && (
-                            <UserAccountMenu
-                                user={user}
-                                onOpenSettings={onOpenSettings}
-                                onOpenUserManagement={() => setUserMgmtModalOpen(true)}
-                                onLogout={onLogout}
-                            />
-                        )}
                     </div>
                 </div>
             </header>
