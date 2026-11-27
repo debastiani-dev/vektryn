@@ -4,6 +4,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from confluent_kafka import KafkaException
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 import httpx
@@ -16,6 +17,7 @@ from stream_edge.clients.kafka import (
     KafkaEventProducer,
     _kafka_base_config,
     create_kafka_consumer,
+    ensure_topics_exist,
 )
 from stream_edge.collectors.ats_boards import BreezyCollector
 from stream_edge.collectors.base import CollectedJob, push_jobs_to_edge
@@ -847,3 +849,41 @@ def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused():
     assert "fit_highlights:" in prompt
     assert "watchout_note:" in prompt
     assert "TARGET ROLE: Staff Frontend Engineer @ Acme" in prompt
+
+
+def test_ensure_topics_exist_retries_transient_metadata_timeouts():
+    metadata = MagicMock(topics={topic.value: object() for topic in KafkaTopic})
+    fake_admin = MagicMock()
+    fake_admin.list_topics.side_effect = [
+        KafkaException("Failed to get metadata: Local: Timed out"),
+        KafkaException("Failed to get metadata: Local: Timed out"),
+        metadata,
+    ]
+    sleeps: list[float] = []
+
+    with (
+        patch("stream_edge.clients.kafka.AdminClient", return_value=fake_admin),
+        patch("stream_edge.clients.kafka.time.sleep", side_effect=sleeps.append),
+    ):
+        ensure_topics_exist("kafka:9092")
+
+    assert fake_admin.list_topics.call_count == 3
+    fake_admin.list_topics.assert_called_with(timeout=10.0)
+    assert sleeps == [2.0, 4.0]
+    fake_admin.create_topics.assert_not_called()
+
+
+def test_ensure_topics_exist_raises_after_exhausting_retries():
+    fake_admin = MagicMock()
+    fake_admin.list_topics.side_effect = KafkaException("Local: Timed out")
+    sleeps: list[float] = []
+
+    with (
+        patch("stream_edge.clients.kafka.AdminClient", return_value=fake_admin),
+        patch("stream_edge.clients.kafka.time.sleep", side_effect=sleeps.append),
+        pytest.raises(KafkaException),
+    ):
+        ensure_topics_exist("kafka:9092", max_attempts=3, retry_delay=1.5)
+
+    assert fake_admin.list_topics.call_count == 3
+    assert sleeps == [1.5, 3.0]

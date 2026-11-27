@@ -1,9 +1,10 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
-from confluent_kafka import Consumer, Message, Producer
+from confluent_kafka import Consumer, KafkaException, Message, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
 from stream_edge.config import settings
@@ -30,11 +31,46 @@ def _kafka_base_config(bootstrap_servers: str) -> dict[str, Any]:
     return config
 
 
+def _list_existing_topics(
+    admin: AdminClient,
+    *,
+    timeout: float,
+    max_attempts: int,
+    retry_delay: float,
+) -> set[str]:
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        try:
+            return set(admin.list_topics(timeout=timeout).topics.keys())
+        except KafkaException as exc:
+            if attempt >= attempts:
+                raise
+            delay = retry_delay * attempt
+            logger.warning(
+                "Kafka metadata lookup failed (attempt %d/%d, retrying in %.1fs): %s",
+                attempt,
+                attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    return set()
+
+
 def ensure_topics_exist(
     bootstrap_servers: str = settings.kafka_bootstrap_servers,
+    *,
+    timeout: float = 10.0,
+    max_attempts: int = 5,
+    retry_delay: float = 2.0,
 ) -> None:
     admin = AdminClient(_kafka_base_config(bootstrap_servers))
-    existing = set(admin.list_topics(timeout=5).topics.keys())
+    existing = _list_existing_topics(
+        admin,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        retry_delay=retry_delay,
+    )
     missing = [
         NewTopic(topic.value, num_partitions=3, replication_factor=1)
         for topic in KafkaTopic
