@@ -74,6 +74,10 @@ describe("LandingPage and interactive coded preview helpers", () => {
         expect(html).toContain('role="tablist"');
         expect(html).toContain('role="tab"');
         expect(html).toContain('role="tabpanel"');
+        expect(html).toContain("Interactive preview");
+        expect(html).toContain("Click tabs and filters to explore");
+        expect(html).toContain("BYOK Gemini 3.5/4");
+        expect(html).toContain("text-balance");
         expect(html).toContain("Live Stream");
         expect(html).toContain("alex");
         expect(html).not.toContain(">rafa<");
