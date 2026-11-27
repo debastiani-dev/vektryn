@@ -677,7 +677,7 @@ function PipelineStageColumn({
     return (
         <section
             ref={onRegisterRef}
-            className={`flex min-h-[480px] w-[320px] shrink-0 snap-start flex-col rounded-2xl border border-zinc-800/90 border-t-2 bg-zinc-900/40 p-5 ring-1 ring-inset ring-white/[0.03] sm:w-[344px] ${stage.topBorder}`}
+            className={`flex min-h-[480px] w-[min(86vw,320px)] shrink-0 snap-start flex-col rounded-2xl border border-zinc-800/90 border-t-2 bg-zinc-900/40 p-4 ring-1 ring-inset ring-white/[0.03] sm:w-[344px] sm:p-5 ${stage.topBorder}`}
         >
             <div className="mb-4 flex items-center justify-between border-b border-zinc-800/80 pb-3.5">
                 <div className="flex items-center gap-2.5">
@@ -1042,7 +1042,7 @@ export function PipelineTrackerView({
     const activeJobMatch = selectedJobContext?.match ?? null;
 
     return (
-        <div className="space-y-8">
+        <div className="min-w-0 space-y-8">
             <header className="space-y-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="flex flex-col gap-1">
