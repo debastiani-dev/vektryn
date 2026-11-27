@@ -18,12 +18,12 @@ import {
     UserCog,
     X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import type { NotificationFilter } from "../../hooks/useNotifications";
 import type { NotificationItem } from "../../types/models";
 import { formatExactDate, formatRelativeTime, scoreBadgeStyle } from "../../utils/format";
 import { extractPayloadString, formatUnreadBadge } from "../../utils/notifications";
+import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
 
 export interface NotificationCenterProps {
@@ -340,17 +340,6 @@ export function NotificationCenter({
 }: Readonly<NotificationCenterProps>) {
     const [open, setOpen] = useState(false);
 
-    useEffect(() => {
-        if (!open) return;
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                setOpen(false);
-            }
-        };
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [open]);
-
     const handleOpenGap = (item: NotificationItem) => {
         setOpen(false);
         onOpenGapDetails(item);
@@ -408,21 +397,14 @@ export function NotificationCenter({
                 </button>
             </Tooltip>
 
-            {open &&
-                createPortal(
-                    <div className="fixed inset-0 z-50 flex justify-end overflow-hidden">
-                        <button
-                            type="button"
-                            aria-label="Close notifications drawer"
-                            onClick={() => setOpen(false)}
-                            className="fixed inset-0 cursor-default bg-black/65 backdrop-blur-xs"
-                        />
-                        <dialog
-                            open
-                            aria-modal="true"
-                            aria-labelledby="notification-drawer-title"
-                            className="animate-drawer-in relative inset-auto z-10 m-0 flex h-dvh max-h-none w-full max-w-[min(28rem,100vw)] min-w-0 flex-col overflow-x-hidden border-0 border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl sm:h-full sm:border-l"
-                        >
+            {open && (
+                <SlideOverDrawer
+                    labelledBy="notification-drawer-title"
+                    closeLabel="Close notifications drawer"
+                    desktopMaxWidthPx={448}
+                    backdropClassName="bg-black/65 backdrop-blur-xs"
+                    onClose={() => setOpen(false)}
+                >
                             <div className="space-y-3 border-b border-zinc-800/90 bg-zinc-950/95 px-5 py-4">
                                 <div className="flex items-center justify-between gap-2">
                                     <div className="flex items-center gap-2.5">
@@ -500,7 +482,7 @@ export function NotificationCenter({
                                 </div>
                             </div>
 
-                            <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+                            <div className="min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-contain px-5 py-4">
                                 {error && (
                                     <div className="rounded-xl border border-red-500/30 bg-red-950/25 px-3.5 py-2.5 text-xs text-red-300">
                                         {error}
@@ -569,11 +551,9 @@ export function NotificationCenter({
                                         {loadingMore ? "Loading..." : "Load older notifications"}
                                     </button>
                                 )}
-                            </div>
-                        </dialog>
-                    </div>,
-                    document.body,
-                )}
+                                </div>
+                </SlideOverDrawer>
+            )}
         </>
     );
 }

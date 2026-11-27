@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { MatchScore } from "../../types/models";
-import { computePopoverCoords } from "../../utils/popoverPosition";
+import { computeDrawerLayout, computePopoverCoords } from "../../utils/popoverPosition";
 import { PersonalAnalyticsPanel } from "../analytics/PersonalAnalyticsPanel";
 import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
 import { JobPostingDrawer } from "../radar/JobPostingDrawer";
@@ -49,7 +49,41 @@ describe("Mobile layout hardening: PipelineStatusPopover & PersonalAnalyticsPane
         expect(html).toContain("min-w-0 max-w-full flex-1 truncate");
     });
 
-    it("clamps GapAnalysisDrawer and JobPostingDrawer strictly to mobile viewport width", () => {
+    it("anchors SlideOverDrawer to exact mobile visualViewport and avoids native dialog quirks", () => {
+        const mobileLayout = computeDrawerLayout(
+            { top: 120, left: 48, width: 390, height: 740 },
+            768,
+        );
+        expect(mobileLayout.isCompact).toBe(true);
+        expect(mobileLayout.overlayStyle).toEqual({
+            top: "120px",
+            left: "48px",
+            width: "390px",
+            height: "740px",
+        });
+        expect(mobileLayout.panelStyle).toEqual({
+            top: 0,
+            left: 0,
+            right: "auto",
+            bottom: "auto",
+            width: "390px",
+            height: "740px",
+        });
+
+        const desktopLayout = computeDrawerLayout(
+            { top: 0, left: 0, width: 1440, height: 900 },
+            768,
+        );
+        expect(desktopLayout.isCompact).toBe(false);
+        expect(desktopLayout.panelStyle).toEqual({
+            top: 0,
+            right: 0,
+            left: "auto",
+            bottom: "auto",
+            width: "768px",
+            height: "900px",
+        });
+
         const sampleMatch: MatchScore = {
             uuid: "match-mobile-1",
             job_posting: {
@@ -91,16 +125,16 @@ describe("Mobile layout hardening: PipelineStatusPopover & PersonalAnalyticsPane
                 onSaveLead={vi.fn()}
             />,
         );
-        expect(gapHtml).toContain("max-w-[min(48rem,100vw)]");
-        expect(gapHtml).toContain("min-w-0");
+        expect(gapHtml).toContain('role="dialog"');
+        expect(gapHtml).not.toContain("<dialog");
+        expect(gapHtml).toContain("overscroll-contain");
         expect(gapHtml).toContain("overflow-x-hidden");
-        expect(gapHtml).toContain("h-dvh");
 
         const jobHtml = renderToStaticMarkup(
             <JobPostingDrawer jobPreview={sampleMatch.job_posting} onClose={vi.fn()} />,
         );
-        expect(jobHtml).toContain("max-w-[min(48rem,100vw)]");
-        expect(jobHtml).toContain("overflow-x-hidden");
-        expect(jobHtml).toContain("h-dvh");
+        expect(jobHtml).toContain('role="dialog"');
+        expect(jobHtml).not.toContain("<dialog");
+        expect(jobHtml).toContain("overscroll-contain");
     });
 });

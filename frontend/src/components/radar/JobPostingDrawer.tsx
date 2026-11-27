@@ -15,7 +15,6 @@ import {
     X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { vektrynApi } from "../../api/client";
 import type {
     ContractType,
@@ -38,6 +37,7 @@ import {
     isMailtoUrl,
     workModeBadgeStyle,
 } from "../../utils/format";
+import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
 
 export interface JobListingPreview {
@@ -282,22 +282,6 @@ export function JobPostingDrawer({
     const loadingDetail = Boolean(jobUuid && fetchState.uuid !== jobUuid);
 
     useEffect(() => {
-        if (!jobPreview) return;
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = "hidden";
-        function handleKeyDown(event: KeyboardEvent) {
-            if (event.key === "Escape") {
-                onClose();
-            }
-        }
-        window.addEventListener("keydown", handleKeyDown);
-        return () => {
-            document.body.style.overflow = previousOverflow;
-            window.removeEventListener("keydown", handleKeyDown);
-        };
-    }, [jobPreview, onClose]);
-
-    useEffect(() => {
         if (!jobUuid) {
             return;
         }
@@ -351,20 +335,13 @@ export function JobPostingDrawer({
         (match?.matched_skills ?? []).map((skill) => skill.toLowerCase()),
     );
 
-    const drawerContent = (
-        <div className="fixed inset-0 z-50 flex justify-end overflow-hidden">
-            <button
-                type="button"
-                aria-label="Close job listing drawer"
-                onClick={onClose}
-                className="fixed inset-0 cursor-default bg-black/70 backdrop-blur-xs"
-            />
-            <dialog
-                open
-                aria-modal="true"
-                aria-labelledby="job-drawer-title"
-                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-dvh max-h-none w-full max-w-[min(48rem,100vw)] min-w-0 flex-col overflow-x-hidden border-0 border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl sm:h-full sm:border-l"
-            >
+    return (
+        <SlideOverDrawer
+            labelledBy="job-drawer-title"
+            closeLabel="Close job listing drawer"
+            desktopMaxWidthPx={768}
+            onClose={onClose}
+        >
                 <div className="flex items-start justify-between gap-3 border-b border-zinc-800/90 bg-zinc-950/90 px-4 py-3.5 sm:gap-4 sm:px-8 sm:py-6">
                     <div className="min-w-0 flex-1 space-y-2 sm:space-y-2.5">
                         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -457,7 +434,7 @@ export function JobPostingDrawer({
                     </Tooltip>
                 </div>
 
-                <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
+                <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
                     <section className="grid min-w-0 gap-3.5 sm:grid-cols-2 sm:gap-4">
                         <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
                             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
@@ -568,11 +545,6 @@ export function JobPostingDrawer({
                     onSaveLead={onSaveLead}
                     onOpenGapDetails={onOpenGapDetails}
                 />
-            </dialog>
-        </div>
+        </SlideOverDrawer>
     );
-
-    return typeof document === "undefined"
-        ? drawerContent
-        : createPortal(drawerContent, document.body);
 }
