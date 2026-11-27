@@ -1,13 +1,23 @@
-export type PreviewTabId = "radar" | "copilot" | "tracker" | "analytics";
-export type RadarPreviewFilter = "all" | "high_fit" | "global" | "unapplied";
+import type { WorkMode } from "../../types/models";
+
+export type PreviewTabId = "radar" | "tracker" | "analytics" | "resumes";
+export type RadarPreviewFilter = "all" | "remote" | "high_fit" | "unapplied";
 export type CopilotPreviewMode = "gap" | "copilot";
-export type CopilotArtifactKind = "tailored_bullets" | "cover_letter" | "recruiter_outreach";
+export type CopilotArtifactKind =
+    | "tailored_bullets"
+    | "cover_letter"
+    | "recruiter_outreach"
+    | "interview_questions"
+    | "questions_to_ask";
+export type AnalyticsPreviewSubTab = "market" | "personal";
+export type StackCategoryFilter = "all" | "Language" | "Database" | "Broker" | "DevOps";
+export type StackSortField = "mentions" | "medianUsdValue";
+export type PersonalWindowOption = "7d" | "30d" | "90d";
 export type KanbanPriority = "low" | "medium" | "high";
 
 export interface PreviewTabMeta {
     id: PreviewTabId;
     label: string;
-    shortLabel: string;
 }
 
 export interface RadarPreviewRole {
@@ -17,6 +27,7 @@ export interface RadarPreviewRole {
     location: string;
     source: string;
     seniority: string;
+    workMode: WorkMode;
     postedAge: string;
     region: "Global Remote" | "Brazil / LATAM";
     contract: string;
@@ -42,6 +53,7 @@ export interface KanbanPreviewCard {
     title: string;
     company: string;
     salary: string;
+    workMode: WorkMode;
     fitScore: number;
     priority: KanbanPriority;
     followupLabel?: string;
@@ -56,6 +68,33 @@ export interface KanbanPreviewColumn {
     cards: KanbanPreviewCard[];
 }
 
+export interface StackDemandPreviewRow {
+    rank: number;
+    tech: string;
+    category: Exclude<StackCategoryFilter, "all">;
+    categoryClass: string;
+    mentions: number;
+    companies: number;
+    medianUsd: string;
+    medianUsdValue: number;
+    barPct: number;
+}
+
+export interface StackVelocitySeriesPreview {
+    tech: string;
+    color: string;
+    dotClass: string;
+    points: number[];
+}
+
+export interface ChannelPerformancePreviewRow {
+    source: string;
+    tracked: number;
+    applied: number;
+    responsePct: string;
+    interviewPct: string;
+}
+
 export interface FunnelStagePreview {
     key: string;
     label: string;
@@ -68,12 +107,37 @@ export interface FunnelStagePreview {
 export interface SkillGapBar {
     skill: string;
     mentions: number;
+    sharePct: number;
+}
+
+export interface PersonalWindowSnapshot {
+    label: string;
+    tracked: number;
+    responseRate: string;
+    interviewRate: string;
+    offers: number;
+    rejected: number;
+    withdrawn: number;
+    funnel: FunnelStagePreview[];
 }
 
 export interface PipelineWorkerPreview {
     name: string;
     processed: number;
     heartbeat: string;
+}
+
+export interface ResumeProfilePreview {
+    id: string;
+    label: string;
+    active: boolean;
+    alertThreshold: number;
+    targetWorkModes: WorkMode[];
+    targetRegions: string[];
+    targetSeniority: string[];
+    targetContracts: string[];
+    extractedSkills: string[];
+    updatedAt: string;
 }
 
 export const VEKTRYN_GITHUB_URL = "https://github.com/debastiani-dev/vektryn";
@@ -96,16 +160,23 @@ export const INGESTED_SOURCES_STRIP = [
 ];
 
 export const PREVIEW_TABS: PreviewTabMeta[] = [
-    { id: "radar", label: "Job Radar", shortLabel: "Radar" },
-    { id: "copilot", label: "Gap & Copilot", shortLabel: "Copilot" },
-    { id: "tracker", label: "Pipeline Tracker", shortLabel: "Tracker" },
-    { id: "analytics", label: "Analytics & Ops", shortLabel: "Analytics" },
+    { id: "radar", label: "Job Radar" },
+    { id: "tracker", label: "Pipeline Tracker" },
+    { id: "analytics", label: "Stack Trends" },
+    { id: "resumes", label: "Resumes" },
+];
+
+export const PREVIEW_WORK_MODE_OPTIONS: ReadonlyArray<{ value: WorkMode; label: string }> = [
+    { value: "remote", label: "Remote" },
+    { value: "hybrid", label: "Hybrid" },
+    { value: "onsite", label: "On-site" },
+    { value: "unknown", label: "Unknown" },
 ];
 
 export const RADAR_PREVIEW_FILTERS: Array<{ id: RadarPreviewFilter; label: string }> = [
     { id: "all", label: "All Roles" },
+    { id: "remote", label: "Remote Only" },
     { id: "high_fit", label: "High Fit >= 85" },
-    { id: "global", label: "Global Remote" },
     { id: "unapplied", label: "Unapplied Only" },
 ];
 
@@ -117,6 +188,7 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         location: "Remote · Global",
         source: "Ashby",
         seniority: "Senior",
+        workMode: "remote",
         postedAge: "2h ago",
         region: "Global Remote",
         contract: "B2B Contractor",
@@ -135,6 +207,7 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         location: "Remote · Brazil / LATAM",
         source: "Greenhouse",
         seniority: "Staff",
+        workMode: "remote",
         postedAge: "5h ago",
         region: "Brazil / LATAM",
         contract: "PJ",
@@ -150,13 +223,14 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         id: "role-3",
         title: "Senior Fullstack Engineer — Python + React",
         company: "Helios Cloud",
-        location: "Remote · Americas / EU",
+        location: "Sao Paulo · 2d/wk office",
         source: "Lever",
         seniority: "Senior",
+        workMode: "hybrid",
         postedAge: "1d ago",
-        region: "Global Remote",
-        contract: "B2B Contractor",
-        salary: "$130k – $155k",
+        region: "Brazil / LATAM",
+        contract: "CLT",
+        salary: "$110k – $135k",
         fitScore: 81,
         vectorPercent: 77,
         alertTriggered: false,
@@ -170,12 +244,13 @@ export const GAP_ANALYSIS_PREVIEW = {
     roleTitle: "Senior Backend Engineer — Distributed Systems",
     company: "Linearity Labs",
     location: "Remote · Global",
+    workMode: "remote" as WorkMode,
     source: "Ashby",
     contract: "B2B Contractor",
     salary: "$145k – $175k",
     fitScore: 92,
     vectorPercent: 86,
-    scoringModel: "gemini-4-hydrogen",
+    scoringModel: "gemini-4-carbon",
     summary:
         "Strong alignment across Python/Django APIs, Kafka event streaming, and PostgreSQL vector/relational indexing.",
     highlights: [
@@ -214,12 +289,32 @@ export const COPILOT_DRAFTS_PREVIEW: CopilotDraftPreview[] = [
     },
     {
         kind: "recruiter_outreach",
-        label: "Recruiter Outreach",
+        label: "Outreach",
         tone: "Concise",
         heading: "Direct Hiring Manager / Recruiter Note",
         lines: [
             "Hi [Name] — saw your Senior Backend Engineer opening at Linearity Labs. My core stack matches closely (Python, Django, Kafka event pipelines, PostgreSQL, GCP/Terraform).",
             "Happy to share a brief system design overview and my resume if you're still reviewing candidates this week.",
+        ],
+    },
+    {
+        kind: "interview_questions",
+        label: "Interview Prep",
+        tone: "Technical",
+        heading: "Likely Interview Questions & Grounded Angles",
+        lines: [
+            "How do you prevent duplicate side effects in Kafka consumers under rebalances? Anchor on SHA-256 content hashes + Redis locks + Postgres UPSERT idempotency.",
+            "How would you keep hybrid lexical + vector search p95 under 100ms? Anchor on pgvector HNSW + PostgreSQL tsvector + Reciprocal Rank Fusion.",
+        ],
+    },
+    {
+        kind: "questions_to_ask",
+        label: "Ask Them",
+        tone: "Executive",
+        heading: "High-Signal Questions for the Team",
+        lines: [
+            "What is the highest-leverage reliability or throughput bottleneck in the event pipeline over the next two quarters?",
+            "How are schema evolution and dead-letter recovery owned across backend and platform engineers today?",
         ],
     },
 ];
@@ -235,7 +330,8 @@ export const KANBAN_PREVIEW_COLUMNS: KanbanPreviewColumn[] = [
                 id: "k-1",
                 title: "Senior Fullstack Engineer",
                 company: "Helios Cloud",
-                salary: "$130k – $155k",
+                salary: "$110k – $135k",
+                workMode: "hybrid",
                 fitScore: 81,
                 priority: "medium",
             },
@@ -252,6 +348,7 @@ export const KANBAN_PREVIEW_COLUMNS: KanbanPreviewColumn[] = [
                 title: "Senior Backend Engineer",
                 company: "Linearity Labs",
                 salary: "$145k – $175k",
+                workMode: "remote",
                 fitScore: 92,
                 priority: "high",
                 followupLabel: "Follow-up overdue (1d)",
@@ -270,6 +367,7 @@ export const KANBAN_PREVIEW_COLUMNS: KanbanPreviewColumn[] = [
                 title: "Staff Platform Engineer",
                 company: "NuvemPay",
                 salary: "$120k – $140k",
+                workMode: "remote",
                 fitScore: 88,
                 priority: "high",
                 followupLabel: "Tech screen Thu 14:00",
@@ -287,6 +385,7 @@ export const KANBAN_PREVIEW_COLUMNS: KanbanPreviewColumn[] = [
                 title: "Principal Python Engineer",
                 company: "Arcadia Data",
                 salary: "$160k – $185k",
+                workMode: "remote",
                 fitScore: 90,
                 priority: "high",
             },
@@ -303,10 +402,112 @@ export const KANBAN_PREVIEW_COLUMNS: KanbanPreviewColumn[] = [
                 title: "Lead Systems Engineer",
                 company: "Vanguard Mesh",
                 salary: "$165k – $190k",
+                workMode: "remote",
                 fitScore: 94,
                 priority: "high",
             },
         ],
+    },
+];
+
+export const STACK_CATEGORY_FILTERS: Array<{ id: StackCategoryFilter; label: string }> = [
+    { id: "all", label: "All Categories" },
+    { id: "Language", label: "Languages" },
+    { id: "Database", label: "Databases" },
+    { id: "Broker", label: "Brokers" },
+    { id: "DevOps", label: "DevOps" },
+];
+
+export const STACK_VELOCITY_DATES = ["Nov 23", "Nov 24", "Nov 25", "Nov 26", "Nov 27"];
+
+export const STACK_VELOCITY_SERIES: StackVelocitySeriesPreview[] = [
+    { tech: "Python", color: "#a78bfa", dotClass: "bg-violet-400", points: [118, 126, 134, 141, 148] },
+    {
+        tech: "TypeScript",
+        color: "#38bdf8",
+        dotClass: "bg-sky-400",
+        points: [108, 114, 121, 127, 132],
+    },
+    {
+        tech: "PostgreSQL",
+        color: "#34d399",
+        dotClass: "bg-emerald-400",
+        points: [86, 92, 97, 104, 109],
+    },
+    {
+        tech: "Kubernetes",
+        color: "#fbbf24",
+        dotClass: "bg-amber-400",
+        points: [64, 70, 74, 79, 84],
+    },
+];
+
+export const STACK_DEMAND_PREVIEW: StackDemandPreviewRow[] = [
+    {
+        rank: 1,
+        tech: "Python",
+        category: "Language",
+        categoryClass: "bg-violet-500/15 text-violet-300 ring-violet-500/30",
+        mentions: 148,
+        companies: 62,
+        medianUsd: "$148,000",
+        medianUsdValue: 148000,
+        barPct: 100,
+    },
+    {
+        rank: 2,
+        tech: "TypeScript",
+        category: "Language",
+        categoryClass: "bg-violet-500/15 text-violet-300 ring-violet-500/30",
+        mentions: 132,
+        companies: 58,
+        medianUsd: "$142,000",
+        medianUsdValue: 142000,
+        barPct: 89,
+    },
+    {
+        rank: 3,
+        tech: "PostgreSQL",
+        category: "Database",
+        categoryClass: "bg-sky-500/15 text-sky-300 ring-sky-500/30",
+        mentions: 109,
+        companies: 51,
+        medianUsd: "$150,000",
+        medianUsdValue: 150000,
+        barPct: 74,
+    },
+    {
+        rank: 4,
+        tech: "Kubernetes",
+        category: "DevOps",
+        categoryClass: "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
+        mentions: 84,
+        companies: 41,
+        medianUsd: "$162,000",
+        medianUsdValue: 162000,
+        barPct: 57,
+    },
+    {
+        rank: 5,
+        tech: "Apache Kafka",
+        category: "Broker",
+        categoryClass: "bg-amber-500/15 text-amber-300 ring-amber-500/30",
+        mentions: 53,
+        companies: 27,
+        medianUsd: "$168,000",
+        medianUsdValue: 168000,
+        barPct: 36,
+    },
+    {
+        rank: 6,
+        tech: "Go",
+        category: "Language",
+        categoryClass: "bg-violet-500/15 text-violet-300 ring-violet-500/30",
+        mentions: 49,
+        companies: 24,
+        medianUsd: "$158,000",
+        medianUsdValue: 158000,
+        barPct: 33,
     },
 ];
 
@@ -353,16 +554,101 @@ export const FUNNEL_STAGES_PREVIEW: FunnelStagePreview[] = [
     },
 ];
 
+export const PERSONAL_WINDOW_SNAPSHOTS: Record<PersonalWindowOption, PersonalWindowSnapshot> = {
+    "7d": {
+        label: "Last 7d",
+        tracked: 6,
+        responseRate: "50.0%",
+        interviewRate: "25.0%",
+        offers: 0,
+        rejected: 1,
+        withdrawn: 0,
+        funnel: [
+            { ...FUNNEL_STAGES_PREVIEW[0], count: 6, widthPct: 100 },
+            { ...FUNNEL_STAGES_PREVIEW[1], count: 4, conversionPct: "66.7%", widthPct: 67 },
+            { ...FUNNEL_STAGES_PREVIEW[2], count: 2, conversionPct: "50.0%", widthPct: 33 },
+            { ...FUNNEL_STAGES_PREVIEW[3], count: 1, conversionPct: "50.0%", widthPct: 17 },
+            { ...FUNNEL_STAGES_PREVIEW[4], count: 0, conversionPct: "0%", widthPct: 0 },
+        ],
+    },
+    "30d": {
+        label: "Last 30d",
+        tracked: 18,
+        responseRate: "50.0%",
+        interviewRate: "25.0%",
+        offers: 1,
+        rejected: 2,
+        withdrawn: 1,
+        funnel: FUNNEL_STAGES_PREVIEW,
+    },
+    "90d": {
+        label: "Last 90d",
+        tracked: 42,
+        responseRate: "46.4%",
+        interviewRate: "21.4%",
+        offers: 2,
+        rejected: 7,
+        withdrawn: 3,
+        funnel: [
+            { ...FUNNEL_STAGES_PREVIEW[0], count: 42, widthPct: 100 },
+            { ...FUNNEL_STAGES_PREVIEW[1], count: 28, conversionPct: "66.7%", widthPct: 67 },
+            { ...FUNNEL_STAGES_PREVIEW[2], count: 13, conversionPct: "46.4%", widthPct: 31 },
+            { ...FUNNEL_STAGES_PREVIEW[3], count: 6, conversionPct: "46.2%", widthPct: 14 },
+            { ...FUNNEL_STAGES_PREVIEW[4], count: 2, conversionPct: "33.3%", widthPct: 6 },
+        ],
+    },
+};
+
+export const CHANNEL_PERFORMANCE_PREVIEW: ChannelPerformancePreviewRow[] = [
+    { source: "Ashby", tracked: 7, applied: 5, responsePct: "60.0%", interviewPct: "40.0%" },
+    { source: "Greenhouse", tracked: 6, applied: 4, responsePct: "50.0%", interviewPct: "25.0%" },
+    { source: "Lever", tracked: 5, applied: 3, responsePct: "33.3%", interviewPct: "0.0%" },
+];
+
 export const SKILL_GAP_BARS_PREVIEW: SkillGapBar[] = [
-    { skill: "Kubernetes", mentions: 14 },
-    { skill: "gRPC", mentions: 11 },
-    { skill: "Go", mentions: 9 },
-    { skill: "ClickHouse", mentions: 6 },
+    { skill: "Kubernetes", mentions: 14, sharePct: 47 },
+    { skill: "gRPC", mentions: 11, sharePct: 37 },
+    { skill: "Go", mentions: 9, sharePct: 30 },
+    { skill: "ClickHouse", mentions: 6, sharePct: 20 },
+];
+
+export const MATCHED_STRENGTHS_PREVIEW: SkillGapBar[] = [
+    { skill: "Python", mentions: 28, sharePct: 93 },
+    { skill: "PostgreSQL", mentions: 24, sharePct: 80 },
+    { skill: "Apache Kafka", mentions: 19, sharePct: 63 },
+    { skill: "Docker", mentions: 17, sharePct: 57 },
 ];
 
 export const PIPELINE_WORKERS_PREVIEW: PipelineWorkerPreview[] = [
     { name: "enrichment-worker", processed: 418, heartbeat: "12s ago" },
     { name: "matcher-worker", processed: 392, heartbeat: "9s ago" },
+];
+
+export const RESUME_PROFILES_PREVIEW: ResumeProfilePreview[] = [
+    {
+        id: "res-1",
+        label: "Senior Backend — Python & Distributed",
+        active: true,
+        alertThreshold: 85,
+        targetWorkModes: ["remote"],
+        targetRegions: ["Global Remote", "Brazil / LATAM"],
+        targetSeniority: ["Senior", "Staff"],
+        targetContracts: ["B2B", "PJ"],
+        extractedSkills: ["Python", "Django", "FastAPI", "Kafka", "PostgreSQL", "pgvector", "GCP"],
+        updatedAt: "2h ago",
+    },
+    {
+        id: "res-2",
+        label: "Fullstack Engineer — Python + React",
+        active: true,
+        alertThreshold: 80,
+        targetWorkModes: ["remote", "hybrid"],
+        targetRegions: ["Brazil / LATAM"],
+        targetSeniority: ["Senior"],
+        targetContracts: ["PJ", "CLT"],
+        extractedSkills: ["TypeScript", "React", "Python", "PostgreSQL", "Docker", "Tailwind CSS"],
+        updatedAt: "3d ago",
+    },
 ];
 
 const NEXT_PRIORITY: Record<KanbanPriority, KanbanPriority> = {
@@ -404,11 +690,11 @@ export function filterRadarPreviewRoles(
         if (hiddenIds.has(role.id)) {
             return false;
         }
+        if (filter === "remote") {
+            return role.workMode === "remote";
+        }
         if (filter === "high_fit") {
             return role.fitScore >= 85;
-        }
-        if (filter === "global") {
-            return role.region === "Global Remote";
         }
         if (filter === "unapplied") {
             return !role.tracked;
