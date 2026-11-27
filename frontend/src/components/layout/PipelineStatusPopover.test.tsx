@@ -27,6 +27,19 @@ describe("Mobile layout hardening: PipelineStatusPopover & PersonalAnalyticsPane
         expect(desktop.top).toBe(74);
     });
 
+    it("clamps profile menu popover inside mobile viewports when header wraps to the left", () => {
+        const mobileProfile = computePopoverCoords({ right: 130, bottom: 136 }, 360, 740, {
+            desktopWidth: 240,
+            mobileWidth: 240,
+            minWidth: 220,
+            offsetY: 8,
+        });
+        expect(mobileProfile.left).toBe(12);
+        expect(mobileProfile.width).toBe(240);
+        expect(mobileProfile.top).toBe(144);
+        expect(mobileProfile.left + mobileProfile.width).toBeLessThanOrEqual(360 - 12);
+    });
+
     it("renders PersonalAnalyticsPanel resume selector with mobile-safe flex truncation classes", () => {
         const html = renderToStaticMarkup(<PersonalAnalyticsPanel />);
         expect(html).toContain('id="personal-analytics-resume"');
