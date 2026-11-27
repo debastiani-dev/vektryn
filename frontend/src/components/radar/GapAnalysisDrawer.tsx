@@ -14,8 +14,7 @@ import {
     X,
     XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import type { CopilotTone, MatchScore } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
@@ -36,6 +35,7 @@ import {
     workModeBadgeStyle,
 } from "../../utils/format";
 import { splitLegacySummaryParagraphs } from "../../utils/fitSummary";
+import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
 import { CopilotPanel } from "./CopilotPanel";
 
@@ -406,20 +406,13 @@ function GapAnalysisDrawerContent({
     const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
     const alertTooltip = `Meets or exceeds your ${effectiveMinAlertScore}% alert threshold for this resume profile.`;
 
-    const drawerContent = (
-        <div className="fixed inset-0 z-50 flex justify-end overflow-hidden">
-            <button
-                type="button"
-                aria-label="Close drawer"
-                onClick={onClose}
-                className="fixed inset-0 cursor-default bg-black/70 backdrop-blur-xs"
-            />
-            <dialog
-                open
-                aria-modal="true"
-                aria-labelledby="gap-drawer-title"
-                className="animate-drawer-in relative inset-auto z-10 m-0 flex h-dvh max-h-none w-full max-w-[min(48rem,100vw)] min-w-0 flex-col overflow-x-hidden border-0 border-zinc-800 bg-zinc-950 p-0 text-zinc-100 shadow-2xl sm:h-full sm:border-l"
-            >
+    return (
+        <SlideOverDrawer
+            labelledBy="gap-drawer-title"
+            closeLabel="Close drawer"
+            desktopMaxWidthPx={768}
+            onClose={onClose}
+        >
                 <div className="flex items-start justify-between gap-3 border-b border-zinc-800/90 bg-zinc-950/90 px-4 py-3.5 sm:gap-4 sm:px-8 sm:py-6">
                     <div className="min-w-0 flex-1 space-y-2 sm:space-y-2.5">
                         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -570,7 +563,7 @@ function GapAnalysisDrawerContent({
                     </button>
                 </div>
 
-                <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
+                <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
                     {activeTab === "copilot" ? (
                         <CopilotPanel
                             key={match.uuid}
@@ -604,13 +597,8 @@ function GapAnalysisDrawerContent({
                     saved={saved}
                     onSaveLead={() => onSaveLead(match)}
                 />
-            </dialog>
-        </div>
+        </SlideOverDrawer>
     );
-
-    return typeof document === "undefined"
-        ? drawerContent
-        : createPortal(drawerContent, document.body);
 }
 
 export function GapAnalysisDrawer({
@@ -624,22 +612,6 @@ export function GapAnalysisDrawer({
     onClose,
     onSaveLead,
 }: Readonly<GapAnalysisDrawerProps>) {
-    useEffect(() => {
-        if (!match) return;
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = "hidden";
-        function handleKeyDown(event: KeyboardEvent) {
-            if (event.key === "Escape") {
-                onClose();
-            }
-        }
-        window.addEventListener("keydown", handleKeyDown);
-        return () => {
-            document.body.style.overflow = previousOverflow;
-            window.removeEventListener("keydown", handleKeyDown);
-        };
-    }, [match, onClose]);
-
     if (!match) {
         return null;
     }
