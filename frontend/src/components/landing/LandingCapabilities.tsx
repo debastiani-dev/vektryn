@@ -159,7 +159,7 @@ export function LandingCapabilities() {
                                 <div key={step.label} className="flex items-center gap-2">
                                     <span className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs font-medium text-zinc-200">
                                         <span className={`h-1.5 w-1.5 rounded-full ${step.dot}`} />
-                                        {step.label}
+                                        <span>{step.label}</span>
                                     </span>
                                     {index < PIPELINE_STEPS.length - 1 && (
                                         <ArrowRight

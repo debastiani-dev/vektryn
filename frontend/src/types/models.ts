@@ -156,6 +156,12 @@ export interface StackTrendDaily {
     median_annual_usd: string | null;
 }
 
+export interface StackTrendSeriesResponse {
+    dates: string[];
+    tags: string[];
+    results: StackTrendDaily[];
+}
+
 export interface LiveMatchAlert {
     event_id: string;
     notification_uuid?: string | null;

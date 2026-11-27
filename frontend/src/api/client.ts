@@ -35,6 +35,7 @@ import type {
     SavedFilterQueryParams,
     SeniorityLevel,
     StackTrendDaily,
+    StackTrendSeriesResponse,
     StaffManagedUser,
     StaffUserCreateInput,
     StaffUserUpdateInput,
@@ -493,6 +494,9 @@ export const vektrynApi = {
 
     listTrends: (params = "") =>
         apiFetch<PaginatedResponse<StackTrendDaily>>(`/api/v1/analytics/trends/${params}`),
+
+    getTrendSeries: (params = "") =>
+        apiFetch<StackTrendSeriesResponse>(`/api/v1/analytics/trends/series/${params}`),
 
     getSystemStatus: () => apiFetch<PipelineStatusResponse>("/api/v1/system/status/"),
 

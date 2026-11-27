@@ -119,7 +119,7 @@ function RadarPreviewCard({
                             {role.alertTriggered && (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-violet-500/15 px-2 py-0.5 text-[11px] font-semibold text-violet-300 ring-1 ring-violet-500/35">
                                     <Bell className="h-3 w-3" aria-hidden="true" />
-                                    Alert
+                                    <span>Alert</span>
                                 </span>
                             )}
                             <span className="rounded-lg bg-zinc-800/75 px-2 py-0.5 font-mono text-[11px] tabular-nums text-zinc-300">
@@ -426,7 +426,7 @@ export function CopilotPreviewPanel() {
                         <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/55 p-5 ring-1 ring-inset ring-white/[0.03]">
                             <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-violet-300">
                                 <Sparkles className="h-4 w-4" aria-hidden="true" />
-                                Fit Summary ({GAP_ANALYSIS_PREVIEW.scoringModel})
+                                <span>Fit Summary ({GAP_ANALYSIS_PREVIEW.scoringModel})</span>
                             </div>
                             <p className="text-sm font-medium leading-relaxed text-zinc-100">
                                 {GAP_ANALYSIS_PREVIEW.summary}
@@ -755,7 +755,7 @@ export function AnalyticsPreviewPanel() {
                             </div>
                             <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/12 px-2 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/25">
                                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                                Alive
+                                <span>Alive</span>
                             </span>
                         </div>
                     ))}
