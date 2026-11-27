@@ -175,7 +175,7 @@ export const GAP_ANALYSIS_PREVIEW = {
     salary: "$145k – $175k",
     fitScore: 92,
     vectorPercent: 86,
-    scoringModel: "gemini-2.5-flash",
+    scoringModel: "gemini-4-hydrogen",
     summary:
         "Strong alignment across Python/Django APIs, Kafka event streaming, and PostgreSQL vector/relational indexing.",
     highlights: [

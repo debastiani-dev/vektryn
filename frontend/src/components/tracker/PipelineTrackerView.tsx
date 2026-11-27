@@ -758,10 +758,14 @@ function PipelineSkeleton() {
 
 interface PipelineTrackerViewProps {
     defaultCopilotTone?: CopilotTone;
+    hasGeminiApiKey?: boolean;
+    onOpenAccountSettings?: () => void;
 }
 
 export function PipelineTrackerView({
     defaultCopilotTone,
+    hasGeminiApiKey = true,
+    onOpenAccountSettings,
 }: Readonly<PipelineTrackerViewProps> = {}) {
     const [leads, setLeads] = useState<ApplicationLead[]>([]);
     const [matchesByJobId, setMatchesByJobId] = useState<Record<string, MatchScore>>({});
@@ -1190,6 +1194,8 @@ export function PipelineTrackerView({
             <GapAnalysisDrawer
                 match={selectedGapMatch}
                 defaultCopilotTone={defaultCopilotTone}
+                hasGeminiApiKey={hasGeminiApiKey}
+                onOpenAccountSettings={onOpenAccountSettings}
                 saving={false}
                 saved
                 onClose={() => setSelectedGapMatch(null)}

@@ -20,11 +20,14 @@ from stream_edge.telemetry import (
     flush_sentry,
 )
 from vektryn_contracts import (
+    ATSSource,
     JobEnrichedEvent,
     JobRawEvent,
     KafkaTopic,
     job_partition_key,
 )
+
+DAILY_CAP_ALERT_THROTTLE_SECONDS = 60 * 60 * 24
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,6 +55,37 @@ async def process_raw_message(
         )
         return
 
+    consumed_daily_quota = False
+    is_automated = raw_event.ats_source != ATSSource.MANUAL
+    daily_cap = max(0, int(settings.enrichment_daily_cap))
+    if is_automated and daily_cap > 0:
+        allowed, current_count = await redis_client.try_consume_enrichment_daily_quota(
+            daily_cap=daily_cap
+        )
+        if not allowed:
+            await redis_client.release_content_hash(raw_event.content_hash)
+            logger.warning(
+                "Enrichment daily cap reached (%d/%d); skipping automated job %s:%s for tomorrow's run",
+                current_count,
+                daily_cap,
+                raw_event.ats_source.value,
+                raw_event.external_id,
+            )
+            await asyncio.to_thread(
+                persist_pipeline_error_notifications,
+                source="enrichment-worker",
+                error_type="EnrichmentDailyCapReached",
+                error_message=(
+                    f"Automated enrichment daily cap ({daily_cap} jobs/day) was reached. "
+                    "Excess automated postings were skipped (dedup locks released for next run). "
+                    "Manual imports remain unaffected."
+                ),
+                extra_payload={"daily_cap": daily_cap},
+                throttle_seconds=DAILY_CAP_ALERT_THROTTLE_SECONDS,
+            )
+            return
+        consumed_daily_quota = True
+
     try:
         metadata = await gemini.extract_job_metadata(
             title=raw_event.title,
@@ -66,8 +100,10 @@ async def process_raw_message(
             description_clean=raw_event.description_clean,
         )
     except Exception:
-        # Release lock so transient failures can be retried/replayed cleanly
+        # Release locks so transient failures can be retried/replayed cleanly
         await redis_client.release_content_hash(raw_event.content_hash)
+        if consumed_daily_quota:
+            await redis_client.release_enrichment_daily_quota()
         raise
 
     enriched = JobEnrichedEvent(

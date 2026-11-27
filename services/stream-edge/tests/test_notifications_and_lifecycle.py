@@ -177,8 +177,9 @@ def test_matcher_commits_before_publishing_alerts(monkeypatch) -> None:
 
     matcher._upsert_job_and_score_sync(
         enriched=enriched,
-        gemini=MagicMock(),
+        scoring_manager=MagicMock(),
         producer=producer,
+        byok_encryption_key="",
     )
     assert call_order == ["commit", "publish", "flush"]
 

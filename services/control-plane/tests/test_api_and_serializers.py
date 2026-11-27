@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from cryptography.fernet import Fernet
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
@@ -17,6 +18,7 @@ from rest_framework.test import APIClient, APIRequestFactory
 
 from apps.analytics.models.analytics import CollectorRunLog, StackTrendDaily
 from apps.analytics.services import collector_trigger, system_status
+from apps.base.models.user_profile import get_or_create_user_profile
 from apps.jobs.models.jobs import JobPosting
 from apps.jobs.services import hybrid_search, manual_import
 from apps.jobs.services.manual_import import (
@@ -33,6 +35,7 @@ from apps.matching.serializers.matching import MatchScoreSerializer
 from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.serializers.resumes import ResumeProfileSerializer
 from apps.resumes.services import rescore_publisher
+from vektryn_contracts import encrypt_api_key
 from apps.resumes.services.rescore_publisher import (
     RescoreBrokerError,
     RescoreCooldownError,
@@ -641,6 +644,30 @@ def test_resume_rescore_endpoint_validation_cooldown_broker_error_and_idor():
         f"/api/v1/resumes/{unembedded_resume.uuid}/rescore/", {}
     )
     assert unembedded_resp.status_code == 400
+
+    # Guard 2b: keyless user on embedded active profile -> 400
+    keyless_resp = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
+    assert keyless_resp.status_code == 400
+
+    # Configure a BYOK key for owner so remaining rescore guards can be exercised
+    owner_profile = get_or_create_user_profile(owner)
+    owner_profile.gemini_api_key_encrypted = "fernet-token-placeholder"
+    owner_profile.gemini_api_key_last4 = "1234"
+    owner_profile.save(
+        update_fields=["gemini_api_key_encrypted", "gemini_api_key_last4"]
+    )
+
+    # Guard 2b: keyless user on embedded active profile -> 400
+    keyless_resp = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
+    assert keyless_resp.status_code == 400
+
+    # Configure a BYOK key for owner so remaining rescore guards can be exercised
+    owner_profile = get_or_create_user_profile(owner)
+    owner_profile.gemini_api_key_encrypted = "fernet-token-placeholder"
+    owner_profile.gemini_api_key_last4 = "1234"
+    owner_profile.save(
+        update_fields=["gemini_api_key_encrypted", "gemini_api_key_last4"]
+    )
 
     # Guard 3: Redis cooldown active -> 429 + Retry-After
     with patch(
@@ -1507,20 +1534,30 @@ def test_hybrid_search_rrf_on_jobs_and_matches_with_filters_and_ordering(setting
 
 @pytest.mark.django_db
 def test_hybrid_search_embedding_cache_short_query_and_fallback(settings):
-    settings.GEMINI_API_KEY = "test-live-key"
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    settings.BYOK_ENCRYPTION_KEY = fernet_key
+    settings.REDIS_URL = ""
+    user = User.objects.create_user(username="hybrid_byok", password="pw")
+    profile = get_or_create_user_profile(user)
+    profile.gemini_api_key_encrypted = encrypt_api_key(
+        "AQ.Ab8RN6-ValidHybridTestKey12345678", fernet_key
+    )
+    profile.gemini_api_key_last4 = "5678"
+    profile.save(update_fields=["gemini_api_key_encrypted", "gemini_api_key_last4"])
 
     # Single-character query skips Gemini completely
-    with patch("apps.jobs.services.hybrid_search.genai.Client") as mock_client_cls:
-        assert hybrid_search.embed_search_query("a") is None
+    with patch("apps.base.services.byok.genai.Client") as mock_client_cls:
+        assert hybrid_search.embed_search_query("a", user=user) is None
         mock_client_cls.assert_not_called()
 
-    # Redis cache stores embedding with 5-minute (300s) TTL and avoids repeat Gemini calls
+    # Redis cache stores per-user embedding with 5-minute (300s) TTL and avoids repeat Gemini calls
     fake_store: dict[str, str] = {}
     fake_redis = MagicMock()
     fake_redis.get.side_effect = lambda key: fake_store.get(key)
 
     def _fake_set(key: str, val: str, ex: int | None = None) -> None:
         assert ex == hybrid_search.EMBEDDING_CACHE_TTL_SECONDS
+        assert key.startswith(f"vektryn:search_embed:v2:{user.pk}:")
         fake_store[key] = val
 
     fake_redis.set.side_effect = _fake_set
@@ -1538,12 +1575,10 @@ def test_hybrid_search_embedding_cache_short_query_and_fallback(settings):
             "apps.jobs.services.hybrid_search._get_redis_client",
             return_value=fake_redis,
         ),
-        patch(
-            "apps.jobs.services.hybrid_search.genai.Client", return_value=mock_client
-        ),
+        patch("apps.base.services.byok.genai.Client", return_value=mock_client),
     ):
-        first = hybrid_search.embed_search_query("Distributed   Python")
-        second = hybrid_search.embed_search_query("distributed python")
+        first = hybrid_search.embed_search_query("Distributed   Python", user=user)
+        second = hybrid_search.embed_search_query("distributed python", user=user)
 
     assert first == expected_vec
     assert second == expected_vec
@@ -1553,11 +1588,9 @@ def test_hybrid_search_embedding_cache_short_query_and_fallback(settings):
     mock_client.models.embed_content.side_effect = RuntimeError("timeout")
     with (
         patch("apps.jobs.services.hybrid_search._get_redis_client", return_value=None),
-        patch(
-            "apps.jobs.services.hybrid_search.genai.Client", return_value=mock_client
-        ),
+        patch("apps.base.services.byok.genai.Client", return_value=mock_client),
     ):
-        assert hybrid_search.embed_search_query("kafka streams") is None
+        assert hybrid_search.embed_search_query("kafka streams", user=user) is None
 
 
 @pytest.mark.django_db

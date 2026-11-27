@@ -5,6 +5,12 @@ from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
+from apps.base.services.byok import (
+    BYOKInvalidKeyError,
+    BYOKMissingError,
+    BYOKQuotaExhaustedError,
+    BYOKStorageUnavailableError,
+)
 from apps.jobs.models.jobs import JobPosting
 from apps.jobs.services.hybrid_search import (
     annotate_rrf_score,
@@ -100,7 +106,7 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
             base_jobs = JobPosting.objects.filter(
                 uuid__in=structured_qs.values("job_posting_id")
             )
-            result = execute_hybrid_search(base_jobs, search_query)
+            result = execute_hybrid_search(base_jobs, search_query, user=request.user)
             search_mode = result.search_mode
             matched_ids = list(result.rrf_scores.keys())
             summary_qs = structured_qs.filter(job_posting_id__in=matched_ids)
@@ -168,10 +174,35 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
                 tone=data.get("tone"),
                 guidance=data.get("guidance", ""),
             )
+        except BYOKMissingError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except BYOKInvalidKeyError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        except BYOKQuotaExhaustedError as exc:
+            return Response(
+                {
+                    "detail": str(exc),
+                    "code": exc.code,
+                    "payment_required": exc.payment_required,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        except BYOKStorageUnavailableError as exc:
+            return Response(
+                {"detail": str(exc), "code": exc.code},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         except CopilotRateLimitError as exc:
             return Response(
                 {
                     "detail": str(exc),
+                    "code": "copilot_rate_limited",
                     "retry_after_seconds": exc.retry_after_seconds,
                 },
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -179,7 +210,7 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
             )
         except CopilotUnavailableError as exc:
             return Response(
-                {"detail": str(exc)},
+                {"detail": str(exc), "code": "copilot_unavailable"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 

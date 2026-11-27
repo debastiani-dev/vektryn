@@ -29,6 +29,7 @@ export function AuthenticatedWorkspace({
     onLogout,
 }: Readonly<AuthenticatedWorkspaceProps>) {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
+    const [settingsModalOpen, setSettingsModalOpen] = useState(false);
     const [pendingRadarSearch, setPendingRadarSearch] = useState("");
     const [activeNotificationMatch, setActiveNotificationMatch] = useState<MatchScore | null>(null);
     const [openingMatchId, setOpeningMatchId] = useState<string | null>(null);
@@ -137,8 +138,24 @@ export function AuthenticatedWorkspace({
         setPendingRadarSearch("");
     }, []);
 
+    const handleOpenSettingsFromNotification = useCallback(
+        (item: NotificationItem) => {
+            setSettingsModalOpen(true);
+            if (!item.is_read) {
+                void markRead(item.uuid);
+            }
+        },
+        [markRead],
+    );
+
+    const handleOpenAccountSettings = useCallback(() => {
+        setActiveNotificationMatch(null);
+        setSettingsModalOpen(true);
+    }, []);
+
     const activeMatchJobId = activeNotificationMatch?.job_posting.uuid ?? "";
     const defaultCopilotTone = user.profile?.default_copilot_tone ?? "balanced";
+    const hasGeminiApiKey = Boolean(user.profile?.has_gemini_api_key);
 
     return (
         <>
@@ -146,6 +163,9 @@ export function AuthenticatedWorkspace({
                 activeTab={activeTab}
                 onSelectTab={setActiveTab}
                 user={user}
+                settingsModalOpen={settingsModalOpen}
+                onOpenSettings={() => setSettingsModalOpen(true)}
+                onCloseSettings={() => setSettingsModalOpen(false)}
                 onUserProfileSaved={onUserProfileSaved}
                 onAccountDeactivated={onAccountDeactivated}
                 onLogout={() => void onLogout()}
@@ -173,6 +193,7 @@ export function AuthenticatedWorkspace({
                     onSaveToTracker: handleSaveFromNotification,
                     onOpenTracker: handleOpenTrackerFromNotification,
                     onOpenRadar: handleOpenRadarFromNotification,
+                    onOpenAccountSettings: handleOpenSettingsFromNotification,
                 }}
             >
                 {activeTab === "radar" && (
@@ -180,20 +201,33 @@ export function AuthenticatedWorkspace({
                         initialSearch={pendingRadarSearch}
                         onConsumeInitialSearch={handleConsumeRadarSearch}
                         defaultCopilotTone={defaultCopilotTone}
+                        hasGeminiApiKey={hasGeminiApiKey}
+                        onOpenAccountSettings={handleOpenAccountSettings}
                     />
                 )}
                 {activeTab === "tracker" && (
-                    <PipelineTrackerView defaultCopilotTone={defaultCopilotTone} />
+                    <PipelineTrackerView
+                        defaultCopilotTone={defaultCopilotTone}
+                        hasGeminiApiKey={hasGeminiApiKey}
+                        onOpenAccountSettings={handleOpenAccountSettings}
+                    />
                 )}
                 {activeTab === "analytics" && (
                     <StackTrendsView onSearchSkillInRadar={handleSearchSkillInRadar} />
                 )}
-                {activeTab === "resumes" && <ResumesView />}
+                {activeTab === "resumes" && (
+                    <ResumesView
+                        hasGeminiApiKey={hasGeminiApiKey}
+                        onOpenAccountSettings={handleOpenAccountSettings}
+                    />
+                )}
             </AppShell>
 
             <GapAnalysisDrawer
                 match={activeNotificationMatch}
                 defaultCopilotTone={defaultCopilotTone}
+                hasGeminiApiKey={hasGeminiApiKey}
+                onOpenAccountSettings={handleOpenAccountSettings}
                 saving={activeMatchJobId !== "" && savingJobId === activeMatchJobId}
                 saved={activeMatchJobId !== "" && savedJobIds.has(activeMatchJobId)}
                 onClose={() => setActiveNotificationMatch(null)}

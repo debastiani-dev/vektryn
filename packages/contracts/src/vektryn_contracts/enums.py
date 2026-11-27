@@ -101,3 +101,5 @@ class NotificationKind(StrEnum):
     MANUAL_IMPORT_READY = "manual_import_ready"
     COLLECTOR_SYNC_COMPLETED = "collector_sync_completed"
     LEAD_FOLLOWUP_DUE = "lead_followup_due"
+    AI_QUOTA_EXHAUSTED = "ai_quota_exhausted"
+    AI_KEY_INVALID = "ai_key_invalid"

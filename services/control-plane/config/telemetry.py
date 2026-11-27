@@ -14,6 +14,8 @@ import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.types import Event, Hint
 
+from vektryn_contracts.redaction import redact_secrets
+
 logger = logging.getLogger(__name__)
 _SENTRY_CONFIGURED = False
 
@@ -36,6 +38,7 @@ _SENSITIVE_HEADERS = frozenset(
         "proxy-authorization",
         "x-csrftoken",
         "x-ingest-api-key",
+        "x-goog-api-key",
     }
 )
 _SENSITIVE_QUERY_KEYS = frozenset(
@@ -61,6 +64,10 @@ _SENSITIVE_BODY_KEYS = frozenset(
         "stream_token",
         "secret_key",
         "api_key",
+        "gemini_api_key",
+        "gemini_api_key_encrypted",
+        "byok_encryption_key",
+        "x-goog-api-key",
         "csrfmiddlewaretoken",
         "csrftoken",
         "authorization",
@@ -162,14 +169,14 @@ def _is_expected_client_error(event: Event, hint: Hint) -> bool:
 def _scrub_string(value: str, *, depth: int) -> str:
     stripped = value.strip()
     if not (stripped.startswith("{") and stripped.endswith("}")):
-        return _scrub_url(value)
+        return redact_secrets(_scrub_url(value))
     try:
         parsed = json.loads(stripped)
     except ValueError:
-        return _scrub_url(value)
+        return redact_secrets(_scrub_url(value))
     if isinstance(parsed, dict):
         return json.dumps(_scrub_value(parsed, depth=depth + 1))
-    return _scrub_url(value)
+    return redact_secrets(_scrub_url(value))
 
 
 def _scrub_dict(mapping: dict[Any, Any], *, depth: int) -> dict[Any, Any]:
@@ -240,19 +247,47 @@ def _scrub_breadcrumbs(event: Event) -> None:
     for crumb in values:
         if not isinstance(crumb, dict):
             continue
+        if isinstance(crumb.get("message"), str):
+            crumb["message"] = _scrub_string(crumb["message"], depth=0)
         data = crumb.get("data")
         if isinstance(data, dict):
             if isinstance(data.get("url"), str):
-                data["url"] = _scrub_url(data["url"])
+                data["url"] = redact_secrets(_scrub_url(data["url"]))
             if isinstance(data.get("query_string"), str):
-                data["query_string"] = _scrub_query_string(data["query_string"])
+                data["query_string"] = redact_secrets(
+                    _scrub_query_string(data["query_string"])
+                )
             crumb["data"] = _scrub_value(data)
+
+
+def _scrub_exception_values(event: Event) -> None:
+    exception = event.get("exception")
+    values = exception.get("values") if isinstance(exception, dict) else None
+    if not isinstance(values, list):
+        return
+    for entry in values:
+        if isinstance(entry, dict) and isinstance(entry.get("value"), str):
+            entry["value"] = _scrub_string(entry["value"], depth=0)
+
+
+def _scrub_logentry(event: Event) -> None:
+    logentry = event.get("logentry")
+    if not isinstance(logentry, dict):
+        return
+    for key in ("message", "formatted"):
+        if isinstance(logentry.get(key), str):
+            logentry[key] = _scrub_string(logentry[key], depth=0)
+    if "params" in logentry:
+        logentry["params"] = _scrub_value(logentry["params"])
 
 
 def _scrub_event_payload(event: Event) -> Event:
     request = event.get("request")
     if isinstance(request, dict):
         _scrub_request(request)
+
+    if isinstance(event.get("message"), str):
+        event["message"] = _scrub_string(event["message"], depth=0)
 
     if isinstance(event.get("extra"), dict):
         event["extra"] = _scrub_value(event["extra"])
@@ -265,6 +300,8 @@ def _scrub_event_payload(event: Event) -> Event:
         user.pop("email", None)
         user.pop("ip_address", None)
 
+    _scrub_exception_values(event)
+    _scrub_logentry(event)
     _scrub_breadcrumbs(event)
     return event
 

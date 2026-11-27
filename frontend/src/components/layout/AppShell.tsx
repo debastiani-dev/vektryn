@@ -24,6 +24,9 @@ interface AppShellProps {
     activeTab: ActiveTab;
     onSelectTab: (tab: ActiveTab) => void;
     user: CurrentUser | null;
+    settingsModalOpen: boolean;
+    onOpenSettings: () => void;
+    onCloseSettings: () => void;
     onUserProfileSaved: (profile: UserProfileDetail) => void;
     onAccountDeactivated: () => void;
     onLogout: () => void;
@@ -206,6 +209,9 @@ export function AppShell({
     activeTab,
     onSelectTab,
     user,
+    settingsModalOpen,
+    onOpenSettings,
+    onCloseSettings,
     onUserProfileSaved,
     onAccountDeactivated,
     onLogout,
@@ -215,7 +221,6 @@ export function AppShell({
     notificationCenter,
     children,
 }: Readonly<AppShellProps>) {
-    const [settingsModalOpen, setSettingsModalOpen] = useState(false);
     const [userMgmtModalOpen, setUserMgmtModalOpen] = useState(false);
 
     const streamTooltip = sseConnected
@@ -297,7 +302,7 @@ export function AppShell({
                         {user && (
                             <UserAccountMenu
                                 user={user}
-                                onOpenSettings={() => setSettingsModalOpen(true)}
+                                onOpenSettings={onOpenSettings}
                                 onOpenUserManagement={() => setUserMgmtModalOpen(true)}
                                 onLogout={onLogout}
                             />
@@ -316,10 +321,10 @@ export function AppShell({
                 <AccountSettingsModal
                     open={settingsModalOpen}
                     user={user}
-                    onClose={() => setSettingsModalOpen(false)}
+                    onClose={onCloseSettings}
                     onProfileSaved={onUserProfileSaved}
                     onAccountDeactivated={() => {
-                        setSettingsModalOpen(false);
+                        onCloseSettings();
                         onAccountDeactivated();
                     }}
                 />

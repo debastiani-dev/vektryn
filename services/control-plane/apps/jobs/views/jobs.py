@@ -55,7 +55,9 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
         search_mode: str | None = None
 
         if search_query:
-            result = execute_hybrid_search(structured_qs, search_query)
+            result = execute_hybrid_search(
+                structured_qs, search_query, user=request.user
+            )
             search_mode = result.search_mode
             if "ordering" in request.query_params:
                 filtered_qs = structured_qs.filter(

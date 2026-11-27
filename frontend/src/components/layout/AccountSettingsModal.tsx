@@ -2,6 +2,7 @@ import {
     AlertCircle,
     AlertTriangle,
     CheckCircle2,
+    ExternalLink,
     Eye,
     EyeOff,
     Globe,
@@ -9,6 +10,8 @@ import {
     Link2,
     Loader2,
     ShieldCheck,
+    Sparkles,
+    Trash2,
     UserCog,
     X,
 } from "lucide-react";
@@ -19,8 +22,16 @@ import type {
     CopilotTone,
     CurrentUser,
     PreferredCurrency,
+    PreferredGeminiModel,
     UserProfileDetail,
+    UserProfileUpdateInput,
 } from "../../types/models";
+import {
+    findGeminiModelOption,
+    formatGeminiKeyBadge,
+    GEMINI_MODEL_OPTIONS,
+    GOOGLE_AI_STUDIO_KEY_URL,
+} from "../../utils/geminiModels";
 
 interface AccountSettingsModalProps {
     open: boolean;
@@ -150,9 +161,225 @@ function PasswordInputField({
     );
 }
 
+interface AiApiKeySectionProps {
+    hasGeminiApiKey: boolean;
+    geminiKeyLast4: string;
+    apiKeyDraft: string;
+    showApiKey: boolean;
+    preferredModel: PreferredGeminiModel;
+    allowModelFallback: boolean;
+    saving: boolean;
+    removingKey: boolean;
+    keyErrors?: string[];
+    modelErrors?: string[];
+    onApiKeyDraftChange: (value: string) => void;
+    onToggleShowApiKey: () => void;
+    onPreferredModelChange: (model: PreferredGeminiModel) => void;
+    onAllowFallbackChange: (enabled: boolean) => void;
+    onRemoveKey: () => void;
+}
+
+function AiApiKeySection({
+    hasGeminiApiKey,
+    geminiKeyLast4,
+    apiKeyDraft,
+    showApiKey,
+    preferredModel,
+    allowModelFallback,
+    saving,
+    removingKey,
+    keyErrors,
+    modelErrors,
+    onApiKeyDraftChange,
+    onToggleShowApiKey,
+    onPreferredModelChange,
+    onAllowFallbackChange,
+    onRemoveKey,
+}: Readonly<AiApiKeySectionProps>) {
+    const selectedModelMeta = findGeminiModelOption(preferredModel);
+    const hasKeyError = Boolean(keyErrors?.length);
+    const disabled = saving || removingKey;
+
+    return (
+        <div className="space-y-3.5 rounded-xl border border-violet-500/25 bg-violet-950/12 p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-medium text-zinc-200">
+                    <Sparkles className="h-3.5 w-3.5 text-violet-400" />
+                    <span>AI &amp; API Key (BYOK)</span>
+                </div>
+                <span
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[11px] font-medium ring-1 ${
+                        hasGeminiApiKey
+                            ? "bg-emerald-500/12 text-emerald-300 ring-emerald-500/30"
+                            : "bg-amber-500/12 text-amber-300 ring-amber-500/30"
+                    }`}
+                >
+                    <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                            hasGeminiApiKey ? "bg-emerald-400" : "bg-amber-400"
+                        }`}
+                    />
+                    <span>{formatGeminiKeyBadge(hasGeminiApiKey, geminiKeyLast4)}</span>
+                </span>
+            </div>
+
+            <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label
+                        htmlFor="profile-gemini-api-key"
+                        className="block text-[11px] font-medium uppercase tracking-wider text-zinc-400"
+                    >
+                        Google AI Studio API Key
+                    </label>
+                    <a
+                        href={GOOGLE_AI_STUDIO_KEY_URL}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-violet-300 transition hover:text-violet-200"
+                    >
+                        <span>Get key in Google AI Studio</span>
+                        <ExternalLink className="h-3 w-3" />
+                    </a>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                        <input
+                            id="profile-gemini-api-key"
+                            type={showApiKey ? "text" : "password"}
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={apiKeyDraft}
+                            disabled={disabled}
+                            onChange={(e) => onApiKeyDraftChange(e.target.value)}
+                            placeholder={
+                                hasGeminiApiKey
+                                    ? "Paste a new key to replace your stored key"
+                                    : "Paste your Google AI Studio API key"
+                            }
+                            aria-invalid={hasKeyError}
+                            className={`w-full rounded-lg border bg-zinc-950/90 py-2 pr-9 pl-3 font-mono text-xs text-zinc-100 placeholder:font-sans placeholder:text-zinc-600 focus:outline-none focus:ring-2 disabled:opacity-60 ${
+                                hasKeyError
+                                    ? "border-red-500/60 focus:border-red-400 focus:ring-red-500/20"
+                                    : "border-zinc-800 focus:border-violet-500 focus:ring-violet-500/25"
+                            }`}
+                        />
+                        <button
+                            type="button"
+                            onClick={onToggleShowApiKey}
+                            disabled={disabled}
+                            aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                            className="absolute inset-y-0 right-1.5 inline-flex items-center px-1.5 text-zinc-500 transition hover:text-zinc-200"
+                        >
+                            {showApiKey ? (
+                                <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                                <Eye className="h-3.5 w-3.5" />
+                            )}
+                        </button>
+                    </div>
+
+                    {hasGeminiApiKey && (
+                        <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={onRemoveKey}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-950/25 px-2.5 py-2 text-xs font-medium text-red-300 transition hover:bg-red-950/45 disabled:opacity-50"
+                        >
+                            {removingKey ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            <span>Remove Key</span>
+                        </button>
+                    )}
+                </div>
+
+                <p className="text-[11px] leading-relaxed text-zinc-400">
+                    Use Google AI Studio&apos;s <strong className="text-zinc-300">Copy key</strong>{" "}
+                    button rather than copying the truncated display in the key list. Stored
+                    encrypted at rest and never returned by the API.
+                </p>
+                <FieldErrorList errors={keyErrors} />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                    <label
+                        htmlFor="profile-preferred-gemini-model"
+                        className="block text-[11px] font-medium uppercase tracking-wider text-zinc-400"
+                    >
+                        Preferred Model
+                    </label>
+                    <select
+                        id="profile-preferred-gemini-model"
+                        value={preferredModel}
+                        disabled={disabled}
+                        onChange={(e) =>
+                            onPreferredModelChange(e.target.value as PreferredGeminiModel)
+                        }
+                        className="w-full rounded-lg border border-zinc-800 bg-zinc-950/90 px-3 py-2 text-xs text-zinc-100 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                    >
+                        {GEMINI_MODEL_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                                {opt.label} ({opt.tierBadge})
+                            </option>
+                        ))}
+                    </select>
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                        {selectedModelMeta.description}
+                    </p>
+                    <FieldErrorList errors={modelErrors} />
+                </div>
+
+                <div className="flex flex-col justify-center rounded-lg border border-zinc-800/80 bg-zinc-950/50 px-3 py-2.5">
+                    <div className="flex items-start gap-2.5">
+                        <input
+                            id="profile-allow-model-fallback"
+                            type="checkbox"
+                            checked={allowModelFallback}
+                            disabled={disabled}
+                            onChange={(e) => onAllowFallbackChange(e.target.checked)}
+                            className="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-violet-500 focus:ring-violet-500/40"
+                        />
+                        <div className="space-y-0.5">
+                            <label
+                                htmlFor="profile-allow-model-fallback"
+                                className="block cursor-pointer text-xs font-medium text-zinc-200"
+                            >
+                                Automatic Quota Fallback
+                            </label>
+                            <p className="text-[11px] leading-relaxed text-zinc-500">
+                                Cascade to lower-tier Gemini models when a model hits free-tier or
+                                rate limits.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 interface ProfilePreferencesTabProps {
     user: CurrentUser;
     onProfileSaved: (profile: UserProfileDetail) => void;
+}
+
+function buildProfileSaveMessage(updated: UserProfileDetail, savedNewKey: boolean): string {
+    if (!savedNewKey) {
+        return "Profile and preferences saved. Future AI Copilot drafts will use your updated identity, links, and model settings.";
+    }
+    const embedded = updated.pending_resumes_embedded ?? 0;
+    const remaining = updated.pending_resumes_remaining ?? 0;
+    if (embedded > 0 && remaining === 0) {
+        return `Gemini API key saved and embedded ${embedded} pending resume profile${embedded === 1 ? "" : "s"}.`;
+    }
+    if (embedded > 0 && remaining > 0) {
+        return `Gemini API key saved and embedded ${embedded} pending resume profile${embedded === 1 ? "" : "s"} (${remaining} remaining).`;
+    }
+    return "Gemini API key saved. AI matching, semantic search, and Copilot are ready.";
 }
 
 function ProfilePreferencesTab({
@@ -161,6 +388,7 @@ function ProfilePreferencesTab({
 }: Readonly<ProfilePreferencesTabProps>) {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [removingKey, setRemovingKey] = useState(false);
     const [displayName, setDisplayName] = useState(user.profile?.display_name ?? "");
     const [email, setEmail] = useState(user.email ?? "");
     const [timezone, setTimezone] = useState(user.profile?.timezone ?? "UTC");
@@ -173,9 +401,24 @@ function ProfilePreferencesTab({
     const [linkedinUrl, setLinkedinUrl] = useState("");
     const [githubUrl, setGithubUrl] = useState("");
     const [portfolioUrl, setPortfolioUrl] = useState("");
+    const [hasGeminiApiKey, setHasGeminiApiKey] = useState(
+        Boolean(user.profile?.has_gemini_api_key),
+    );
+    const [geminiKeyLast4, setGeminiKeyLast4] = useState(
+        user.profile?.gemini_api_key_last4 ?? "",
+    );
+    const [apiKeyDraft, setApiKeyDraft] = useState("");
+    const [showApiKey, setShowApiKey] = useState(false);
+    const [preferredGeminiModel, setPreferredGeminiModel] = useState<PreferredGeminiModel>(
+        user.profile?.preferred_gemini_model ?? "auto",
+    );
+    const [allowModelFallback, setAllowModelFallback] = useState<boolean>(
+        user.profile?.allow_model_fallback ?? true,
+    );
     const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
     const [generalError, setGeneralError] = useState<string | null>(null);
     const [savedBanner, setSavedBanner] = useState<string | null>(null);
+    const [embeddingWarning, setEmbeddingWarning] = useState<string | null>(null);
 
     useEffect(() => {
         let active = true;
@@ -191,6 +434,10 @@ function ProfilePreferencesTab({
                 setLinkedinUrl(profile.linkedin_url);
                 setGithubUrl(profile.github_url);
                 setPortfolioUrl(profile.portfolio_url);
+                setHasGeminiApiKey(profile.has_gemini_api_key);
+                setGeminiKeyLast4(profile.gemini_api_key_last4);
+                setPreferredGeminiModel(profile.preferred_gemini_model);
+                setAllowModelFallback(profile.allow_model_fallback);
             })
             .catch((err) => {
                 if (!active) return;
@@ -212,35 +459,78 @@ function ProfilePreferencesTab({
         }
     }
 
+    function applyUpdatedProfile(updated: UserProfileDetail) {
+        setDisplayName(updated.display_name);
+        setEmail(updated.email);
+        setTimezone(updated.timezone);
+        setCurrency(updated.preferred_currency);
+        setCopilotTone(updated.default_copilot_tone);
+        setLinkedinUrl(updated.linkedin_url);
+        setGithubUrl(updated.github_url);
+        setPortfolioUrl(updated.portfolio_url);
+        setHasGeminiApiKey(updated.has_gemini_api_key);
+        setGeminiKeyLast4(updated.gemini_api_key_last4);
+        setPreferredGeminiModel(updated.preferred_gemini_model);
+        setAllowModelFallback(updated.allow_model_fallback);
+        onProfileSaved(updated);
+    }
+
+    async function handleRemoveKey() {
+        setRemovingKey(true);
+        setFieldErrors({});
+        setGeneralError(null);
+        setSavedBanner(null);
+        setEmbeddingWarning(null);
+        try {
+            const updated = await vektrynApi.updateUserProfile({ gemini_api_key: "" });
+            applyUpdatedProfile(updated);
+            setApiKeyDraft("");
+            setShowApiKey(false);
+            setSavedBanner(
+                "Gemini API key removed. Stage 2 AI scoring, semantic search, and AI Copilot are paused until you add a new key.",
+            );
+        } catch (err) {
+            const detail = err instanceof ApiError ? err.detail : null;
+            setGeneralError(detail || "Unable to remove API key.");
+        } finally {
+            setRemovingKey(false);
+        }
+    }
+
     async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
         event.preventDefault();
         setSaving(true);
         setFieldErrors({});
         setGeneralError(null);
         setSavedBanner(null);
+        setEmbeddingWarning(null);
+        const trimmedKey = apiKeyDraft.trim();
+        const payload: UserProfileUpdateInput = {
+            display_name: displayName.trim(),
+            email: email.trim(),
+            timezone: timezone.trim(),
+            preferred_currency: currency,
+            default_copilot_tone: copilotTone,
+            linkedin_url: linkedinUrl.trim(),
+            github_url: githubUrl.trim(),
+            portfolio_url: portfolioUrl.trim(),
+            preferred_gemini_model: preferredGeminiModel,
+            allow_model_fallback: allowModelFallback,
+        };
+        if (trimmedKey) {
+            payload.gemini_api_key = trimmedKey;
+        }
         try {
-            const updated = await vektrynApi.updateUserProfile({
-                display_name: displayName.trim(),
-                email: email.trim(),
-                timezone: timezone.trim(),
-                preferred_currency: currency,
-                default_copilot_tone: copilotTone,
-                linkedin_url: linkedinUrl.trim(),
-                github_url: githubUrl.trim(),
-                portfolio_url: portfolioUrl.trim(),
-            });
-            setDisplayName(updated.display_name);
-            setEmail(updated.email);
-            setTimezone(updated.timezone);
-            setCurrency(updated.preferred_currency);
-            setCopilotTone(updated.default_copilot_tone);
-            setLinkedinUrl(updated.linkedin_url);
-            setGithubUrl(updated.github_url);
-            setPortfolioUrl(updated.portfolio_url);
-            onProfileSaved(updated);
-            setSavedBanner(
-                "Profile and preferences saved. Future AI Copilot drafts will use your updated identity, links, and default tone.",
-            );
+            const updated = await vektrynApi.updateUserProfile(payload);
+            applyUpdatedProfile(updated);
+            if (trimmedKey) {
+                setApiKeyDraft("");
+                setShowApiKey(false);
+            }
+            setSavedBanner(buildProfileSaveMessage(updated, Boolean(trimmedKey)));
+            if (updated.embedding_warning) {
+                setEmbeddingWarning(updated.embedding_warning);
+            }
         } catch (err) {
             if (err instanceof ApiError) {
                 if (Object.keys(err.fieldErrors).length > 0) {
@@ -274,6 +564,13 @@ function ProfilePreferencesTab({
                 </output>
             )}
 
+            {embeddingWarning && (
+                <output className="flex items-start gap-2.5 rounded-xl border border-amber-500/35 bg-amber-950/30 px-3.5 py-3 text-xs text-amber-200">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                    <span>{embeddingWarning}</span>
+                </output>
+            )}
+
             {generalError && (
                 <div
                     role="alert"
@@ -283,6 +580,24 @@ function ProfilePreferencesTab({
                     <span>{generalError}</span>
                 </div>
             )}
+
+            <AiApiKeySection
+                hasGeminiApiKey={hasGeminiApiKey}
+                geminiKeyLast4={geminiKeyLast4}
+                apiKeyDraft={apiKeyDraft}
+                showApiKey={showApiKey}
+                preferredModel={preferredGeminiModel}
+                allowModelFallback={allowModelFallback}
+                saving={saving}
+                removingKey={removingKey}
+                keyErrors={fieldErrors.gemini_api_key}
+                modelErrors={fieldErrors.preferred_gemini_model}
+                onApiKeyDraftChange={setApiKeyDraft}
+                onToggleShowApiKey={() => setShowApiKey((prev) => !prev)}
+                onPreferredModelChange={setPreferredGeminiModel}
+                onAllowFallbackChange={setAllowModelFallback}
+                onRemoveKey={() => void handleRemoveKey()}
+            />
 
             <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">

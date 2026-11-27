@@ -2408,6 +2408,7 @@ files = []
 develop = true
 
 [package.dependencies]
+cryptography = "^50.0"
 pydantic = "^2.10"
 
 [package.source]

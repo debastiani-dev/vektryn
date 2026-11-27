@@ -11,6 +11,7 @@ locals {
     "vektryn-ingest-api-key",
     "vektryn-stream-auth-secret",
     "vektryn-sentry-dsn",
+    "vektryn-byok-encryption-key",
   ])
 }
 

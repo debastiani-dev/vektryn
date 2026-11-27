@@ -5,6 +5,7 @@ from django.contrib.auth import (
     logout,
     update_session_auth_hash,
 )
+from django.db import transaction
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -27,6 +28,11 @@ from apps.base.services.auth_security import (
     invalidate_user_sessions,
     record_login_failure,
 )
+from apps.base.services.byok import (
+    BYOKStorageUnavailableError,
+    clear_user_gemini_state,
+    encrypt_user_api_key,
+)
 from apps.base.services.user_management import (
     PROFILE_MUTABLE_FIELDS,
     PrivilegedGuardError,
@@ -34,7 +40,21 @@ from apps.base.services.user_management import (
     serialize_profile_summary,
     update_self_profile,
 )
+from apps.resumes.services.resume_service import ResumeService
 from vektryn_contracts import sign_stream_token
+
+
+def _serialize_self_profile_summary(profile) -> dict[str, object]:
+    summary: dict[str, object] = dict(serialize_profile_summary(profile))
+    summary.update(
+        {
+            "has_gemini_api_key": profile.has_gemini_api_key,
+            "gemini_api_key_last4": profile.gemini_api_key_last4,
+            "preferred_gemini_model": profile.preferred_gemini_model,
+            "allow_model_fallback": bool(profile.allow_model_fallback),
+        }
+    )
+    return summary
 
 
 def _serialize_user_session(user) -> dict[str, object]:
@@ -48,7 +68,7 @@ def _serialize_user_session(user) -> dict[str, object]:
         "is_staff": bool(getattr(user, "is_staff", False)),
         "is_superuser": bool(getattr(user, "is_superuser", False)),
         "stream_token": stream_token,
-        "profile": serialize_profile_summary(profile),
+        "profile": _serialize_self_profile_summary(profile),
     }
 
 
@@ -66,6 +86,10 @@ def _serialize_self_profile(user, profile) -> dict[str, object]:
         "linkedin_url": profile.linkedin_url,
         "github_url": profile.github_url,
         "portfolio_url": profile.portfolio_url,
+        "has_gemini_api_key": profile.has_gemini_api_key,
+        "gemini_api_key_last4": profile.gemini_api_key_last4,
+        "preferred_gemini_model": profile.preferred_gemini_model,
+        "allow_model_fallback": bool(profile.allow_model_fallback),
         "created_at": profile.created_at.isoformat(),
         "modified_at": profile.modified_at.isoformat(),
     }
@@ -160,6 +184,37 @@ def change_password_view(request: Request) -> Response:
     )
 
 
+def _prepare_byok_key_update(
+    validated: dict[str, object],
+) -> tuple[bool, bool, tuple[str, str] | None]:
+    """Return (key_updated, has_new_key, (encrypted, last4) | None)."""
+    if "gemini_api_key" not in validated:
+        return False, False, None
+    plaintext = str(validated.get("gemini_api_key") or "")
+    if not plaintext:
+        return True, False, ("", "")
+    return True, True, encrypt_user_api_key(plaintext)
+
+
+def _apply_byok_profile_fields(
+    profile,
+    validated: dict[str, object],
+    key_pair: tuple[str, str] | None,
+) -> None:
+    update_fields: list[str] = []
+    if key_pair is not None:
+        profile.gemini_api_key_encrypted, profile.gemini_api_key_last4 = key_pair
+        update_fields.extend(["gemini_api_key_encrypted", "gemini_api_key_last4"])
+    if "preferred_gemini_model" in validated:
+        profile.preferred_gemini_model = validated["preferred_gemini_model"]
+        update_fields.append("preferred_gemini_model")
+    if "allow_model_fallback" in validated:
+        profile.allow_model_fallback = bool(validated["allow_model_fallback"])
+        update_fields.append("allow_model_fallback")
+    if update_fields:
+        profile.save(update_fields=update_fields)
+
+
 @api_view(["GET", "PATCH"])
 @permission_classes([IsAuthenticated])
 def profile_view(request: Request) -> Response:
@@ -176,12 +231,29 @@ def profile_view(request: Request) -> Response:
         for field in PROFILE_MUTABLE_FIELDS
         if field in validated
     }
-    user, profile = update_self_profile(
-        user=request.user,
-        email=email,
-        profile_data=profile_data,
-    )
-    return Response(_serialize_self_profile(user, profile), status=status.HTTP_200_OK)
+
+    try:
+        key_updated, has_new_key, key_pair = _prepare_byok_key_update(validated)
+    except BYOKStorageUnavailableError as exc:
+        return Response(
+            {"detail": str(exc), "code": exc.code},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    with transaction.atomic():
+        user, profile = update_self_profile(
+            user=request.user,
+            email=email,
+            profile_data=profile_data,
+        )
+        _apply_byok_profile_fields(profile, validated, key_pair)
+
+    payload = _serialize_self_profile(user, profile)
+    if key_updated:
+        clear_user_gemini_state(user.pk)
+        if has_new_key:
+            payload.update(ResumeService(user=user).embed_pending_resumes())
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])

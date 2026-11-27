@@ -10,11 +10,15 @@ from django.conf import settings
 from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db import connection, transaction
 from django.db.models import Case, FloatField, QuerySet, Value, When
-from google import genai
-from google.genai import types
 from pgvector.django import CosineDistance
 import redis
 
+from apps.base.services.byok import (
+    BYOKError,
+    execute_user_gemini_embed,
+    get_user_pause_state,
+    resolve_user_gemini_credentials,
+)
 from apps.jobs.models.jobs import JobPosting
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS
 
@@ -29,7 +33,6 @@ MIN_SEMANTIC_QUERY_CHARS = 2
 EMBEDDING_CACHE_TTL_SECONDS = 300
 EMBEDDING_TIMEOUT_MS = 4000
 HNSW_EF_SEARCH = 200
-PLACEHOLDER_GEMINI_KEYS = frozenset({"", "your_gemini_api_key_here"})
 
 
 @dataclass(frozen=True)
@@ -65,9 +68,9 @@ def _get_redis_client() -> redis.Redis | None:
         return None
 
 
-def _embedding_cache_key(normalized_lower: str) -> str:
+def _embedding_cache_key(user_id: int, normalized_lower: str) -> str:
     digest = hashlib.sha256(normalized_lower.encode("utf-8")).hexdigest()
-    return f"vektryn:search_embed:v1:{digest}"
+    return f"vektryn:search_embed:v2:{user_id}:{digest}"
 
 
 def _load_cached_embedding(cache_key: str) -> list[float] | None:
@@ -100,42 +103,38 @@ def _store_cached_embedding(cache_key: str, embedding: list[float]) -> None:
         logger.debug("Failed writing cached search embedding: %s", exc)
 
 
-def embed_search_query(query: str) -> list[float] | None:
+def embed_search_query(query: str, *, user=None) -> list[float] | None:
     normalized = normalize_search_query(query)
     if len(normalized) < MIN_SEMANTIC_QUERY_CHARS:
         return None
+    if user is None:
+        return None
 
-    cache_key = _embedding_cache_key(normalized.lower())
+    try:
+        creds = resolve_user_gemini_credentials(user)
+    except BYOKError:
+        return None
+
+    if get_user_pause_state(creds.user_id) is not None:
+        return None
+
+    cache_key = _embedding_cache_key(creds.user_id, normalized.lower())
     cached = _load_cached_embedding(cache_key)
     if cached is not None:
         return cached
 
-    api_key = (getattr(settings, "GEMINI_API_KEY", "") or "").strip()
-    if api_key in PLACEHOLDER_GEMINI_KEYS:
-        return None
-
     try:
-        client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=EMBEDDING_TIMEOUT_MS),
-        )
-        res = client.models.embed_content(
-            model=settings.GEMINI_EMBEDDING_MODEL,
+        vector = execute_user_gemini_embed(
+            user=user,
             contents=normalized,
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY",
-                output_dimensionality=EMBEDDING_DIMENSIONS,
-            ),
+            task_type="RETRIEVAL_QUERY",
+            timeout_ms=EMBEDDING_TIMEOUT_MS,
+            max_attempts=1,
         )
-        embeddings = getattr(res, "embeddings", None)
-        if not embeddings:
-            return None
-        vector = [float(v) for v in embeddings[0].values]
-        if len(vector) != EMBEDDING_DIMENSIONS:
-            return None
     except Exception as exc:
         logger.warning(
-            "Hybrid search query embedding failed; falling back to keyword-only: %s",
+            "Hybrid search query embedding failed for user=%s; falling back to keyword-only: %s",
+            creds.user_id,
             exc,
         )
         return None
@@ -201,13 +200,15 @@ def fuse_rrf_scores(
 def execute_hybrid_search(
     base_jobs: QuerySet[JobPosting],
     query: str,
+    *,
+    user=None,
 ) -> HybridSearchResult:
     normalized = normalize_search_query(query)
     if not normalized:
         return HybridSearchResult(rrf_scores={}, search_mode="keyword")
 
     keyword_ranks = _fetch_keyword_ranks(base_jobs, normalized)
-    query_embedding = embed_search_query(normalized)
+    query_embedding = embed_search_query(normalized, user=user)
     if query_embedding is None:
         return HybridSearchResult(
             rrf_scores=fuse_rrf_scores(keyword_ranks, {}),
