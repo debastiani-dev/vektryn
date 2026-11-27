@@ -10,6 +10,7 @@ from typing import Callable, TypeVar
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+import httpx
 from pydantic import BaseModel, Field
 import redis
 
@@ -47,6 +48,14 @@ _THINKING_LEVEL_ENUM: dict[ThinkingLevelName, types.ThinkingLevel] = {
     "medium": types.ThinkingLevel.MEDIUM,
     "high": types.ThinkingLevel.HIGH,
 }
+
+
+_NO_SDK_RETRIES = types.HttpRetryOptions(attempts=1)
+
+
+def _is_deadline_exceeded(exc: genai_errors.APIError) -> bool:
+    status = (getattr(exc, "status", None) or "").upper()
+    return exc.code == 504 or status == "DEADLINE_EXCEEDED"
 
 
 def build_thinking_config(level: ThinkingLevelName) -> types.ThinkingConfig:
@@ -135,6 +144,7 @@ class GeminiStreamClient:
 
     PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here"}
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+    REQUEST_TIMEOUT_MS = 30_000
 
     def __init__(self, api_key: str = settings.gemini_api_key) -> None:
         cleaned = (api_key or "").strip()
@@ -142,7 +152,13 @@ class GeminiStreamClient:
             raise ValueError(
                 "A valid GEMINI_API_KEY is required for the enrichment worker."
             )
-        self._client = genai.Client(api_key=cleaned)
+        self._client = genai.Client(
+            api_key=cleaned,
+            http_options=types.HttpOptions(
+                timeout=self.REQUEST_TIMEOUT_MS,
+                retry_options=_NO_SDK_RETRIES,
+            ),
+        )
 
     @classmethod
     def _call_with_retry(cls, fn: Callable[[], T], max_attempts: int = 3) -> T:
@@ -268,7 +284,7 @@ class UserGeminiScoringManager:
     """Per-user BYOK Gemini scoring manager with bounded LRU client cache & Redis cooldowns."""
 
     MAX_CACHED_CLIENTS = 16
-    REQUEST_TIMEOUT_MS = 25_000
+    REQUEST_TIMEOUT_MS = 45_000
 
     def __init__(self, *, max_cached_clients: int = MAX_CACHED_CLIENTS) -> None:
         self._max_cached = max(1, int(max_cached_clients))
@@ -284,7 +300,10 @@ class UserGeminiScoringManager:
 
         client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=self.REQUEST_TIMEOUT_MS),
+            http_options=types.HttpOptions(
+                timeout=self.REQUEST_TIMEOUT_MS,
+                retry_options=_NO_SDK_RETRIES,
+            ),
         )
         self._clients[cache_key] = client
         while len(self._clients) > self._max_cached:
@@ -459,6 +478,7 @@ class UserGeminiScoringManager:
         attempt: GeminiModelAttempt,
         exc: genai_errors.APIError,
         retry_idx: int,
+        has_fallback: bool,
     ) -> tuple[bool, bool]:
         """Classify a model APIError. Returns (should_retry_same_model, hit_quota_or_tier)."""
         action = classify_gemini_error(
@@ -484,6 +504,8 @@ class UserGeminiScoringManager:
             self._mark_cooldown(user_id, attempt.model_id, COOLDOWN_QUOTA_SECONDS)
             return False, True
         if action is GeminiErrorAction.TRANSIENT:
+            if _is_deadline_exceeded(exc) and has_fallback:
+                return False, False
             if retry_idx == 0:
                 time.sleep(1.0)
                 return True, False
@@ -497,6 +519,7 @@ class UserGeminiScoringManager:
         user_id: int,
         attempt: GeminiModelAttempt,
         prompt: str,
+        has_fallback: bool,
     ) -> tuple[ResumeGapEvaluation | None, bool, Exception | None]:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -516,6 +539,8 @@ class UserGeminiScoringManager:
                     False,
                     None,
                 )
+            except (httpx.TimeoutException, TimeoutError) as exc:
+                return None, False, exc
             except genai_errors.APIError as exc:
                 last_exc = exc
                 should_retry, hit_quota = self._handle_attempt_api_error(
@@ -523,6 +548,7 @@ class UserGeminiScoringManager:
                     attempt=attempt,
                     exc=exc,
                     retry_idx=retry_idx,
+                    has_fallback=has_fallback,
                 )
                 if not should_retry:
                     return None, hit_quota, last_exc
@@ -588,12 +614,13 @@ class UserGeminiScoringManager:
         saw_quota_or_tier = False
         last_exc: Exception | None = None
 
-        for attempt in eligible:
+        for idx, attempt in enumerate(eligible):
             evaluation, hit_quota, exc = self._try_score_model(
                 client=client,
                 user_id=user_id,
                 attempt=attempt,
                 prompt=prompt,
+                has_fallback=idx < len(eligible) - 1,
             )
             if evaluation is not None:
                 return evaluation, attempt.model_id

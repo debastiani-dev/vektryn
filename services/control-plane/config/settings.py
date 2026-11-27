@@ -51,7 +51,7 @@ class ControlPlaneSettings(BaseSettings):
 
     byok_encryption_key: str = ""
     gemini_embedding_model: str = "gemini-embedding-001"
-    copilot_gemini_timeout_ms: int = 24000
+    copilot_gemini_timeout_ms: int = 50000
     copilot_rate_limit_max_requests: int = 15
     copilot_rate_limit_window_seconds: int = 300
     auth_login_acct_max_failures: int = 5

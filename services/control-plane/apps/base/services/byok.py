@@ -12,6 +12,7 @@ from django.utils import timezone
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
+import httpx
 import redis
 
 from apps.base.models.notification import Notification
@@ -460,6 +461,14 @@ def _resolve_execution_context(
     )
 
 
+_NO_SDK_RETRIES = types.HttpRetryOptions(attempts=1)
+
+
+def _is_deadline_exceeded(exc: genai_errors.APIError) -> bool:
+    status = (getattr(exc, "status", None) or "").upper()
+    return exc.code == 504 or status == "DEADLINE_EXCEEDED"
+
+
 def _build_user_client(
     *,
     api_key: str,
@@ -470,7 +479,10 @@ def _build_user_client(
         return genai_client
     return genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(timeout=timeout_ms),
+        http_options=types.HttpOptions(
+            timeout=timeout_ms,
+            retry_options=_NO_SDK_RETRIES,
+        ),
     )
 
 
@@ -607,6 +619,7 @@ def _handle_generate_api_error(
     retry_idx: int,
     max_transient_retries: int,
     deadline: float,
+    has_fallback: bool,
 ) -> tuple[bool, bool, Exception | None]:
     """Return (should_retry, hit_quota_or_tier, transient_exc)."""
     action = classify_gemini_error(
@@ -627,6 +640,8 @@ def _handle_generate_api_error(
             mark_model_cooldown(user_id, attempt.model_id, COOLDOWN_QUOTA_SECONDS)
         return False, True, None
     if action is GeminiErrorAction.TRANSIENT:
+        if _is_deadline_exceeded(exc) and has_fallback:
+            return False, False, exc
         if retry_idx < max_transient_retries and (deadline - time.monotonic()) > 2.5:
             time.sleep(0.8)
             return True, False, exc
@@ -648,18 +663,16 @@ def _try_generate_model(
     deadline: float,
     per_attempt_timeout_ms: int,
     max_transient_retries: int,
+    has_fallback: bool,
     genai_client: genai.Client | None,
 ) -> tuple[object | None, bool, Exception | None]:
     last_transient_exc: Exception | None = None
     for retry_idx in range(max(0, max_transient_retries) + 1):
         effective_timeout = _remaining_timeout_ms(deadline, per_attempt_timeout_ms)
-        client = (
-            genai_client
-            if genai_client is not None
-            else genai.Client(
-                api_key=api_key,
-                http_options=types.HttpOptions(timeout=effective_timeout),
-            )
+        client = _build_user_client(
+            api_key=api_key,
+            timeout_ms=effective_timeout,
+            genai_client=genai_client,
         )
         try:
             response = _invoke_single_attempt(
@@ -671,6 +684,8 @@ def _try_generate_model(
                 response_schema=response_schema,
             )
             return response, False, None
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            return None, False, exc
         except genai_errors.APIError as exc:
             should_retry, hit_quota, transient_exc = _handle_generate_api_error(
                 user_id=user_id,
@@ -679,6 +694,7 @@ def _try_generate_model(
                 retry_idx=retry_idx,
                 max_transient_retries=max_transient_retries,
                 deadline=deadline,
+                has_fallback=has_fallback,
             )
             if transient_exc is not None:
                 last_transient_exc = transient_exc
@@ -695,8 +711,8 @@ def execute_user_gemini_generate(
     system_instruction: str | None = None,
     response_mime_type: str | None = None,
     response_schema: object | None = None,
-    deadline_seconds: float = 24.0,
-    per_attempt_timeout_ms: int = 24000,
+    deadline_seconds: float = 50.0,
+    per_attempt_timeout_ms: int = 35000,
     max_transient_retries: int = 1,
     genai_client: genai.Client | None = None,
 ) -> tuple[object, str]:
@@ -722,7 +738,7 @@ def execute_user_gemini_generate(
     saw_quota_or_tier = False
     last_transient_exc: Exception | None = None
 
-    for attempt in eligible:
+    for idx, attempt in enumerate(eligible):
         response, hit_quota, transient_exc = _try_generate_model(
             user_id=user_id,
             api_key=api_key,
@@ -734,6 +750,7 @@ def execute_user_gemini_generate(
             deadline=deadline,
             per_attempt_timeout_ms=per_attempt_timeout_ms,
             max_transient_retries=max_transient_retries,
+            has_fallback=idx < len(eligible) - 1,
             genai_client=genai_client,
         )
         if response is not None:

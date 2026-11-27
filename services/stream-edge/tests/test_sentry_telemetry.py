@@ -65,6 +65,7 @@ def test_stream_edge_configure_sentry_accepts_real_sentry_sdk_v3_init(monkeypatc
         assert client.options["profile_session_sample_rate"] == pytest.approx(0.0)
         assert client.options["data_collection"]["user_info"] is False
         assert client.options["data_collection"]["cookies"] == {"mode": "off"}
+        assert "google_genai" not in client.integrations
     finally:
         edge_telemetry.sentry_sdk.init(dsn="")
         monkeypatch.setattr(edge_telemetry, "_SENTRY_CONFIGURED", False)

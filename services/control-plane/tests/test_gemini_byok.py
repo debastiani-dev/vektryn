@@ -420,3 +420,104 @@ def test_control_plane_telemetry_scrubs_aiza_and_aq_everywhere():
     assert scrubbed["request"]["headers"]["X-Goog-Api-Key"] == "[Filtered]"
     assert scrubbed["request"]["data"]["gemini_api_key"] == "[Filtered]"
     assert scrubbed["request"]["data"]["display_name"] == "Rafa"
+
+
+@pytest.mark.django_db
+def test_copilot_504_deadline_exceeded_falls_back_immediately_and_disables_sdk_retries(
+    settings,
+):
+    fernet_key = Fernet.generate_key().decode("utf-8")
+    settings.BYOK_ENCRYPTION_KEY = fernet_key
+    settings.REDIS_URL = ""
+
+    user = User.objects.create_user(username="byok_504", password="pw")
+    profile = get_or_create_user_profile(user)
+    profile.gemini_api_key_encrypted = encrypt_api_key(
+        "AQ.Ab8RN6-ValidCopilot504Key12345678", fernet_key
+    )
+    profile.gemini_api_key_last4 = "5678"
+    profile.preferred_gemini_model = "gemini-4-carbon"
+    profile.allow_model_fallback = True
+    profile.save(
+        update_fields=[
+            "gemini_api_key_encrypted",
+            "gemini_api_key_last4",
+            "preferred_gemini_model",
+            "allow_model_fallback",
+        ]
+    )
+
+    resume = ResumeProfile.objects.create(
+        user=user,
+        label="Backend CV",
+        raw_text="Senior Python engineer",
+        content_hash="b" * 64,
+        embedding=[0.1] * 768,
+        is_active=True,
+    )
+    job = JobPosting.objects.create(
+        ats_source=ATSSource.GREENHOUSE,
+        external_id="byok-504-job",
+        content_hash="c" * 64,
+        title="Staff Python Engineer",
+        company_name="Acme",
+        apply_url="https://example.com/jobs/byok-504",
+        raw_html_gcs_uri="gs://bucket/byok-504.html",
+        location_raw="Remote",
+        description_clean="Build distributed systems",
+        seniority=SeniorityLevel.STAFF,
+        contract_type=ContractType.PJ,
+        tech_stack=["python"],
+        is_active=True,
+    )
+    match = MatchScore.objects.create(
+        job_posting=job,
+        resume_profile=resume,
+        cosine_similarity=0.84,
+        fit_score=82,
+        resume_content_hash=resume.content_hash,
+    )
+
+    seen_models: list[str] = []
+    seen_http_options: list[types.HttpOptions] = []
+
+    def _side_effect(*, model, contents, config):
+        seen_models.append(model)
+        if model == "gemini-4-carbon":
+            raise genai_errors.ServerError(
+                504,
+                {
+                    "error": {
+                        "code": 504,
+                        "status": "DEADLINE_EXCEEDED",
+                        "message": "Deadline expired before operation could complete.",
+                    }
+                },
+                None,
+            )
+        return SimpleNamespace(text="## Cover Letter\nFallback succeeded.")
+
+    fake_genai_client = MagicMock()
+    fake_genai_client.models.generate_content.side_effect = _side_effect
+
+    def _capture_client(*, api_key, http_options):
+        seen_http_options.append(http_options)
+        return fake_genai_client
+
+    api_client = APIClient()
+    api_client.force_authenticate(user=user)
+    with patch("apps.base.services.byok.genai.Client", side_effect=_capture_client):
+        resp = api_client.post(
+            f"/api/v1/matches/{match.uuid}/artifacts/",
+            {"kind": MatchArtifactKind.COVER_LETTER},
+            format="json",
+        )
+
+    assert resp.status_code == 201
+    assert resp.json()["model_name"] == "gemini-4-neon"
+    assert seen_models == ["gemini-4-carbon", "gemini-4-neon"]
+    assert len(seen_http_options) == 2
+    for opts in seen_http_options:
+        assert opts.retry_options is not None
+        assert opts.retry_options.attempts == 1
+        assert opts.timeout <= 35000

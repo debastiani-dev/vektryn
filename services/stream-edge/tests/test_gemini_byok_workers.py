@@ -409,3 +409,66 @@ def test_stream_edge_telemetry_scrubs_aiza_and_aq_keys():
     assert aiza not in serialized
     assert aq not in serialized
     assert scrubbed["request"]["headers"]["X-Goog-Api-Key"] == "[Filtered]"
+
+
+def test_scoring_manager_disables_sdk_retries_and_falls_back_immediately_on_504(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "redis_url", "")
+    manager = UserGeminiScoringManager()
+    assert manager.REQUEST_TIMEOUT_MS == 45_000
+
+    seen_models: list[str] = []
+    seen_http_options = []
+
+    def _side_effect(*, model, contents, config):
+        seen_models.append(model)
+        if model == "gemini-4-carbon":
+            raise genai_errors.ServerError(
+                504,
+                {
+                    "error": {
+                        "code": 504,
+                        "status": "DEADLINE_EXCEEDED",
+                        "message": "Deadline expired before operation could complete.",
+                    }
+                },
+                None,
+            )
+        return SimpleNamespace(
+            text=(
+                '{"fit_score": 81, "matched_skills": ["python"], '
+                '"missing_keywords": [], "talking_points": ["point"], '
+                '"gap_summary": "Solid fit.", "fit_highlights": ["Python"], '
+                '"watchout_note": ""}'
+            )
+        )
+
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = _side_effect
+
+    def _capture_client(*, api_key, http_options):
+        seen_http_options.append(http_options)
+        return fake_client
+
+    with patch("stream_edge.clients.gemini.genai.Client", side_effect=_capture_client):
+        evaluation, used_model = manager.evaluate_resume_fit_sync(
+            user_id=99,
+            api_key="AQ.Ab8RN6-Scoring504Key1234567890",
+            preferred_model="gemini-4-carbon",
+            allow_model_fallback=True,
+            resume_text="Senior Python engineer",
+            resume_skills=["python"],
+            job_title="Staff Python Engineer",
+            company_name="Acme",
+            job_description="Build distributed services",
+            job_stack=["python"],
+        )
+
+    assert used_model == "gemini-4-neon"
+    assert evaluation.fit_score == 81
+    assert seen_models == ["gemini-4-carbon", "gemini-4-neon"]
+    assert len(seen_http_options) == 1
+    assert seen_http_options[0].timeout == 45_000
+    assert seen_http_options[0].retry_options is not None
+    assert seen_http_options[0].retry_options.attempts == 1

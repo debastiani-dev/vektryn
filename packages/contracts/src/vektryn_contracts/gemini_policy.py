@@ -294,43 +294,6 @@ def _is_transient_error(code: int | None, status: str) -> bool:
     )
 
 
-def _has_marker(message_lower: str, markers: tuple[str, ...]) -> bool:
-    return any(marker in message_lower for marker in markers)
-
-
-def _is_invalid_key_error(
-    code: int | None, status: str, msg: str, reasons: set[str]
-) -> bool:
-    if reasons & _INVALID_KEY_REASONS or code == 401 or status == "UNAUTHENTICATED":
-        return True
-    return code in (400, 403) and _has_marker(msg, _INVALID_KEY_MARKERS)
-
-
-def _is_payment_required_error(code: int | None, msg: str, reasons: set[str]) -> bool:
-    return (
-        code == 402
-        or bool(reasons & _PAYMENT_REASONS)
-        or _has_marker(msg, _PAYMENT_MARKERS)
-    )
-
-
-def _is_quota_error(code: int | None, status: str, msg: str) -> bool:
-    return (
-        code == 429
-        or status == "RESOURCE_EXHAUSTED"
-        or "quota" in msg
-        or "rate limit" in msg
-    )
-
-
-def _is_transient_error(code: int | None, status: str) -> bool:
-    return code in (500, 502, 503, 504) or status in (
-        "INTERNAL",
-        "UNAVAILABLE",
-        "DEADLINE_EXCEEDED",
-    )
-
-
 def classify_gemini_error(
     code: int | None,
     status: str | None = None,
