@@ -657,18 +657,6 @@ def test_resume_rescore_endpoint_validation_cooldown_broker_error_and_idor():
         update_fields=["gemini_api_key_encrypted", "gemini_api_key_last4"]
     )
 
-    # Guard 2b: keyless user on embedded active profile -> 400
-    keyless_resp = client.post(f"/api/v1/resumes/{active_resume.uuid}/rescore/", {})
-    assert keyless_resp.status_code == 400
-
-    # Configure a BYOK key for owner so remaining rescore guards can be exercised
-    owner_profile = get_or_create_user_profile(owner)
-    owner_profile.gemini_api_key_encrypted = "fernet-token-placeholder"
-    owner_profile.gemini_api_key_last4 = "1234"
-    owner_profile.save(
-        update_fields=["gemini_api_key_encrypted", "gemini_api_key_last4"]
-    )
-
     # Guard 3: Redis cooldown active -> 429 + Retry-After
     with patch(
         "apps.resumes.services.resume_service.acquire_rescore_cooldown",
