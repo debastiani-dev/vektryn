@@ -11,12 +11,38 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Detect CI Changes
+    runs-on: ubuntu-latest
+    outputs:
+      contracts: ${{ steps.detect.outputs.contracts }}
+      control_plane: ${{ steps.detect.outputs.control_plane }}
+      stream_edge: ${{ steps.detect.outputs.stream_edge }}
+      frontend: ${{ steps.detect.outputs.frontend }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify affected services
+        id: detect
+        run: |
+          python3 .github/scripts/detect_ci_changes.py \
+            --event-name "${{ github.event_name }}" \
+            --base-sha "${{ github.event.pull_request.base.sha || '' }}" \
+            --head-sha "${{ github.sha }}"
+
   contracts:
     name: Contracts (Lint & Test)
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/contracts
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
 
     steps:
       - uses: actions/checkout@v7
@@ -25,23 +51,32 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install Poetry
-        run: pip install "poetry>=2.0,<3.0"
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v6
+        with:
+          path: packages/contracts/.venv
+          key: venv-contracts-py3.13-${{ hashFiles('packages/contracts/poetry.lock', 'packages/contracts/pyproject.toml') }}
 
       - name: Install dependencies
-        run: poetry install --no-interaction --no-ansi
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install --quiet "poetry>=2.0,<3.0"
+          poetry install --no-interaction --no-ansi
 
       - name: Lint with Ruff
-        run: poetry run ruff check . ../../.github/scripts
+        run: .venv/bin/ruff check . ../../.github/scripts
 
       - name: Format check with Black
-        run: poetry run black --check . ../../.github/scripts
+        run: .venv/bin/black --check . ../../.github/scripts
 
       - name: Run pytest
-        run: poetry run pytest . ../../.github/scripts
+        run: .venv/bin/pytest . ../../.github/scripts
 
   control-plane:
     name: Control Plane (Lint & Test)
+    needs: changes
+    if: needs.changes.outputs.control_plane == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,15 +89,18 @@ jobs:
           POSTGRES_DB: vektryn_test
           POSTGRES_USER: vektryn
           POSTGRES_PASSWORD: vektryn_test_password
+          POSTGRES_INITDB_ARGS: "--nosync"
         ports:
           - 5432:5432
         options: >-
+          --tmpfs /var/lib/postgresql/data:rw
           --health-cmd="pg_isready -U vektryn -d vektryn_test"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=15
 
     env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
       POSTGRES_HOST: localhost
       POSTGRES_PORT: "5432"
       POSTGRES_DB: vektryn_test
@@ -77,34 +115,45 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install Poetry
-        run: pip install "poetry>=2.0,<3.0"
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v6
+        with:
+          path: services/control-plane/.venv
+          key: venv-control-plane-py3.13-${{ hashFiles('services/control-plane/poetry.lock', 'services/control-plane/pyproject.toml', 'packages/contracts/poetry.lock', 'packages/contracts/pyproject.toml') }}
 
       - name: Install dependencies
-        run: poetry install --no-interaction --no-ansi
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install --quiet "poetry>=2.0,<3.0"
+          poetry install --no-interaction --no-ansi
 
       - name: Lint with Ruff
-        run: poetry run ruff check .
+        run: .venv/bin/ruff check .
 
       - name: Format check with Black
-        run: poetry run black --check .
+        run: .venv/bin/black --check .
 
       - name: Enable pgvector extension
         run: |
           PGPASSWORD=vektryn_test_password psql -h localhost -U vektryn -d vektryn_test -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
 
       - name: Run Django system checks
-        run: poetry run python manage.py check
+        run: .venv/bin/python manage.py check
 
       - name: Run pytest
-        run: poetry run pytest
+        run: .venv/bin/pytest
 
   stream-edge:
     name: Stream Edge (Lint & Test)
+    needs: changes
+    if: needs.changes.outputs.stream_edge == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: services/stream-edge
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
 
     steps:
       - uses: actions/checkout@v7
@@ -113,23 +162,32 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install Poetry
-        run: pip install "poetry>=2.0,<3.0"
+      - name: Cache virtualenv
+        id: venv-cache
+        uses: actions/cache@v6
+        with:
+          path: services/stream-edge/.venv
+          key: venv-stream-edge-py3.13-${{ hashFiles('services/stream-edge/poetry.lock', 'services/stream-edge/pyproject.toml', 'packages/contracts/poetry.lock', 'packages/contracts/pyproject.toml') }}
 
       - name: Install dependencies
-        run: poetry install --no-interaction --no-ansi
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install --quiet "poetry>=2.0,<3.0"
+          poetry install --no-interaction --no-ansi
 
       - name: Lint with Ruff
-        run: poetry run ruff check .
+        run: .venv/bin/ruff check .
 
       - name: Format check with Black
-        run: poetry run black --check .
+        run: .venv/bin/black --check .
 
       - name: Run pytest
-        run: poetry run pytest
+        run: .venv/bin/pytest
 
   frontend:
     name: Frontend (Lint, Typecheck & Build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
