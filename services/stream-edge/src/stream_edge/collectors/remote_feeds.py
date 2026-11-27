@@ -66,7 +66,7 @@ def _parse_trampos_entry(entry: object) -> CollectedJob | None:
 
 
 class MultiCompanyFeedCollector:
-    """Fetches remote and Brazilian software jobs from public multi-company JSON feeds."""
+    """Fetches remote and Brazilian software, UI/UX, and QA jobs from public multi-company JSON feeds."""
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
         self.http_client = http_client
@@ -162,6 +162,36 @@ class MultiCompanyFeedCollector:
             )
         return [j for j in jobs if j.apply_url and j.title]
 
+    @staticmethod
+    def _parse_gupy_item(item: dict) -> CollectedJob | None:
+        job_id = str(item.get("id") or "")
+        apply_url = item.get("jobUrl") or ""
+        title = (item.get("name") or "").strip()
+        if not apply_url or not job_id or not title:
+            return None
+        workplace_type = str(item.get("workplaceType") or "").strip()
+        if not workplace_type and item.get("isRemoteWork"):
+            workplace_type = "Remote"
+        loc_parts = [
+            item.get("city") or "",
+            item.get("state") or "",
+            item.get("country") or "Brazil",
+            workplace_type,
+        ]
+        raw_html = item.get("description") or title
+        return CollectedJob(
+            ats_source=ATSSource.GUPY,
+            external_id=job_id,
+            title=title,
+            company_name=(item.get("careerPageName") or "Gupy Company").strip(),
+            apply_url=apply_url,
+            location_raw=", ".join(dict.fromkeys(p for p in loc_parts if p)),
+            raw_html=raw_html,
+            description_clean=html_to_clean_text(raw_html),
+            posted_at=_parse_iso_dt(item.get("publishedDate")),
+            work_mode_hint=workplace_type,
+        )
+
     async def fetch_gupy_portal(self, job_name: str = "python") -> list[CollectedJob]:
         resp = await self.http_client.get(
             "https://portal.gupy.io/api/job-search/jobs",
@@ -170,37 +200,8 @@ class MultiCompanyFeedCollector:
             timeout=20.0,
         )
         resp.raise_for_status()
-        jobs: list[CollectedJob] = []
-        for item in resp.json().get("data", []):
-            job_id = str(item.get("id") or "")
-            apply_url = item.get("jobUrl") or ""
-            if not apply_url or not job_id:
-                continue
-            workplace_type = str(item.get("workplaceType") or "").strip()
-            if not workplace_type and item.get("isRemoteWork"):
-                workplace_type = "Remote"
-            loc_parts = [
-                item.get("city") or "",
-                item.get("state") or "",
-                item.get("country") or "Brazil",
-                workplace_type,
-            ]
-            raw_html = item.get("description") or item.get("name") or ""
-            jobs.append(
-                CollectedJob(
-                    ats_source=ATSSource.GUPY,
-                    external_id=job_id,
-                    title=(item.get("name") or "").strip(),
-                    company_name=(item.get("careerPageName") or "Gupy Company").strip(),
-                    apply_url=apply_url,
-                    location_raw=", ".join(dict.fromkeys(p for p in loc_parts if p)),
-                    raw_html=raw_html,
-                    description_clean=html_to_clean_text(raw_html),
-                    posted_at=_parse_iso_dt(item.get("publishedDate")),
-                    work_mode_hint=workplace_type,
-                )
-            )
-        return [j for j in jobs if j.title]
+        parsed = (self._parse_gupy_item(item) for item in resp.json().get("data", []))
+        return [job for job in parsed if job is not None]
 
     async def fetch_trampos(self) -> list[CollectedJob]:
         resp = await self.http_client.get(
@@ -261,11 +262,22 @@ class MultiCompanyFeedCollector:
     ) -> tuple[list[CollectedJob], dict[str, dict[str, int]]]:
         feed_calls = (
             ("remotive", ATSSource.REMOTIVE.value, self.fetch_remotive("software-dev")),
+            (
+                "remotive:design",
+                ATSSource.REMOTIVE.value,
+                self.fetch_remotive("design"),
+            ),
+            ("remotive:qa", ATSSource.REMOTIVE.value, self.fetch_remotive("qa")),
             ("himalayas", ATSSource.HIMALAYAS.value, self.fetch_himalayas(limit=100)),
             ("jobicy:python", ATSSource.JOBICY.value, self.fetch_jobicy("python")),
             ("jobicy:backend", ATSSource.JOBICY.value, self.fetch_jobicy("backend")),
+            ("jobicy:design", ATSSource.JOBICY.value, self.fetch_jobicy("design")),
+            ("jobicy:qa", ATSSource.JOBICY.value, self.fetch_jobicy("qa")),
             ("gupy:python", ATSSource.GUPY.value, self.fetch_gupy_portal("python")),
             ("gupy:backend", ATSSource.GUPY.value, self.fetch_gupy_portal("backend")),
+            ("gupy:ux", ATSSource.GUPY.value, self.fetch_gupy_portal("ux")),
+            ("gupy:designer", ATSSource.GUPY.value, self.fetch_gupy_portal("designer")),
+            ("gupy:qa", ATSSource.GUPY.value, self.fetch_gupy_portal("qa")),
             ("trampos", ATSSource.TRAMPOS.value, self.fetch_trampos()),
             (
                 "github:backend-br",

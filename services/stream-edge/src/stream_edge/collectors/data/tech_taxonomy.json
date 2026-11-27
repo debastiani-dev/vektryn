@@ -24,7 +24,12 @@
         "ui/ux",
         "ux/ui",
         "design engineer",
-        "design systems"
+        "design systems",
+        "qa",
+        "sdet",
+        "quality assurance",
+        "analista de testes",
+        "analista de qualidade"
     ],
     "primary_stacks": [
         "python",
@@ -70,7 +75,24 @@
         "figma",
         "storybook",
         "framer",
-        "design systems"
+        "design systems",
+        "cypress",
+        "playwright",
+        "selenium",
+        "pytest",
+        "jest",
+        "vitest",
+        "appium",
+        "webdriverio",
+        "robot framework",
+        "cucumber",
+        "junit",
+        "testng",
+        "rest assured",
+        "postman",
+        "k6",
+        "jmeter",
+        "gatling"
     ],
     "disciplines": {
         "backend": [
@@ -139,8 +161,27 @@
             "test engineer",
             "testing",
             "quality assurance",
+            "test automation",
+            "automação de testes",
+            "analista de testes",
+            "analista de qualidade",
             "cypress",
-            "playwright"
+            "playwright",
+            "selenium",
+            "pytest",
+            "jest",
+            "vitest",
+            "appium",
+            "webdriverio",
+            "robot framework",
+            "cucumber",
+            "junit",
+            "testng",
+            "rest assured",
+            "postman",
+            "k6",
+            "jmeter",
+            "gatling"
         ],
         "security": [
             "security engineer",
@@ -274,7 +315,20 @@
             "symfony",
             "graphql",
             "tailwind",
-            "storybook"
+            "storybook",
+            "cypress",
+            "playwright",
+            "selenium",
+            "pytest",
+            "jest",
+            "vitest",
+            "appium",
+            "webdriverio",
+            "robot framework",
+            "cucumber",
+            "junit",
+            "testng",
+            "rest assured"
         ],
         "database": [
             "postgresql",
@@ -367,7 +421,11 @@
             "sketch",
             "design systems",
             "wcag",
-            "accessibility"
+            "accessibility",
+            "postman",
+            "k6",
+            "jmeter",
+            "gatling"
         ]
     }
 }

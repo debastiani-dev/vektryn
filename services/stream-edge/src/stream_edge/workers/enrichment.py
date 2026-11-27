@@ -137,9 +137,10 @@ async def process_raw_message(
         event=enriched,
     )
     logger.info(
-        "Enriched %s:%s -> stack=%s",
+        "Enriched %s:%s -> work_mode=%s stack=%s",
         enriched.ats_source.value,
         enriched.external_id,
+        enriched.work_mode.value,
         enriched.tech_stack,
     )
 

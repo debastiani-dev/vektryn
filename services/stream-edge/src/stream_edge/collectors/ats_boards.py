@@ -75,6 +75,32 @@ class LeverCollector(BaseATSCollector):
 
 
 class WorkableCollector(BaseATSCollector):
+    @staticmethod
+    def _parse_item(item: dict, resolved_company: str) -> CollectedJob | None:
+        apply_url = item.get("url") or item.get("application_url")
+        if not apply_url:
+            return None
+        is_remote = bool(item.get("telecommuting"))
+        loc_parts = [
+            item.get("city") or "",
+            item.get("state") or "",
+            item.get("country") or "",
+            "Remote" if is_remote else "",
+        ]
+        raw_html = item.get("description") or ""
+        return CollectedJob(
+            ats_source=ATSSource.WORKABLE,
+            external_id=str(item.get("shortcode") or apply_url[-40:]),
+            title=(item.get("title") or "").strip(),
+            company_name=resolved_company,
+            apply_url=apply_url,
+            location_raw=", ".join(p for p in loc_parts if p),
+            raw_html=raw_html,
+            description_clean=html_to_clean_text(raw_html),
+            posted_at=_parse_dt(item.get("published_on")),
+            work_mode_hint="Remote" if is_remote else "",
+        )
+
     async def fetch_board(
         self, board_token: str, company_name: str
     ) -> list[CollectedJob]:
@@ -86,36 +112,58 @@ class WorkableCollector(BaseATSCollector):
         resp.raise_for_status()
         payload = resp.json()
         resolved_company = (payload.get("name") or company_name).strip()
-        jobs: list[CollectedJob] = []
-        for item in payload.get("jobs") or []:
-            loc_parts = [
-                item.get("city") or "",
-                item.get("state") or "",
-                item.get("country") or "",
-                "Remote" if item.get("telecommuting") else "",
-            ]
-            location_raw = ", ".join(p for p in loc_parts if p)
-            raw_html = item.get("description") or ""
-            apply_url = item.get("url") or item.get("application_url")
-            if not apply_url:
-                continue
-            jobs.append(
-                CollectedJob(
-                    ats_source=ATSSource.WORKABLE,
-                    external_id=str(item.get("shortcode") or apply_url[-40:]),
-                    title=(item.get("title") or "").strip(),
-                    company_name=resolved_company,
-                    apply_url=apply_url,
-                    location_raw=location_raw,
-                    raw_html=raw_html,
-                    description_clean=html_to_clean_text(raw_html),
-                    posted_at=_parse_dt(item.get("published_on")),
-                )
-            )
-        return jobs
+        parsed = (
+            self._parse_item(item, resolved_company)
+            for item in (payload.get("jobs") or [])
+        )
+        return [job for job in parsed if job is not None]
 
 
 class SmartRecruitersCollector(BaseATSCollector):
+    async def _fetch_detail_html(self, board_token: str, posting_id: str) -> str:
+        try:
+            d_resp = await self.http_client.get(
+                f"https://api.smartrecruiters.com/v1/companies/{board_token}/postings/{posting_id}",
+                timeout=10.0,
+            )
+            if d_resp.status_code != 200:
+                return ""
+            sections = (d_resp.json().get("jobAd") or {}).get("sections") or {}
+            return "\n".join(
+                sec.get("text", "")
+                for sec in sections.values()
+                if isinstance(sec, dict)
+            )
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _build_job(
+        item: dict, board_token: str, company_name: str, detail_html: str
+    ) -> CollectedJob:
+        posting_id = str(item["id"])
+        company = ((item.get("company") or {}).get("name") or company_name).strip()
+        loc = item.get("location") or {}
+        is_remote = bool(loc.get("remote"))
+        loc_parts = [
+            loc.get("fullLocation") or "",
+            loc.get("country") or "",
+            "Remote" if is_remote else "",
+        ]
+        fallback_name = item.get("name", "")
+        return CollectedJob(
+            ats_source=ATSSource.SMARTRECRUITERS,
+            external_id=posting_id,
+            title=fallback_name.strip(),
+            company_name=company,
+            apply_url=f"https://jobs.smartrecruiters.com/{board_token}/{posting_id}",
+            location_raw=", ".join(dict.fromkeys(p for p in loc_parts if p)),
+            raw_html=detail_html or fallback_name,
+            description_clean=html_to_clean_text(detail_html) or fallback_name,
+            posted_at=_parse_dt(item.get("releasedDate")),
+            work_mode_hint="Remote" if is_remote else "",
+        )
+
     async def fetch_board(
         self, board_token: str, company_name: str
     ) -> list[CollectedJob]:
@@ -127,47 +175,8 @@ class SmartRecruitersCollector(BaseATSCollector):
         resp.raise_for_status()
         jobs: list[CollectedJob] = []
         for item in resp.json().get("content") or []:
-            posting_id = str(item["id"])
-            company = ((item.get("company") or {}).get("name") or company_name).strip()
-            loc = item.get("location") or {}
-            loc_parts = [
-                loc.get("fullLocation") or "",
-                loc.get("country") or "",
-                "Remote" if loc.get("remote") else "",
-            ]
-            location_raw = ", ".join(dict.fromkeys(p for p in loc_parts if p))
-            # Fetch detail payload for full job description
-            detail_html = ""
-            try:
-                d_resp = await self.http_client.get(
-                    f"https://api.smartrecruiters.com/v1/companies/{board_token}/postings/{posting_id}",
-                    timeout=10.0,
-                )
-                if d_resp.status_code == 200:
-                    sections = (d_resp.json().get("jobAd") or {}).get("sections") or {}
-                    detail_html = "\n".join(
-                        sec.get("text", "")
-                        for sec in sections.values()
-                        if isinstance(sec, dict)
-                    )
-            except Exception:
-                pass
-
-            apply_url = f"https://jobs.smartrecruiters.com/{board_token}/{posting_id}"
-            jobs.append(
-                CollectedJob(
-                    ats_source=ATSSource.SMARTRECRUITERS,
-                    external_id=posting_id,
-                    title=(item.get("name") or "").strip(),
-                    company_name=company,
-                    apply_url=apply_url,
-                    location_raw=location_raw,
-                    raw_html=detail_html or item.get("name", ""),
-                    description_clean=html_to_clean_text(detail_html)
-                    or item.get("name", ""),
-                    posted_at=_parse_dt(item.get("releasedDate")),
-                )
-            )
+            detail_html = await self._fetch_detail_html(board_token, str(item["id"]))
+            jobs.append(self._build_job(item, board_token, company_name, detail_html))
         return jobs
 
 
@@ -185,10 +194,11 @@ class RecruiteeCollector(BaseATSCollector):
             apply_url = item.get("careers_url") or item.get("careers_apply_url")
             if not apply_url:
                 continue
+            is_remote = bool(item.get("remote"))
             loc_parts = [
                 item.get("location") or "",
                 item.get("country") or "",
-                "Remote" if item.get("remote") else "",
+                "Remote" if is_remote else "",
             ]
             raw_html = f"{item.get('description', '')}\n{item.get('requirements', '')}"
             jobs.append(
@@ -204,6 +214,7 @@ class RecruiteeCollector(BaseATSCollector):
                     posted_at=_parse_dt(
                         item.get("published_at") or item.get("created_at")
                     ),
+                    work_mode_hint="Remote" if is_remote else "",
                 )
             )
         return jobs
@@ -242,7 +253,8 @@ class BreezyCollector(BaseATSCollector):
             if not apply_url:
                 continue
             loc = item.get("location") or {}
-            loc_name = loc.get("name") or ("Remote" if loc.get("is_remote") else "")
+            is_remote = bool(loc.get("is_remote"))
+            loc_name = loc.get("name") or ("Remote" if is_remote else "")
             company = ((item.get("company") or {}).get("name") or company_name).strip()
             title = (item.get("name") or "").strip()
             detail_html = await self._fetch_description_html(apply_url)
@@ -258,6 +270,7 @@ class BreezyCollector(BaseATSCollector):
                     raw_html=detail_html or title,
                     description_clean=html_to_clean_text(detail_html) or fallback_text,
                     posted_at=_parse_dt(item.get("published_date")),
+                    work_mode_hint="Remote" if is_remote else "",
                 )
             )
         return jobs

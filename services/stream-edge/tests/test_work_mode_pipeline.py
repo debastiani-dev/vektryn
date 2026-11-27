@@ -7,16 +7,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 from cryptography.fernet import Fernet
+import httpx
 import pytest
 
 from stream_edge.clients.gemini import ExtractedJobMetadata, GeminiStreamClient
+from stream_edge.collectors.ats_boards import (
+    BreezyCollector,
+    RecruiteeCollector,
+    SmartRecruitersCollector,
+    WorkableCollector,
+)
 from stream_edge.collectors.base import CollectedJob
 from stream_edge.collectors.prefilter import (
     ResumeFilterCriteria,
+    _cached_word_patterns,
     detect_deterministic_work_mode,
     filter_and_rank_jobs,
     load_resume_criteria,
 )
+from stream_edge.collectors.remote_feeds import MultiCompanyFeedCollector
 from stream_edge.workers.enrichment import process_raw_message
 from stream_edge.workers.matcher import (
     _matches_profile_constraints,
@@ -300,14 +309,14 @@ def test_enrichment_extracts_work_mode_across_en_and_pt_and_publishes_event():
 
 
 def test_matcher_profile_constraints_strictly_gates_work_modes():
-    common = dict(
-        seniority="senior",
-        contract_type="pj",
-        region_eligibility=["brazil"],
-        target_seniority=["senior"],
-        target_contract_types=["pj"],
-        target_regions=["brazil"],
-    )
+    common = {
+        "seniority": "senior",
+        "contract_type": "pj",
+        "region_eligibility": ["brazil"],
+        "target_seniority": ["senior"],
+        "target_contract_types": ["pj"],
+        "target_regions": ["brazil"],
+    }
     assert (
         _matches_profile_constraints(
             **common, work_mode="remote", target_work_modes=["remote"]
@@ -534,3 +543,192 @@ def test_matcher_live_and_rescore_enforce_target_work_modes(
     else:
         scoring_manager.evaluate_resume_fit_sync.assert_not_called()
         producer._publish_sync.assert_not_called()
+
+
+def test_prefilter_supports_ui_ux_qa_disciplines_and_non_alnum_word_boundaries():
+    # Non-alphanumeric terms like c++ and ui/ux compile cleanly and match properly
+    cpp_pat, uiux_pat = _cached_word_patterns(("c++", "ui/ux"))
+    assert cpp_pat.search("Strong C++ systems programming experience") is not None
+    assert cpp_pat.search("Ac++b") is None
+    assert uiux_pat.search("Senior UI/UX Product Designer") is not None
+
+    # UI/UX discipline filtering
+    uiux_criteria = ResumeFilterCriteria(
+        resume_ids=("r-ux",),
+        skills=frozenset({"figma", "storybook", "design systems", "accessibility"}),
+        target_seniority=frozenset({"senior"}),
+        target_contract_types=frozenset(),
+        target_regions=frozenset({"brazil", "worldwide"}),
+        active_disciplines=frozenset({"ui_ux"}),
+        target_work_modes=frozenset({"remote"}),
+    )
+    ux_jobs = [
+        _collected_job(
+            external_id="ux-1",
+            title="Senior Product Designer (UI/UX)",
+            location_raw="Remote - Brazil",
+            description_clean="Own Figma design systems, Storybook components, and WCAG accessibility.",
+        ),
+        _collected_job(
+            external_id="be-1",
+            title="Senior Backend Engineer",
+            location_raw="Remote - Brazil",
+            description_clean="Build Python and PostgreSQL microservices.",
+        ),
+    ]
+    ux_filtered = filter_and_rank_jobs(ux_jobs, uiux_criteria)
+    assert [j.external_id for j in ux_filtered] == ["ux-1"]
+
+    # QA / SDET discipline filtering (EN + PT)
+    qa_criteria = ResumeFilterCriteria(
+        resume_ids=("r-qa",),
+        skills=frozenset({"playwright", "cypress", "k6", "pytest"}),
+        target_seniority=frozenset({"senior"}),
+        target_contract_types=frozenset(),
+        target_regions=frozenset({"brazil", "worldwide"}),
+        active_disciplines=frozenset({"qa"}),
+        target_work_modes=frozenset({"remote"}),
+    )
+    qa_jobs = [
+        _collected_job(
+            external_id="qa-1",
+            title="Analista de Testes Sênior (QA / SDET)",
+            location_raw="Remoto - Brasil",
+            description_clean="Automação de testes com Playwright, Cypress e testes de carga com k6.",
+        ),
+        _collected_job(
+            external_id="ux-2",
+            title="Senior Product Designer",
+            location_raw="Remote",
+            description_clean="Figma prototyping and design systems.",
+        ),
+    ]
+    qa_filtered = filter_and_rank_jobs(qa_jobs, qa_criteria)
+    assert [j.external_id for j in qa_filtered] == ["qa-1"]
+
+
+def _mock_ats_board_response(request: httpx.Request) -> httpx.Response:
+    url = str(request.url)
+    if "apply.workable.com" in url:
+        return httpx.Response(
+            200,
+            json={
+                "name": "Acme",
+                "jobs": [
+                    {
+                        "shortcode": "w1",
+                        "title": "QA Engineer",
+                        "country": "Brazil",
+                        "telecommuting": True,
+                        "description": "<p>Playwright</p>",
+                        "url": "https://apply.workable.com/acme/j/w1",
+                    },
+                    {
+                        "shortcode": "w2",
+                        "title": "QA Engineer Onsite",
+                        "city": "SP",
+                        "telecommuting": False,
+                        "description": "<p>Playwright</p>",
+                        "url": "https://apply.workable.com/acme/j/w2",
+                    },
+                ],
+            },
+        )
+    if "api.smartrecruiters.com" in url and "/postings/sr1" not in url:
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {
+                        "id": "sr1",
+                        "name": "Product Designer",
+                        "company": {"name": "Acme"},
+                        "location": {"fullLocation": "Brazil", "remote": True},
+                    }
+                ]
+            },
+        )
+    if "api.smartrecruiters.com" in url:
+        return httpx.Response(
+            200,
+            json={"jobAd": {"sections": {"job": {"text": "<p>Figma</p>"}}}},
+        )
+    if "recruitee.com" in url:
+        return httpx.Response(
+            200,
+            json={
+                "offers": [
+                    {
+                        "id": 10,
+                        "title": "SDET",
+                        "company_name": "Acme",
+                        "careers_url": "https://acme.recruitee.com/o/sdet",
+                        "location": "Brazil",
+                        "remote": True,
+                        "description": "<p>Cypress</p>",
+                    }
+                ]
+            },
+        )
+    if "breezy.hr/json" in url:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "b1",
+                    "name": "Design Engineer",
+                    "url": "https://acme.breezy.hr/p/b1",
+                    "company": {"name": "Acme"},
+                    "location": {"name": "Brazil", "is_remote": True},
+                }
+            ],
+        )
+    return httpx.Response(200, text="<main>Storybook and Figma</main>")
+
+
+def test_ats_board_collectors_populate_remote_work_mode_hint():
+    async def _run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(_mock_ats_board_response)
+        ) as http_client:
+            w_jobs = await WorkableCollector(http_client).fetch_board("acme", "Acme")
+            sr_jobs = await SmartRecruitersCollector(http_client).fetch_board(
+                "acme", "Acme"
+            )
+            r_jobs = await RecruiteeCollector(http_client).fetch_board("acme", "Acme")
+            b_jobs = await BreezyCollector(http_client).fetch_board("acme", "Acme")
+
+        assert [j.work_mode_hint for j in w_jobs] == ["Remote", ""]
+        assert sr_jobs[0].work_mode_hint == "Remote"
+        assert r_jobs[0].work_mode_hint == "Remote"
+        assert b_jobs[0].work_mode_hint == "Remote"
+
+    asyncio.run(_run())
+
+
+def test_remote_feeds_fetch_design_and_qa_categories():
+    called_urls: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        called_urls.append(str(request.url))
+        if "github.com" in str(request.url) or "trampos.co" in str(request.url):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"jobs": [], "data": []})
+
+    async def _run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(_handler)
+        ) as http_client:
+            collector = MultiCompanyFeedCollector(http_client)
+            await collector.fetch_all_with_stats()
+
+    asyncio.run(_run())
+
+    joined = "\n".join(called_urls)
+    assert "remotive.com/api/remote-jobs?category=design" in joined
+    assert "remotive.com/api/remote-jobs?category=qa" in joined
+    assert "jobicy.com/api/v2/remote-jobs?count=50&tag=design" in joined
+    assert "jobicy.com/api/v2/remote-jobs?count=50&tag=qa" in joined
+    assert "portal.gupy.io/api/job-search/jobs?jobName=ux" in joined
+    assert "portal.gupy.io/api/job-search/jobs?jobName=designer" in joined
+    assert "portal.gupy.io/api/job-search/jobs?jobName=qa" in joined

@@ -63,10 +63,27 @@ _INTERNSHIP_RE = re.compile(
 
 
 def _compile_word_patterns(terms: Iterable[str]) -> tuple[re.Pattern[str], ...]:
-    return tuple(
-        re.compile(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", re.IGNORECASE)
-        for t in terms
-    )
+    compiled: list[re.Pattern[str]] = []
+    for raw in terms:
+        term = raw.strip().lower()
+        if not term:
+            continue
+        left_boundary = r"(?<![a-z0-9])" if term[0].isalnum() else ""
+        right_boundary = r"(?![a-z0-9])" if term[-1].isalnum() else ""
+        compiled.append(
+            re.compile(
+                rf"{left_boundary}{re.escape(term)}{right_boundary}",
+                re.IGNORECASE,
+            )
+        )
+    return tuple(compiled)
+
+
+@lru_cache(maxsize=32)
+def _cached_word_patterns(
+    terms_key: tuple[str, ...],
+) -> tuple[re.Pattern[str], ...]:
+    return _compile_word_patterns(terms_key)
 
 
 @lru_cache(maxsize=2)
@@ -75,7 +92,7 @@ def _discipline_patterns(
 ) -> dict[str, tuple[re.Pattern[str], ...]]:
     taxonomy = load_taxonomy(dynamic_stacks)
     return {
-        disc: _compile_word_patterns(terms)
+        disc: _cached_word_patterns(tuple(terms))
         for disc, terms in taxonomy.disciplines.items()
     }
 
@@ -115,7 +132,7 @@ def _infer_seniorities(
     inferred = {
         tier
         for tier, markers in taxonomy.seniority_markers.items()
-        if any(p.search(text_blob) for p in _compile_word_patterns(markers))
+        if any(p.search(text_blob) for p in _cached_word_patterns(tuple(markers)))
     }
     return inferred or {"mid", "senior", "staff"}
 
@@ -253,7 +270,7 @@ def load_resume_criteria(
 
 
 def _is_software_role(title_lower: str, taxonomy: TechTaxonomy) -> bool:
-    return any(kw in title_lower for kw in taxonomy.software_role_keywords)
+    return any(kw.lower() in title_lower for kw in taxonomy.software_role_keywords)
 
 
 def _passes_discipline_gate(
@@ -280,7 +297,7 @@ def _passes_seniority_gate(
     title_tiers = {
         tier
         for tier, markers in taxonomy.seniority_markers.items()
-        if any(p.search(title_lower) for p in _compile_word_patterns(markers))
+        if any(p.search(title_lower) for p in _cached_word_patterns(tuple(markers)))
     }
     if not title_tiers:
         return True
@@ -465,9 +482,11 @@ def filter_and_rank_jobs(
         criteria=criteria,
         dynamic_stacks=dynamic_stacks,
         min_skill_matches=min_skill_matches,
-        all_skill_patterns=_compile_word_patterns(criteria.skills),
-        required_core_patterns=_compile_word_patterns(user_core_skills),
-        competing_core_patterns=_compile_word_patterns(competing_core_skills),
+        all_skill_patterns=_cached_word_patterns(tuple(sorted(criteria.skills))),
+        required_core_patterns=_cached_word_patterns(tuple(sorted(user_core_skills))),
+        competing_core_patterns=_cached_word_patterns(
+            tuple(sorted(competing_core_skills))
+        ),
     )
 
     scored = [
