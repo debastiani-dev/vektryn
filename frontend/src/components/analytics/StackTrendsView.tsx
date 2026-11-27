@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
-import type { StackTrendDaily, TechCategory } from "../../types/models";
+import type { StackTrendDaily, StackTrendSeriesResponse, TechCategory } from "../../types/models";
 import { categoryBadgeStyle, formatCategoryLabel, formatUsdAnnual } from "../../utils/format";
 import { PaginationBar } from "../ui/PaginationBar";
 import { Tooltip } from "../ui/Tooltip";
@@ -135,6 +135,7 @@ export function StackTrendsView({
 }: Readonly<StackTrendsViewProps> = {}) {
     const [activeSubTab, setActiveSubTab] = useState<AnalyticsSubTab>("market");
     const [trends, setTrends] = useState<StackTrendDaily[]>([]);
+    const [trendSeries, setTrendSeries] = useState<StackTrendSeriesResponse | null>(null);
     const [totalCount, setTotalCount] = useState(0);
     const [hasNext, setHasNext] = useState(false);
     const [hasPrevious, setHasPrevious] = useState(false);
@@ -184,6 +185,37 @@ export function StackTrendsView({
             cancelled = true;
         };
     }, [category, dateFrom, dateTo, page]);
+
+    useEffect(() => {
+        let cancelled = false;
+        async function loadSeries() {
+            try {
+                const params = new URLSearchParams();
+                if (category !== "all") {
+                    params.set("category", category);
+                }
+                if (dateFrom) {
+                    params.set("date_from", dateFrom);
+                }
+                if (dateTo) {
+                    params.set("date_to", dateTo);
+                }
+                const query = params.toString();
+                const res = await vektrynApi.getTrendSeries(query ? `?${query}` : "");
+                if (!cancelled) {
+                    setTrendSeries(res);
+                }
+            } catch {
+                if (!cancelled) {
+                    setTrendSeries(null);
+                }
+            }
+        }
+        void loadSeries();
+        return () => {
+            cancelled = true;
+        };
+    }, [category, dateFrom, dateTo]);
 
     function toggleSort(column: SortColumn) {
         if (sortBy === column) {
@@ -552,7 +584,13 @@ export function StackTrendsView({
                 </div>
             )}
 
-            {!loading && trends.length > 0 && <StackTrendsChart trends={trends} />}
+            {!loading && (trendSeries ? trendSeries.results.length > 0 : trends.length > 0) && (
+                <StackTrendsChart
+                    trends={trendSeries ? trendSeries.results : trends}
+                    dates={trendSeries?.dates}
+                    tags={trendSeries?.tags}
+                />
+            )}
 
             {renderContent()}
 

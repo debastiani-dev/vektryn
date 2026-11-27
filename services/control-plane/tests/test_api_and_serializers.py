@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 import json
 from pathlib import Path
@@ -53,6 +54,7 @@ from vektryn_contracts.enums import (
     LeadStatus,
     RegionEligibility,
     SeniorityLevel,
+    TechCategory,
 )
 
 User = get_user_model()
@@ -1832,3 +1834,67 @@ def test_health_endpoints_ok_and_prometheus_metrics_removed():
 
     assert client.get("/metrics").status_code == 404
     assert client.get("/metrics/").status_code == 404
+
+
+@pytest.mark.django_db
+def test_stack_trends_series_returns_complete_multiday_top_tags_beyond_page_size():
+    user = User.objects.create_user(username="trends-user", password="secret")
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    today = datetime.now(UTC).date()
+    days = [today - timedelta(days=2), today - timedelta(days=1), today]
+
+    # Create 30 tags on the latest day (> PAGE_SIZE=25) plus multi-day rows for top tags.
+    for idx in range(30):
+        tag_name = f"tag-{idx:02d}"
+        StackTrendDaily.objects.create(
+            bucket_date=days[2],
+            tag=tag_name,
+            category=(
+                TechCategory.LANGUAGE.value if idx < 10 else TechCategory.CLOUD.value
+            ),
+            mention_count=1 + (idx % 3),
+            unique_companies_count=1,
+        )
+
+    for rank, (tag_name, counts) in enumerate(
+        [
+            ("python", [12, 15, 18]),
+            ("typescript", [10, 10, 11]),
+            ("go", [8, 9, 7]),
+            ("rust", [6, 5, 6]),
+            ("java", [5, 5, 5]),
+        ]
+    ):
+        for day, count in zip(days, counts, strict=True):
+            StackTrendDaily.objects.create(
+                bucket_date=day,
+                tag=tag_name,
+                category=TechCategory.LANGUAGE.value,
+                mention_count=count,
+                unique_companies_count=max(1, count - 1),
+                median_annual_usd=Decimal("150000.00") if rank == 0 else None,
+            )
+
+    # Paginated table page 1 only sees 25 rows from the newest day, while /series/ returns all 3 days.
+    page_resp = client.get("/api/v1/analytics/trends/")
+    assert page_resp.status_code == 200
+    page_dates = {row["bucket_date"] for row in page_resp.json()["results"]}
+    assert page_dates == {days[2].isoformat()}
+
+    series_resp = client.get("/api/v1/analytics/trends/series/")
+    assert series_resp.status_code == 200
+    payload = series_resp.json()
+    assert payload["dates"] == [d.isoformat() for d in days]
+    assert payload["tags"] == ["python", "typescript", "go", "rust", "java"]
+    assert len(payload["results"]) == 15
+
+    # Category filter applies identically to /series/
+    cloud_resp = client.get("/api/v1/analytics/trends/series/?category=cloud&limit=3")
+    assert cloud_resp.status_code == 200
+    cloud_payload = cloud_resp.json()
+    assert len(cloud_payload["tags"]) == 3
+    assert all(
+        row["category"] == TechCategory.CLOUD.value for row in cloud_payload["results"]
+    )
