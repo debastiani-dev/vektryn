@@ -12,6 +12,7 @@ ALLOWED_QUERY_PARAM_KEYS = frozenset(
         "evaluated_only",
         "seniority",
         "contract_type",
+        "work_mode",
         "region",
         "ats_source",
         "sort_by",

@@ -21,6 +21,7 @@ describe("savedFilters helpers", () => {
             metadataFilters: {
                 seniority: "senior",
                 contractType: "pj",
+                workMode: "remote",
                 region: "brazil",
                 atsSource: "",
             },
@@ -36,6 +37,7 @@ describe("savedFilters helpers", () => {
             hide_dismissed: false,
             seniority: "senior",
             contract_type: "pj",
+            work_mode: "remote",
             region: "brazil",
             sort_by: "posted_at",
         });
@@ -46,6 +48,7 @@ describe("savedFilters helpers", () => {
             {
                 resume_profile: "deleted-resume-uuid",
                 seniority: "staff",
+                work_mode: "hybrid",
                 min_score: 70,
                 sort_by: "newest",
             },
@@ -54,6 +57,7 @@ describe("savedFilters helpers", () => {
 
         expect(hydrated.resumeFilter).toBe("");
         expect(hydrated.metadataFilters.seniority).toBe("staff");
+        expect(hydrated.metadataFilters.workMode).toBe("hybrid");
         expect(hydrated.minScore).toBe(70);
         expect(hydrated.sortBy).toBe("newest");
         expect(hydrated.untrackedOnly).toBe(false);

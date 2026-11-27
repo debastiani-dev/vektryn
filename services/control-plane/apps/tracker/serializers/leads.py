@@ -11,6 +11,7 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
     )
     apply_url = serializers.CharField(source="job_posting.apply_url", read_only=True)
     ats_source = serializers.CharField(source="job_posting.ats_source", read_only=True)
+    work_mode = serializers.CharField(source="job_posting.work_mode", read_only=True)
 
     class Meta:
         model = ApplicationLead
@@ -22,6 +23,7 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "company_name",
             "apply_url",
             "ats_source",
+            "work_mode",
             "status",
             "priority",
             "notes",

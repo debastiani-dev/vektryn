@@ -11,6 +11,20 @@ from vektryn_contracts import ATSSource
 logger = logging.getLogger(__name__)
 
 
+def _extract_greenhouse_workplace_hint(item: dict) -> str:
+    for entry in item.get("metadata") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").lower()
+        if "workplace" in name or "work mode" in name or "work_mode" in name:
+            val = entry.get("value")
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            if isinstance(val, list) and val:
+                return " ".join(str(v) for v in val if v).strip()
+    return ""
+
+
 class GreenhouseCollector(BaseATSCollector):
     BASE_URL = "https://boards-api.greenhouse.io/v1/boards"
 
@@ -36,6 +50,7 @@ class GreenhouseCollector(BaseATSCollector):
 
             updated_at = item.get("updated_at")
             posted_at = datetime.fromisoformat(updated_at) if updated_at else None
+            work_mode_hint = _extract_greenhouse_workplace_hint(item)
 
             results.append(
                 CollectedJob(
@@ -48,6 +63,7 @@ class GreenhouseCollector(BaseATSCollector):
                     raw_html=raw_html,
                     description_clean=description_clean,
                     posted_at=posted_at,
+                    work_mode_hint=work_mode_hint,
                 )
             )
 

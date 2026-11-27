@@ -43,9 +43,11 @@ import {
     formatSalaryRange,
     formatSeniority,
     formatVectorSimilarity,
+    formatWorkMode,
     isAlertMatch,
     isMailtoUrl,
     scoreVisualTheme,
+    workModeBadgeStyle,
 } from "../../utils/format";
 import {
     clearPendingImport,
@@ -272,6 +274,17 @@ function RadarMatchCard({
                                     </span>
                                 </Tooltip>
                             )}
+
+                            <Tooltip
+                                content="Workplace arrangement"
+                                className="pointer-events-auto inline-flex"
+                            >
+                                <span
+                                    className={`rounded-lg px-2.5 py-1 text-xs font-medium ${workModeBadgeStyle(job.work_mode)}`}
+                                >
+                                    {formatWorkMode(job.work_mode)}
+                                </span>
+                            </Tooltip>
 
                             <Tooltip
                                 content="Employment / contract type"
@@ -925,6 +938,7 @@ function buildMatchesQueryParams(opts: {
     if (opts.metadataFilters.contractType) {
         params.set("contract_type", opts.metadataFilters.contractType);
     }
+    if (opts.metadataFilters.workMode) params.set("work_mode", opts.metadataFilters.workMode);
     if (opts.metadataFilters.region) params.set("region", opts.metadataFilters.region);
     if (opts.metadataFilters.atsSource) params.set("ats_source", opts.metadataFilters.atsSource);
     const orderingParam = resolveRadarOrdering(opts.sortBy);

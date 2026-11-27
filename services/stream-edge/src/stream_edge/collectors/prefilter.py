@@ -11,6 +11,7 @@ import psycopg
 from stream_edge.collectors.base import CollectedJob
 from stream_edge.collectors.taxonomy import TechTaxonomy, load_taxonomy
 from stream_edge.config import settings
+from vektryn_contracts import ATSSource, WorkMode
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,16 @@ _NON_AMERICAS_LOCATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-_HYBRID_OR_ONSITE_RE = re.compile(
-    r"\b(?:hybrid|híbrido|hibrido|presencial|on-?site)\b",
+_REMOTE_MODE_RE = re.compile(
+    r"\b(?:remote|remoto|remota|home[\s_-]*office|work\s+from\s+home|wfh|telecommut\w*|anywhere)\b",
+    re.IGNORECASE,
+)
+_HYBRID_MODE_RE = re.compile(
+    r"\b(?:hybrid|h[ií]brid[oa])\b",
+    re.IGNORECASE,
+)
+_ONSITE_MODE_RE = re.compile(
+    r"\b(?:on[\s_-]*site|in[\s_-]*office|presencial)\b",
     re.IGNORECASE,
 )
 
@@ -54,10 +63,27 @@ _INTERNSHIP_RE = re.compile(
 
 
 def _compile_word_patterns(terms: Iterable[str]) -> tuple[re.Pattern[str], ...]:
-    return tuple(
-        re.compile(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", re.IGNORECASE)
-        for t in terms
-    )
+    compiled: list[re.Pattern[str]] = []
+    for raw in terms:
+        term = raw.strip().lower()
+        if not term:
+            continue
+        left_boundary = r"(?<![a-z0-9])" if term[0].isalnum() else ""
+        right_boundary = r"(?![a-z0-9])" if term[-1].isalnum() else ""
+        compiled.append(
+            re.compile(
+                rf"{left_boundary}{re.escape(term)}{right_boundary}",
+                re.IGNORECASE,
+            )
+        )
+    return tuple(compiled)
+
+
+@lru_cache(maxsize=32)
+def _cached_word_patterns(
+    terms_key: tuple[str, ...],
+) -> tuple[re.Pattern[str], ...]:
+    return _compile_word_patterns(terms_key)
 
 
 @lru_cache(maxsize=2)
@@ -66,7 +92,7 @@ def _discipline_patterns(
 ) -> dict[str, tuple[re.Pattern[str], ...]]:
     taxonomy = load_taxonomy(dynamic_stacks)
     return {
-        disc: _compile_word_patterns(terms)
+        disc: _cached_word_patterns(tuple(terms))
         for disc, terms in taxonomy.disciplines.items()
     }
 
@@ -79,6 +105,7 @@ class ResumeFilterCriteria:
     target_contract_types: frozenset[str]
     target_regions: frozenset[str]
     active_disciplines: frozenset[str]
+    target_work_modes: frozenset[str] = frozenset()
 
     @property
     def wants_remote_or_latam(self) -> bool:
@@ -105,7 +132,7 @@ def _infer_seniorities(
     inferred = {
         tier
         for tier, markers in taxonomy.seniority_markers.items()
-        if any(p.search(text_blob) for p in _compile_word_patterns(markers))
+        if any(p.search(text_blob) for p in _cached_word_patterns(tuple(markers)))
     }
     return inferred or {"mid", "senior", "staff"}
 
@@ -124,34 +151,52 @@ def _parse_str_list(raw_val: object) -> list[str]:
 
 def _collect_profile_rows(
     rows: list[tuple[object, ...]],
-) -> tuple[list[str], set[str], set[str], set[str], set[str], list[str]]:
+) -> tuple[list[str], set[str], set[str], set[str], set[str], set[str], list[str]]:
     resume_ids: list[str] = []
     skills: set[str] = set()
     seniorities: set[str] = set()
     contracts: set[str] = set()
     regions: set[str] = set()
+    work_modes: set[str] = set()
+    has_unrestricted_work_mode = False
     discipline_blobs: list[str] = []
 
-    for (
-        row_uuid,
-        label,
-        raw_text,
-        raw_skills,
-        raw_sen,
-        raw_contract,
-        raw_region,
-    ) in rows:
+    for row in rows:
+        (
+            row_uuid,
+            label,
+            raw_text,
+            raw_skills,
+            raw_sen,
+            raw_contract,
+            raw_region,
+            *extra,
+        ) = row
         resume_ids.append(str(row_uuid))
         clean_skills = _parse_str_list(raw_skills)
         skills.update(clean_skills)
         seniorities.update(_parse_str_list(raw_sen))
         contracts.update(_parse_str_list(raw_contract))
         regions.update(_parse_str_list(raw_region))
+        row_work_modes = _parse_str_list(extra[0]) if extra else []
+        if not row_work_modes:
+            has_unrestricted_work_mode = True
+        else:
+            work_modes.update(row_work_modes)
         discipline_blobs.append(
             f"{label or ''}\n{' '.join(clean_skills)}\n{(raw_text or '')[:1500]}"
         )
 
-    return resume_ids, skills, seniorities, contracts, regions, discipline_blobs
+    resolved_work_modes = set() if has_unrestricted_work_mode else work_modes
+    return (
+        resume_ids,
+        skills,
+        seniorities,
+        contracts,
+        regions,
+        resolved_work_modes,
+        discipline_blobs,
+    )
 
 
 def load_resume_criteria(
@@ -161,7 +206,7 @@ def load_resume_criteria(
 ) -> ResumeFilterCriteria | None:
     """Load DB target constraints first, falling back to resume text inference when empty."""
     query = """
-        SELECT r.uuid, r.label, r.raw_text, r.extracted_skills, r.target_seniority, r.target_contract_types, r.target_regions
+        SELECT r.uuid, r.label, r.raw_text, r.extracted_skills, r.target_seniority, r.target_contract_types, r.target_regions, r.target_work_modes
         FROM resumes_resumeprofile r
         INNER JOIN auth_user u
           ON u.id = r.user_id
@@ -187,9 +232,15 @@ def load_resume_criteria(
         return None
 
     taxonomy = load_taxonomy(dynamic_stacks)
-    resume_ids, skills, db_seniorities, db_contracts, db_regions, blobs = (
-        _collect_profile_rows(rows)
-    )
+    (
+        resume_ids,
+        skills,
+        db_seniorities,
+        db_contracts,
+        db_regions,
+        db_work_modes,
+        blobs,
+    ) = _collect_profile_rows(rows)
     combined_blob = "\n".join(blobs)
 
     resolved_seniorities = db_seniorities or _infer_seniorities(combined_blob, taxonomy)
@@ -203,21 +254,23 @@ def load_resume_criteria(
         target_contract_types=frozenset(db_contracts),
         target_regions=frozenset(resolved_regions),
         active_disciplines=active_disciplines,
+        target_work_modes=frozenset(db_work_modes),
     )
     logger.info(
-        "Loaded pre-filter criteria from %d resume(s): skills=%d, disciplines=%s, seniority=%s, contracts=%s, regions=%s",
+        "Loaded pre-filter criteria from %d resume(s): skills=%d, disciplines=%s, seniority=%s, contracts=%s, regions=%s, work_modes=%s",
         len(resume_ids),
         len(criteria.skills),
         sorted(criteria.active_disciplines),
         sorted(criteria.target_seniority),
         sorted(criteria.target_contract_types),
         sorted(criteria.target_regions),
+        sorted(criteria.target_work_modes) if criteria.target_work_modes else ["*"],
     )
     return criteria
 
 
 def _is_software_role(title_lower: str, taxonomy: TechTaxonomy) -> bool:
-    return any(kw in title_lower for kw in taxonomy.software_role_keywords)
+    return any(kw.lower() in title_lower for kw in taxonomy.software_role_keywords)
 
 
 def _passes_discipline_gate(
@@ -244,7 +297,7 @@ def _passes_seniority_gate(
     title_tiers = {
         tier
         for tier, markers in taxonomy.seniority_markers.items()
-        if any(p.search(title_lower) for p in _compile_word_patterns(markers))
+        if any(p.search(title_lower) for p in _cached_word_patterns(tuple(markers)))
     }
     if not title_tiers:
         return True
@@ -276,6 +329,43 @@ def _passes_contract_gate(
     return bool(detected_contracts & target_contract_types)
 
 
+def _classify_work_mode_text(text: str) -> WorkMode:
+    if not text or not text.strip():
+        return WorkMode.UNKNOWN
+    has_hybrid = bool(_HYBRID_MODE_RE.search(text))
+    has_onsite = bool(_ONSITE_MODE_RE.search(text))
+    has_remote = bool(_REMOTE_MODE_RE.search(text))
+    if has_hybrid:
+        return WorkMode.HYBRID
+    if has_onsite and not has_remote:
+        return WorkMode.ONSITE
+    if has_remote and not has_onsite:
+        return WorkMode.REMOTE
+    return WorkMode.UNKNOWN
+
+
+def detect_deterministic_work_mode(job: CollectedJob) -> WorkMode:
+    """Detect high-confidence workplace signals from ATS metadata and title/location."""
+    hint_mode = _classify_work_mode_text(job.work_mode_hint)
+    if hint_mode != WorkMode.UNKNOWN:
+        return hint_mode
+    return _classify_work_mode_text(f"{job.title}\n{job.location_raw}")
+
+
+def _passes_work_mode_gate(
+    job: CollectedJob,
+    criteria: ResumeFilterCriteria,
+) -> bool:
+    if job.ats_source == ATSSource.MANUAL:
+        return True
+    if not criteria.target_work_modes:
+        return True
+    detected = detect_deterministic_work_mode(job)
+    if detected in (WorkMode.ONSITE, WorkMode.HYBRID):
+        return detected.value in criteria.target_work_modes
+    return True
+
+
 def _passes_location_gate(
     title_lower: str,
     location_lower: str,
@@ -286,11 +376,6 @@ def _passes_location_gate(
         return True
 
     if _NON_AMERICAS_LOCATION_RE.search(f"{title_lower}\n{location_lower}"):
-        return False
-
-    if _HYBRID_OR_ONSITE_RE.search(title_lower) and not any(
-        m in title_lower for m in ("remote", "remoto", "remota", "anywhere")
-    ):
         return False
 
     allows_explicitly = any(
@@ -328,10 +413,14 @@ def _has_competing_title_stack(
 
 
 def _score_job(job: CollectedJob, ctx: _CompiledFilterContext) -> int | None:
+    if job.ats_source == ATSSource.MANUAL:
+        return 1000
     title_lower = job.title.lower()
     location_lower = job.location_raw.lower()
     desc_lower = job.description_clean.lower()
 
+    if not _passes_work_mode_gate(job, ctx.criteria):
+        return None
     if not _passes_discipline_gate(
         title_lower, ctx.criteria.active_disciplines, ctx.dynamic_stacks
     ):
@@ -376,7 +465,12 @@ def filter_and_rank_jobs(
 ) -> list[CollectedJob]:
     """Filter collected ATS postings dynamically against resume profile and rank by skill overlap."""
     taxonomy = load_taxonomy(dynamic_stacks)
-    role_jobs = [job for job in jobs if _is_software_role(job.title.lower(), taxonomy)]
+    role_jobs = [
+        job
+        for job in jobs
+        if job.ats_source == ATSSource.MANUAL
+        or _is_software_role(job.title.lower(), taxonomy)
+    ]
     if criteria is None:
         return role_jobs
 
@@ -388,9 +482,11 @@ def filter_and_rank_jobs(
         criteria=criteria,
         dynamic_stacks=dynamic_stacks,
         min_skill_matches=min_skill_matches,
-        all_skill_patterns=_compile_word_patterns(criteria.skills),
-        required_core_patterns=_compile_word_patterns(user_core_skills),
-        competing_core_patterns=_compile_word_patterns(competing_core_skills),
+        all_skill_patterns=_cached_word_patterns(tuple(sorted(criteria.skills))),
+        required_core_patterns=_cached_word_patterns(tuple(sorted(user_core_skills))),
+        competing_core_patterns=_cached_word_patterns(
+            tuple(sorted(competing_core_skills))
+        ),
     )
 
     scored = [

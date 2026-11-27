@@ -30,11 +30,12 @@ describe("radarFilters", () => {
                 metadataFilters: {
                     seniority: "senior",
                     contractType: "pj",
+                    workMode: "remote",
                     region: "",
                     atsSource: "manual",
                 },
             }),
-        ).toBe(5);
+        ).toBe(6);
     });
 
     it("builds removable active chips with readable labels", () => {
@@ -45,6 +46,7 @@ describe("radarFilters", () => {
             metadataFilters: {
                 seniority: "senior",
                 contractType: "pj",
+                workMode: "onsite",
                 region: "brazil",
                 atsSource: "manual",
             },
@@ -55,6 +57,7 @@ describe("radarFilters", () => {
             { key: "minScore", prefix: "Min Fit", label: "80%+" },
             { key: "seniority", prefix: "Seniority", label: "Senior" },
             { key: "contractType", prefix: "Contract", label: "PJ" },
+            { key: "workMode", prefix: "Work Mode", label: "On-site" },
             { key: "region", prefix: "Region", label: "Brazil" },
             { key: "atsSource", prefix: "Source", label: "Manual Import" },
         ]);

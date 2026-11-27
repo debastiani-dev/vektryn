@@ -13,6 +13,7 @@ from vektryn_contracts.enums import (
     RegionEligibility,
     SalaryPeriod,
     SeniorityLevel,
+    WorkMode,
 )
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS, validate_apply_url
 
@@ -51,6 +52,13 @@ class JobPosting(BaseModel):
         max_length=32,
         choices=enum_choices(ContractType),
         default=ContractType.UNKNOWN,
+    )
+    work_mode = models.CharField(
+        max_length=16,
+        choices=enum_choices(WorkMode),
+        default=WorkMode.UNKNOWN,
+        db_default=WorkMode.UNKNOWN,
+        db_index=True,
     )
     region_eligibility = ArrayField(
         base_field=models.CharField(

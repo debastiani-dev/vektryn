@@ -13,6 +13,7 @@ class JobPostingAdmin(admin.ModelAdmin):
         "ats_source",
         "seniority",
         "contract_type",
+        "work_mode",
         "is_active",
         "created_at",
     )
@@ -20,6 +21,7 @@ class JobPostingAdmin(admin.ModelAdmin):
         "ats_source",
         "seniority",
         "contract_type",
+        "work_mode",
         "is_active",
         "is_deleted",
     )

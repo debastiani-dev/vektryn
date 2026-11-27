@@ -1,7 +1,8 @@
-import { ArrowLeft, Clock, Info, Lock, LogIn, Radar, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Clock, Info, Lock, LogIn, ShieldAlert } from "lucide-react";
 import { type MouseEvent, type SubmitEvent, useEffect, useState } from "react";
 import { ApiError, vektrynApi } from "../../api/client";
 import type { CurrentUser } from "../../types/models";
+import { VektrynLogo } from "../ui/VektrynLogo";
 
 interface LoginViewProps {
     onAuthenticated: (user: CurrentUser) => void;
@@ -125,8 +126,8 @@ export function LoginView({
                 )}
 
                 <div className="flex flex-col items-center space-y-3 text-center">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/25 to-fuchsia-500/15 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/15">
-                        <Radar className="h-6 w-6 text-violet-300" />
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-900 ring-1 ring-zinc-800">
+                        <VektrynLogo className="h-9 w-9" />
                     </div>
                     <div className="space-y-1">
                         <h1 className="font-mono text-2xl font-semibold tracking-tight text-zinc-100">

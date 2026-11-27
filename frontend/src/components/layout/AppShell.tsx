@@ -12,6 +12,7 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { CurrentUser, LiveMatchAlert, UserProfileDetail } from "../../types/models";
 import { Tooltip } from "../ui/Tooltip";
+import { VektrynLogo } from "../ui/VektrynLogo";
 import { AccountSettingsModal } from "./AccountSettingsModal";
 import { LiveAlertBanner } from "./LiveAlertBanner";
 import { NotificationCenter, type NotificationCenterProps } from "./NotificationCenter";
@@ -237,8 +238,8 @@ export function AppShell({
                             side="bottom"
                         >
                             <div className="flex items-center gap-3">
-                                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500/25 to-fuchsia-500/15 ring-1 ring-violet-500/40 shadow-sm shadow-violet-500/10">
-                                    <Radar className="h-5 w-5 text-violet-300" />
+                                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
+                                    <VektrynLogo className="h-7 w-7" />
                                 </div>
                                 <span className="font-mono text-lg font-semibold tracking-tight text-zinc-100">
                                     vektryn

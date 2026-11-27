@@ -36,9 +36,11 @@ import {
     formatSalaryRange,
     formatScoreLabel,
     formatVectorSimilarity,
+    formatWorkMode,
     isAlertMatch,
     isMailtoUrl,
     scoreBadgeStyle,
+    workModeBadgeStyle,
 } from "../../utils/format";
 import {
     formatFollowupDate,
@@ -356,10 +358,11 @@ function PipelineLeadCard({
         )
         : null;
     const locationLabel = job ? job.location_raw || "Remote" : null;
+    const workMode = job?.work_mode ?? lead.work_mode ?? null;
     const contractLabel =
         job && job.contract_type !== "unknown" ? formatContractType(job.contract_type) : null;
     const isClosed = job ? !job.is_active : false;
-    const hasDecisionMeta = Boolean(salaryLabel || locationLabel || contractLabel);
+    const hasDecisionMeta = Boolean(salaryLabel || locationLabel || workMode || contractLabel);
     const cardAccentClass = getCardAccentClass(overdue, lead.priority);
 
     return (
@@ -431,6 +434,15 @@ function PipelineLeadCard({
                             <MapPin className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
                             <span className="truncate">{locationLabel}</span>
                         </span>
+                    )}
+                    {workMode && (
+                        <Tooltip content="Workplace arrangement">
+                            <span
+                                className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${workModeBadgeStyle(workMode)}`}
+                            >
+                                {formatWorkMode(workMode)}
+                            </span>
+                        </Tooltip>
                     )}
                     {contractLabel && (
                         <Tooltip content="Employment / contract type">

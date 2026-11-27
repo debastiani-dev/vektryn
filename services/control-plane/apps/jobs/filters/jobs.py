@@ -6,6 +6,7 @@ from apps.jobs.models.jobs import JobPosting
 class JobPostingFilter(django_filters.FilterSet):
     tech = django_filters.CharFilter(method="filter_tech")
     region = django_filters.CharFilter(method="filter_region")
+    work_mode = django_filters.CharFilter(method="filter_work_mode")
     min_salary = django_filters.NumberFilter(field_name="salary_max", lookup_expr="gte")
 
     class Meta:
@@ -29,3 +30,9 @@ class JobPostingFilter(django_filters.FilterSet):
         if not regions:
             return queryset
         return queryset.filter(region_eligibility__overlap=regions)
+
+    def filter_work_mode(self, queryset, _name: str, value: str):
+        modes = [m.strip().lower() for m in value.split(",") if m.strip()]
+        if not modes:
+            return queryset
+        return queryset.filter(work_mode__in=modes)

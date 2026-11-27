@@ -59,6 +59,13 @@ class RegionEligibility(StrEnum):
     UNKNOWN = "unknown"
 
 
+class WorkMode(StrEnum):
+    REMOTE = "remote"
+    HYBRID = "hybrid"
+    ONSITE = "onsite"
+    UNKNOWN = "unknown"
+
+
 class SalaryPeriod(StrEnum):
     HOURLY = "hourly"
     MONTHLY = "monthly"

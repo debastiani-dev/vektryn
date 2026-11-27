@@ -23,6 +23,7 @@ class CollectedJob(BaseModel):
     raw_html: str
     description_clean: str
     posted_at: datetime | None = None
+    work_mode_hint: str = ""
 
 
 def html_to_clean_text(raw_html: str) -> str:
@@ -64,7 +65,7 @@ async def push_jobs_with_stats(
         try:
             resp = await http_client.post(
                 endpoint,
-                json=job.model_dump(mode="json"),
+                json=job.model_dump(mode="json", exclude={"work_mode_hint"}),
                 headers=headers,
                 timeout=15.0,
             )

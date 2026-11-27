@@ -21,6 +21,7 @@ import type {
     JobPostingDetail,
     MatchScore,
     SeniorityLevel,
+    WorkMode,
 } from "../../types/models";
 import {
     formatApplyLinkLabel,
@@ -32,7 +33,9 @@ import {
     formatRelativeTime,
     formatSalaryRange,
     formatSeniority,
+    formatWorkMode,
     isMailtoUrl,
+    workModeBadgeStyle,
 } from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -46,6 +49,7 @@ export interface JobListingPreview {
     location_raw?: string;
     seniority?: SeniorityLevel;
     contract_type?: ContractType;
+    work_mode?: WorkMode;
     region_eligibility?: string[];
     salary_min?: string | null;
     salary_max?: string | null;
@@ -383,6 +387,14 @@ export function JobPostingDrawer({
                                     </span>
                                 </Tooltip>
                             )}
+
+                            <Tooltip content="Workplace arrangement" side="bottom">
+                                <span
+                                    className={`rounded-lg px-2.5 py-1 text-xs font-medium ${workModeBadgeStyle(job.work_mode)}`}
+                                >
+                                    {formatWorkMode(job.work_mode)}
+                                </span>
+                            </Tooltip>
 
                             {contractLabel && (
                                 <Tooltip content="Employment / contract type" side="bottom">

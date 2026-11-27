@@ -27,10 +27,12 @@ import {
     formatSalaryRange,
     formatScoreLabel,
     formatSeniority,
+    formatWorkMode,
     isAlertMatch,
     isMailtoUrl,
     scoreBadgeStyle,
     scoreVisualTheme,
+    workModeBadgeStyle,
 } from "../../utils/format";
 import { splitLegacySummaryParagraphs } from "../../utils/fitSummary";
 import { Tooltip } from "../ui/Tooltip";
@@ -458,6 +460,14 @@ function GapAnalysisDrawerContent({
                                     </span>
                                 </Tooltip>
                             )}
+
+                            <Tooltip content="Workplace arrangement" side="bottom">
+                                <span
+                                    className={`rounded-lg px-2.5 py-1 text-xs font-medium ${workModeBadgeStyle(job.work_mode)}`}
+                                >
+                                    {formatWorkMode(job.work_mode)}
+                                </span>
+                            </Tooltip>
 
                             <Tooltip content="Employment / contract type" side="bottom">
                                 <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-300">

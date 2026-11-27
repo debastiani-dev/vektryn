@@ -24,6 +24,7 @@ from vektryn_contracts.enums import (
     SalaryPeriod,
     SeniorityLevel,
     TechCategory,
+    WorkMode,
 )
 from vektryn_contracts.events import (
     EMBEDDING_DIMENSIONS,
@@ -115,6 +116,7 @@ __all__ = [
     "SeniorityLevel",
     "TechCategory",
     "ThinkingLevelName",
+    "WorkMode",
     "alert_partition_key",
     "all_user_gemini_state_keys",
     "build_fernet",

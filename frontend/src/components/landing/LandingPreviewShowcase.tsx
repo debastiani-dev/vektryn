@@ -26,6 +26,7 @@ import {
     XCircle,
 } from "lucide-react";
 import { type KeyboardEvent, useRef, useState } from "react";
+import { VektrynLogo } from "../ui/VektrynLogo";
 import {
     COPILOT_DRAFTS_PREVIEW,
     type CopilotArtifactKind,
@@ -817,11 +818,8 @@ export function LandingPreviewShowcase() {
                             <div className="flex flex-wrap items-center justify-between gap-3">
                                 <div className="flex flex-wrap items-center gap-4">
                                     <div className="flex items-center gap-2.5">
-                                        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500/25 to-fuchsia-500/15 ring-1 ring-violet-500/40">
-                                            <Radar
-                                                className="h-4 w-4 text-violet-300"
-                                                aria-hidden="true"
-                                            />
+                                        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
+                                            <VektrynLogo className="h-6 w-6" />
                                         </span>
                                         <span className="font-mono text-sm font-semibold tracking-tight text-zinc-100">
                                             vektryn

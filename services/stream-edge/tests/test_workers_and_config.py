@@ -845,7 +845,8 @@ def test_evaluate_resume_fit_prompt_is_discipline_agnostic_and_fit_focused():
     )
 
     assert "core backend/architecture overlap" not in prompt
-    assert "actual engineering discipline" in prompt
+    assert "actual discipline" in prompt
+    assert "ui_ux" in prompt
     assert "fit_highlights:" in prompt
     assert "watchout_note:" in prompt
     assert "TARGET ROLE: Staff Frontend Engineer @ Acme" in prompt

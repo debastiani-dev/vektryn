@@ -79,6 +79,7 @@ class _JobCandidate:
     contract_type: str
     region_eligibility: list[str]
     tech_stack: list[str]
+    work_mode: str = "unknown"
     ats_source: str = ""
     submitted_by_user_id: int | uuid.UUID | None = None
 
@@ -105,7 +106,13 @@ def _matches_profile_constraints(
     target_seniority: list[str] | None,
     target_contract_types: list[str] | None,
     target_regions: list[str] | None,
+    work_mode: str = "unknown",
+    target_work_modes: list[str] | None = None,
 ) -> bool:
+    if target_work_modes:
+        if work_mode not in target_work_modes:
+            return False
+
     if target_seniority and seniority != "unknown":
         if seniority not in target_seniority:
             return False
@@ -235,7 +242,7 @@ def _upsert_job_posting(
             ats_source, external_id, content_hash,
             title, company_name, apply_url, raw_html_gcs_uri,
             location_raw, description_clean,
-            seniority, contract_type, region_eligibility,
+            seniority, contract_type, work_mode, region_eligibility,
             salary_min, salary_max, salary_currency, salary_period,
             tech_stack, embedding, is_active, posted_at
         )
@@ -244,7 +251,7 @@ def _upsert_job_posting(
             %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s,
-            %s, %s, %s,
+            %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s::jsonb, %s::vector, TRUE, %s
         )
@@ -260,6 +267,7 @@ def _upsert_job_posting(
             description_clean = EXCLUDED.description_clean,
             seniority = EXCLUDED.seniority,
             contract_type = EXCLUDED.contract_type,
+            work_mode = EXCLUDED.work_mode,
             region_eligibility = EXCLUDED.region_eligibility,
             salary_min = EXCLUDED.salary_min,
             salary_max = EXCLUDED.salary_max,
@@ -287,6 +295,7 @@ def _upsert_job_posting(
             enriched.description_clean,
             enriched.seniority.value,
             enriched.contract_type.value,
+            enriched.work_mode.value,
             region_list,
             enriched.salary_min,
             enriched.salary_max,
@@ -585,6 +594,7 @@ def _score_and_persist_pair(
     cosine_val: float,
     scoring_manager: UserGeminiScoringManager,
     user_api_key: str | None,
+    target_work_modes: list[str] | None = None,
     preferred_model: str = AUTO_GEMINI_MODEL,
     allow_model_fallback: bool = True,
     replace_evaluation: bool = False,
@@ -603,6 +613,8 @@ def _score_and_persist_pair(
                 target_seniority=target_seniority,
                 target_contract_types=target_contract_types,
                 target_regions=target_regions,
+                work_mode=job.work_mode,
+                target_work_modes=target_work_modes,
             )
         )
     )
@@ -702,6 +714,7 @@ def _upsert_job_and_score_sync(
                 contract_type=enriched.contract_type.value,
                 region_eligibility=[r.value for r in enriched.region_eligibility],
                 tech_stack=enriched.tech_stack,
+                work_mode=enriched.work_mode.value,
                 ats_source=enriched.ats_source.value,
                 submitted_by_user_id=enriched.submitted_by_user_id,
             )
@@ -722,7 +735,8 @@ def _upsert_job_and_score_sync(
                     GREATEST(0.0, LEAST(1.0, 1 - (r.embedding <=> %s::vector))) AS cosine_sim,
                     COALESCE(p.gemini_api_key_encrypted, '') AS gemini_api_key_encrypted,
                     COALESCE(p.preferred_gemini_model, 'auto') AS preferred_gemini_model,
-                    COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback
+                    COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback,
+                    r.target_work_modes
                 FROM resumes_resumeprofile r
                 INNER JOIN auth_user u
                   ON u.id = r.user_id
@@ -763,6 +777,11 @@ def _upsert_job_and_score_sync(
                     else AUTO_GEMINI_MODEL
                 )
                 allow_fallback = bool(byok_cols[2]) if len(byok_cols) >= 3 else True
+                target_work_modes = (
+                    list(byok_cols[3])
+                    if len(byok_cols) >= 4 and byok_cols[3] is not None
+                    else None
+                )
 
                 try:
                     user_api_key = _decrypt_user_byok_key(
@@ -787,6 +806,7 @@ def _upsert_job_and_score_sync(
                         cosine_val=float(cosine_sim),
                         scoring_manager=scoring_manager,
                         user_api_key=user_api_key,
+                        target_work_modes=target_work_modes,
                         preferred_model=preferred_model,
                         allow_model_fallback=allow_fallback,
                         replace_evaluation=False,
@@ -834,7 +854,8 @@ def _select_rescore_candidates(
                 j.region_eligibility,
                 j.tech_stack,
                 GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
-                j.ats_source
+                j.ats_source,
+                j.work_mode
             FROM jobs_jobposting j
             LEFT JOIN matching_matchscore m
               ON m.job_posting_id = j.uuid
@@ -865,7 +886,8 @@ def _select_rescore_candidates(
             j.region_eligibility,
             j.tech_stack,
             GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
-            j.ats_source
+            j.ats_source,
+            j.work_mode
         FROM jobs_jobposting j
         INNER JOIN matching_matchscore m
           ON m.job_posting_id = j.uuid
@@ -899,7 +921,8 @@ def _select_rescore_candidates(
             j.region_eligibility,
             j.tech_stack,
             GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
-            j.ats_source
+            j.ats_source,
+            j.work_mode
         FROM jobs_jobposting j
         WHERE j.is_deleted = FALSE
           AND j.is_active = TRUE
@@ -936,6 +959,7 @@ class _RescoreContext:
     user_api_key: str
     preferred_model: str
     allow_fallback: bool
+    target_work_modes: list[str] | None = None
 
 
 def _load_rescore_context(
@@ -961,7 +985,8 @@ def _load_rescore_context(
             r.label,
             COALESCE(p.gemini_api_key_encrypted, '') AS gemini_api_key_encrypted,
             COALESCE(p.preferred_gemini_model, 'auto') AS preferred_gemini_model,
-            COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback
+            COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback,
+            r.target_work_modes
         FROM resumes_resumeprofile r
         INNER JOIN auth_user u
           ON u.id = r.user_id
@@ -1011,6 +1036,11 @@ def _load_rescore_context(
         else AUTO_GEMINI_MODEL
     )
     allow_fallback = bool(extra_profile[3]) if len(extra_profile) >= 4 else True
+    target_work_modes = (
+        list(extra_profile[4])
+        if len(extra_profile) >= 5 and extra_profile[4] is not None
+        else None
+    )
 
     user_api_key = _decrypt_user_byok_key(
         user_id=int(user_id),
@@ -1048,6 +1078,7 @@ def _load_rescore_context(
         user_api_key=user_api_key,
         preferred_model=preferred_model,
         allow_fallback=allow_fallback,
+        target_work_modes=target_work_modes,
     )
 
 
@@ -1066,6 +1097,7 @@ def _row_to_job_candidate(row: tuple) -> tuple[_JobCandidate, float]:
         *rest,
     ) = row
     ats_source = str(rest[0]) if rest else ""
+    work_mode = str(rest[1]) if len(rest) >= 2 and rest[1] else "unknown"
     return (
         _JobCandidate(
             uuid=job_uuid,
@@ -1077,6 +1109,7 @@ def _row_to_job_candidate(row: tuple) -> tuple[_JobCandidate, float]:
             contract_type=contract_type,
             region_eligibility=list(region_eligibility or []),
             tech_stack=_parse_json_list(tech_stack),
+            work_mode=work_mode,
             ats_source=ats_source,
         ),
         float(cosine_sim),
@@ -1116,6 +1149,7 @@ def _score_rescore_candidates(
                 cosine_val=cosine_val,
                 scoring_manager=scoring_manager,
                 user_api_key=ctx.user_api_key,
+                target_work_modes=ctx.target_work_modes,
                 preferred_model=ctx.preferred_model,
                 allow_model_fallback=ctx.allow_fallback,
                 replace_evaluation=True,

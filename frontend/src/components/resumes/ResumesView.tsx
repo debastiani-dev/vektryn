@@ -16,12 +16,14 @@ import {
 } from "lucide-react";
 import { type SubmitEvent, useEffect, useState } from "react";
 import { ApiError, formatApiError, vektrynApi } from "../../api/client";
-import type { ContractType, ResumeProfile, SeniorityLevel } from "../../types/models";
+import type { ContractType, ResumeProfile, SeniorityLevel, WorkMode } from "../../types/models";
 import {
     formatContractType,
     formatExactDate,
     formatRegionEligibility,
     formatSeniority,
+    formatWorkMode,
+    workModeBadgeStyle,
 } from "../../utils/format";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -43,6 +45,48 @@ const CONTRACT_OPTIONS: ContractType[] = [
     "c2c",
     "eor",
 ];
+
+const WORK_MODE_OPTIONS: WorkMode[] = ["remote", "hybrid", "onsite", "unknown"];
+
+export function TargetWorkModesField({
+    selected,
+    onToggle,
+}: Readonly<{
+    selected: ReadonlyArray<WorkMode>;
+    onToggle: (mode: WorkMode) => void;
+}>) {
+    return (
+        <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
+                Target Work Modes
+            </p>
+            <div className="flex flex-wrap gap-2">
+                {WORK_MODE_OPTIONS.map((mode) => {
+                    const active = selected.includes(mode);
+                    return (
+                        <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => onToggle(mode)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${active
+                                    ? "bg-emerald-600 text-white"
+                                    : "border border-zinc-800 bg-zinc-950/70 text-zinc-400 hover:text-zinc-200"
+                                }`}
+                        >
+                            {formatWorkMode(mode)}
+                        </button>
+                    );
+                })}
+            </div>
+            <p className="text-xs text-zinc-500">
+                Include <strong className="font-medium text-zinc-400">Unknown</strong> to also
+                evaluate postings where work mode isn&apos;t stated or couldn&apos;t be extracted
+                by AI. Leave all unselected to match any work mode.
+            </p>
+        </div>
+    );
+}
 
 const REGION_OPTIONS: string[] = [
     "brazil",
@@ -311,7 +355,27 @@ function ResumeProfileCard({
                 </div>
             )}
 
-            <div className="grid gap-4 border-t border-zinc-800/70 pt-4 sm:grid-cols-3">
+            <div className="grid gap-4 border-t border-zinc-800/70 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="space-y-1.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                        Target Work Modes
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                        {(profile.target_work_modes ?? []).length > 0 ? (
+                            profile.target_work_modes.map((mode) => (
+                                <span
+                                    key={mode}
+                                    className={`rounded-md px-2 py-0.5 text-xs font-medium ${workModeBadgeStyle(mode)}`}
+                                >
+                                    {formatWorkMode(mode)}
+                                </span>
+                            ))
+                        ) : (
+                            <span className="text-xs text-zinc-500">Any</span>
+                        )}
+                    </div>
+                </div>
+
                 <div className="space-y-1.5">
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
                         Target Seniority
@@ -450,6 +514,7 @@ export function ResumesView({
     const [targetSeniority, setTargetSeniority] = useState<SeniorityLevel[]>([]);
     const [targetContracts, setTargetContracts] = useState<ContractType[]>([]);
     const [targetRegions, setTargetRegions] = useState<string[]>([]);
+    const [targetWorkModes, setTargetWorkModes] = useState<WorkMode[]>(["remote"]);
     const [isActive, setIsActive] = useState(true);
 
     useEffect(() => {
@@ -486,6 +551,7 @@ export function ResumesView({
         setTargetSeniority([]);
         setTargetContracts([]);
         setTargetRegions([]);
+        setTargetWorkModes(["remote"]);
         setIsActive(true);
         clearError();
         setFormOpen(true);
@@ -500,6 +566,7 @@ export function ResumesView({
         setTargetSeniority(profile.target_seniority);
         setTargetContracts(profile.target_contract_types);
         setTargetRegions(profile.target_regions);
+        setTargetWorkModes(profile.target_work_modes ?? ["remote"]);
         setIsActive(profile.is_active);
         clearError();
         setFormOpen(true);
@@ -529,6 +596,7 @@ export function ResumesView({
                 target_seniority: targetSeniority,
                 target_contract_types: targetContracts,
                 target_regions: targetRegions,
+                target_work_modes: targetWorkModes,
                 is_active: isActive,
             };
 
@@ -858,6 +926,13 @@ export function ResumesView({
                     </div>
 
                     <div className="space-y-4">
+                        <TargetWorkModesField
+                            selected={targetWorkModes}
+                            onToggle={(mode) =>
+                                setTargetWorkModes((prev) => toggleItem(prev, mode))
+                            }
+                        />
+
                         <div className="space-y-2">
                             <p className="text-xs font-medium uppercase tracking-wider text-zinc-400">
                                 Target Seniority

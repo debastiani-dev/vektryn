@@ -18,6 +18,8 @@ export type ContractType =
     | "eor"
     | "unknown";
 
+export type WorkMode = "remote" | "hybrid" | "onsite" | "unknown";
+
 export type LeadStatus =
     | "discovered"
     | "saved"
@@ -50,6 +52,7 @@ export interface JobPostingSummary {
     location_raw: string;
     seniority: SeniorityLevel;
     contract_type: ContractType;
+    work_mode: WorkMode;
     region_eligibility: string[];
     salary_min: string | null;
     salary_max: string | null;
@@ -98,6 +101,7 @@ export interface ApplicationLead {
     company_name?: string;
     apply_url?: string;
     ats_source?: string;
+    work_mode?: WorkMode;
     status: LeadStatus;
     priority: LeadPriority;
     applied_at: string | null;
@@ -115,6 +119,7 @@ export interface SavedFilterQueryParams {
     evaluated_only?: boolean;
     seniority?: string;
     contract_type?: string;
+    work_mode?: string;
     region?: string;
     ats_source?: string;
     sort_by?: string;
@@ -358,6 +363,7 @@ export interface ResumeProfile {
     target_seniority: SeniorityLevel[];
     target_contract_types: ContractType[];
     target_regions: string[];
+    target_work_modes: WorkMode[];
     min_alert_score: number;
     raw_text: string;
     source_file_gcs_uri: string;

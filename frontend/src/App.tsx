@@ -1,6 +1,8 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { registerSessionExpiredHandler, vektrynApi } from "./api/client";
 import { LandingPage } from "./components/landing/LandingPage";
+import { WorkspaceLoader } from "./components/ui/WorkspaceLoader";
+import { useTransitionLoader } from "./hooks/useTransitionLoader";
 import type { CurrentUser, UserProfileDetail } from "./types/models";
 import { clearPendingImport } from "./utils/pendingImportStorage";
 import {
@@ -18,12 +20,11 @@ const AuthenticatedWorkspace = lazy(
     () => import("./components/layout/AuthenticatedWorkspace"),
 );
 
-function DarkRouteFallback() {
-    return (
-        <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-sm text-zinc-500">
-            Loading...
-        </div>
-    );
+const TRANSITION_LOADER_HOLD_MS = 1800;
+const TRANSITION_LOADER_FADE_MS = 350;
+
+function DarkRouteFallback({ label = "Loading Vektryn..." }: Readonly<{ label?: string }>) {
+    return <WorkspaceLoader label={label} />;
 }
 
 interface BootSnapshot {
@@ -38,12 +39,27 @@ function captureBootSnapshot(): BootSnapshot {
     return { route, needsPathNormalize, shouldHydrate };
 }
 
+function resolveInitialLoaderLabel(boot: BootSnapshot): string | null {
+    if (boot.route === "/login") {
+        return "Opening sign in...";
+    }
+    if (boot.route === "/app" || boot.shouldHydrate) {
+        return "Initializing radar workspace...";
+    }
+    return null;
+}
+
 export function App() {
     const [boot] = useState<BootSnapshot>(captureBootSnapshot);
     const [route, setRoute] = useState<AppRoute>(boot.route);
     const [user, setUser] = useState<CurrentUser | null>(null);
     const [sessionNotice, setSessionNotice] = useState<string | null>(null);
     const [hasCheckedSession, setHasCheckedSession] = useState(false);
+    const { loader: transitionLoader, triggerLoader } = useTransitionLoader({
+        initialLabel: resolveInitialLoaderLabel(boot),
+        holdMs: TRANSITION_LOADER_HOLD_MS,
+        fadeMs: TRANSITION_LOADER_FADE_MS,
+    });
 
     const routeRef = useRef<AppRoute>(route);
     const userRef = useRef<CurrentUser | null>(user);
@@ -183,9 +199,20 @@ export function App() {
                 "Your session ended (for example, after a password change or timeout). Please sign in again.",
             );
             clearClientSessionState();
+            triggerLoader("Opening sign in...");
             navigate("/login", { replace: true });
         });
-    }, [clearClientSessionState, navigate]);
+    }, [clearClientSessionState, navigate, triggerLoader]);
+
+    const handleGoToLogin = useCallback(() => {
+        triggerLoader("Opening sign in...");
+        navigate("/login");
+    }, [navigate, triggerLoader]);
+
+    const handleOpenWorkspace = useCallback(() => {
+        triggerLoader("Initializing radar workspace...");
+        navigate("/app");
+    }, [navigate, triggerLoader]);
 
     const handleAuthenticated = useCallback(
         (authenticatedUser: CurrentUser) => {
@@ -193,9 +220,10 @@ export function App() {
             setSessionNotice(null);
             setUser(authenticatedUser);
             setHasCheckedSession(true);
+            triggerLoader("Initializing radar workspace...");
             navigate("/app");
         },
-        [navigate],
+        [navigate, triggerLoader],
     );
 
     const handleUserProfileSaved = useCallback((updatedProfile: UserProfileDetail) => {
@@ -225,6 +253,7 @@ export function App() {
     }, [clearClientSessionState, navigate]);
 
     const handleLogout = useCallback(async () => {
+        triggerLoader("Signing out...");
         try {
             await vektrynApi.logout();
         } catch {
@@ -234,24 +263,22 @@ export function App() {
             clearClientSessionState();
             navigate("/", { replace: true });
         }
-    }, [clearClientSessionState, navigate]);
+    }, [clearClientSessionState, navigate, triggerLoader]);
 
+    let routeContent: ReactNode;
     if (effectiveRoute === "/") {
-        return (
+        routeContent = (
             <LandingPage
                 isAuthenticated={user !== null}
-                onSignIn={() => navigate("/login")}
-                onOpenWorkspace={() => navigate("/app")}
+                onSignIn={handleGoToLogin}
+                onOpenWorkspace={handleOpenWorkspace}
             />
         );
-    }
-
-    if (effectiveRoute === "/login") {
-        if (needsSessionCheck) {
-            return <DarkRouteFallback />;
-        }
-        return (
-            <Suspense fallback={<DarkRouteFallback />}>
+    } else if (effectiveRoute === "/login") {
+        routeContent = needsSessionCheck ? (
+            <DarkRouteFallback label="Checking session..." />
+        ) : (
+            <Suspense fallback={<DarkRouteFallback label="Opening sign in..." />}>
                 <LoginView
                     onAuthenticated={handleAuthenticated}
                     onBackToHome={() => navigate("/")}
@@ -259,21 +286,32 @@ export function App() {
                 />
             </Suspense>
         );
-    }
-
-    if (!user) {
-        return <DarkRouteFallback />;
+    } else if (!user) {
+        routeContent = <DarkRouteFallback label="Checking session..." />;
+    } else {
+        routeContent = (
+            <Suspense fallback={<DarkRouteFallback label="Initializing radar workspace..." />}>
+                <AuthenticatedWorkspace
+                    user={user}
+                    onUserProfileSaved={handleUserProfileSaved}
+                    onAccountDeactivated={handleAccountDeactivated}
+                    onLogout={handleLogout}
+                />
+            </Suspense>
+        );
     }
 
     return (
-        <Suspense fallback={<DarkRouteFallback />}>
-            <AuthenticatedWorkspace
-                user={user}
-                onUserProfileSaved={handleUserProfileSaved}
-                onAccountDeactivated={handleAccountDeactivated}
-                onLogout={handleLogout}
-            />
-        </Suspense>
+        <>
+            {transitionLoader.phase !== "idle" && (
+                <WorkspaceLoader
+                    placement="overlay"
+                    exiting={transitionLoader.phase === "exiting"}
+                    label={transitionLoader.label}
+                />
+            )}
+            {routeContent}
+        </>
     );
 }
 
