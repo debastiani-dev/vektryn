@@ -423,13 +423,21 @@ def _handle_terminal_error(
         ) from exc
 
 
-def _remaining_timeout_ms(deadline: float | None, cap_ms: int) -> int:
+MIN_GENERATE_TIMEOUT_MS = 10_000
+
+
+def _remaining_timeout_ms(
+    deadline: float | None,
+    cap_ms: int,
+    *,
+    min_timeout_ms: int = 1000,
+) -> int:
     if deadline is None:
-        return max(1000, cap_ms)
+        return max(min_timeout_ms, cap_ms)
     remaining_ms = int((deadline - time.monotonic()) * 1000)
     if remaining_ms < 500:
         raise BYOKTransientError("Gemini request timed out before completing.")
-    return max(1000, min(cap_ms, remaining_ms))
+    return max(min_timeout_ms, min(cap_ms, remaining_ms))
 
 
 def _resolve_execution_context(
@@ -611,6 +619,51 @@ def _invoke_single_attempt(
     )
 
 
+_COOLDOWN_SECONDS_BY_ACTION: dict[GeminiErrorAction, int] = {
+    GeminiErrorAction.TIER_DENIED: COOLDOWN_TIER_DENIED_SECONDS,
+    GeminiErrorAction.QUOTA_EXHAUSTED: COOLDOWN_QUOTA_SECONDS,
+}
+
+
+def _handle_transient_generate_error(
+    *,
+    exc: genai_errors.APIError,
+    retry_idx: int,
+    max_transient_retries: int,
+    deadline: float,
+    has_fallback: bool,
+) -> tuple[bool, bool, Exception | None]:
+    if _is_deadline_exceeded(exc) and has_fallback:
+        return False, False, exc
+    if retry_idx < max_transient_retries and (deadline - time.monotonic()) > 2.5:
+        time.sleep(0.8)
+        return True, False, exc
+    return False, False, exc
+
+
+def _raise_fatal_generate_error(
+    attempt: GeminiModelAttempt,
+    exc: genai_errors.APIError,
+) -> None:
+    upstream_status = getattr(exc, "status", None) or ""
+    upstream_message = (getattr(exc, "message", None) or "").strip()
+    logger.warning(
+        "Gemini generate_content fatal error on model=%s code=%s status=%s message=%s",
+        attempt.model_id,
+        exc.code,
+        upstream_status,
+        upstream_message[:300],
+    )
+    detail_suffix = (
+        f" {upstream_message[:200]}"
+        if upstream_message and "AIza" not in upstream_message
+        else ""
+    )
+    raise BYOKTransientError(
+        f"Gemini request failed on {attempt.model_id} ({exc.code}).{detail_suffix}"
+    ) from exc
+
+
 def _handle_generate_api_error(
     *,
     user_id: int,
@@ -631,24 +684,21 @@ def _handle_generate_api_error(
     )
     if action in (GeminiErrorAction.INVALID_KEY, GeminiErrorAction.PAYMENT_REQUIRED):
         _handle_terminal_error(user_id, action, exc)
-    if action is GeminiErrorAction.TIER_DENIED:
+    cooldown_seconds = _COOLDOWN_SECONDS_BY_ACTION.get(action)
+    if cooldown_seconds is not None:
         if user_id:
-            mark_model_cooldown(user_id, attempt.model_id, COOLDOWN_TIER_DENIED_SECONDS)
-        return False, True, None
-    if action is GeminiErrorAction.QUOTA_EXHAUSTED:
-        if user_id:
-            mark_model_cooldown(user_id, attempt.model_id, COOLDOWN_QUOTA_SECONDS)
+            mark_model_cooldown(user_id, attempt.model_id, cooldown_seconds)
         return False, True, None
     if action is GeminiErrorAction.TRANSIENT:
-        if _is_deadline_exceeded(exc) and has_fallback:
-            return False, False, exc
-        if retry_idx < max_transient_retries and (deadline - time.monotonic()) > 2.5:
-            time.sleep(0.8)
-            return True, False, exc
-        return False, False, exc
-    raise BYOKTransientError(
-        f"Gemini request failed on {attempt.model_id} ({exc.code})."
-    ) from exc
+        return _handle_transient_generate_error(
+            exc=exc,
+            retry_idx=retry_idx,
+            max_transient_retries=max_transient_retries,
+            deadline=deadline,
+            has_fallback=has_fallback,
+        )
+    _raise_fatal_generate_error(attempt, exc)
+    return False, False, exc
 
 
 def _try_generate_model(
@@ -668,7 +718,11 @@ def _try_generate_model(
 ) -> tuple[object | None, bool, Exception | None]:
     last_transient_exc: Exception | None = None
     for retry_idx in range(max(0, max_transient_retries) + 1):
-        effective_timeout = _remaining_timeout_ms(deadline, per_attempt_timeout_ms)
+        effective_timeout = _remaining_timeout_ms(
+            deadline,
+            per_attempt_timeout_ms,
+            min_timeout_ms=MIN_GENERATE_TIMEOUT_MS,
+        )
         client = _build_user_client(
             api_key=api_key,
             timeout_ms=effective_timeout,

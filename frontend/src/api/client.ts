@@ -97,56 +97,99 @@ function parseFieldErrors(parsed: Record<string, unknown>): Record<string, strin
     return fieldErrors;
 }
 
-function parseApiErrorMetadata(
-    bodyText: string,
-    retryAfterHeader: string | null,
-): {
+interface ApiErrorMetadata {
     detail: string | null;
     retryAfterSeconds: number | null;
     fieldErrors: Record<string, string[]>;
     code: string | null;
     paymentRequired: boolean;
-} {
-    let detail: string | null = null;
-    let retryAfterSeconds: number | null = null;
-    let fieldErrors: Record<string, string[]> = {};
-    let code: string | null = null;
-    let paymentRequired = false;
+}
 
-    if (retryAfterHeader) {
-        const parsedHeader = Number.parseInt(retryAfterHeader, 10);
-        if (Number.isFinite(parsedHeader) && parsedHeader > 0) {
-            retryAfterSeconds = parsedHeader;
-        }
+function firstNonEmptyString(value: unknown): string | null {
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed || null;
     }
-
-    try {
-        const parsed = JSON.parse(bodyText) as Record<string, unknown>;
-        if (typeof parsed.detail === "string" && parsed.detail.trim()) {
-            detail = parsed.detail.trim();
-        }
-        if (typeof parsed.code === "string" && parsed.code.trim()) {
-            code = parsed.code.trim();
-        }
-        if (typeof parsed.payment_required === "boolean") {
-            paymentRequired = parsed.payment_required;
-        }
-        if (
-            typeof parsed.retry_after_seconds === "number" &&
-            Number.isFinite(parsed.retry_after_seconds) &&
-            parsed.retry_after_seconds > 0
-        ) {
-            retryAfterSeconds = Math.ceil(parsed.retry_after_seconds);
-        }
-        fieldErrors = parseFieldErrors(parsed);
-        if (!detail && fieldErrors.non_field_errors?.length) {
-            detail = fieldErrors.non_field_errors[0];
-        }
-    } catch {
-        // Non-JSON error body; fall back to header metadata only.
+    if (Array.isArray(value)) {
+        const match = value.find(
+            (item): item is string => typeof item === "string" && item.trim().length > 0,
+        );
+        return match ? match.trim() : null;
     }
+    return null;
+}
 
+function parseRetryAfterHeader(retryAfterHeader: string | null): number | null {
+    if (!retryAfterHeader) {
+        return null;
+    }
+    const parsed = Number.parseInt(retryAfterHeader, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parsePositiveSeconds(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        return Math.ceil(value);
+    }
+    return null;
+}
+
+function parseErrorBodyObject(
+    obj: Record<string, unknown>,
+    headerRetryAfter: number | null,
+): ApiErrorMetadata {
+    const fieldErrors = parseFieldErrors(obj);
+    const detail = firstNonEmptyString(obj.detail) ?? fieldErrors.non_field_errors?.[0] ?? null;
+    const code = firstNonEmptyString(obj.code);
+    const paymentRequired = obj.payment_required === true;
+    const retryAfterSeconds = parsePositiveSeconds(obj.retry_after_seconds) ?? headerRetryAfter;
     return { detail, retryAfterSeconds, fieldErrors, code, paymentRequired };
+}
+
+function parseApiErrorMetadata(
+    bodyText: string,
+    retryAfterHeader: string | null,
+): ApiErrorMetadata {
+    const headerRetryAfter = parseRetryAfterHeader(retryAfterHeader);
+    const empty: ApiErrorMetadata = {
+        detail: null,
+        retryAfterSeconds: headerRetryAfter,
+        fieldErrors: {},
+        code: null,
+        paymentRequired: false,
+    };
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(bodyText);
+    } catch {
+        return empty;
+    }
+
+    if (Array.isArray(parsed)) {
+        return { ...empty, detail: firstNonEmptyString(parsed) };
+    }
+    if (parsed && typeof parsed === "object") {
+        return parseErrorBodyObject(parsed as Record<string, unknown>, headerRetryAfter);
+    }
+    return empty;
+}
+
+export function formatApiError(err: unknown, fallback: string): string {
+    if (err instanceof ApiError) {
+        if (err.detail) {
+            return err.detail;
+        }
+        const firstFieldMessages = Object.values(err.fieldErrors).flat();
+        if (firstFieldMessages.length > 0) {
+            return firstFieldMessages[0];
+        }
+        return fallback;
+    }
+    if (err instanceof Error && err.message.trim()) {
+        return err.message.trim();
+    }
+    return fallback;
 }
 
 type SessionExpiredHandler = () => void;
