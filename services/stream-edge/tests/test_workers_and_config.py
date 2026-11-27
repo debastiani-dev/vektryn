@@ -586,7 +586,8 @@ async def test_ingest_accepts_manual_source_and_lifecycle_skips_mailto(monkeypat
     )
     assert closed_id is None
     mock_http.get.assert_not_awaited()
-    assert "apply_url LIKE 'http://%'" in _FETCH_ACTIVE_SQL
+    assert "apply_url ILIKE 'http://%%'" in _FETCH_ACTIVE_SQL
+    assert "apply_url ILIKE 'https://%%'" in _FETCH_ACTIVE_SQL
 
 
 def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
