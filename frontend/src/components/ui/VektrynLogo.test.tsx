@@ -25,13 +25,19 @@ describe("VektrynLogo and WorkspaceLoader", () => {
 
     it("renders WorkspaceLoader with animated logo, brand wordmark, and status label", () => {
         const html = renderToStaticMarkup(
-            <WorkspaceLoader overlay label="Initializing radar workspace..." />,
+            <WorkspaceLoader placement="overlay" label="Initializing radar workspace..." />,
         );
 
         expect(html).toContain("vektryn");
         expect(html).toContain("Initializing radar workspace...");
         expect(html).toContain("vk-orbit-cw");
         expect(html).toContain("vk-sweep-bar");
-        expect(html).toContain("fixed inset-0");
+        expect(html).toContain("fixed inset-0 z-50");
+
+        const contentHtml = renderToStaticMarkup(
+            <WorkspaceLoader placement="content" label="Loading Pipeline Tracker..." />,
+        );
+        expect(contentHtml).toContain("Loading Pipeline Tracker...");
+        expect(contentHtml).toContain("fixed inset-0 z-20");
     });
 });

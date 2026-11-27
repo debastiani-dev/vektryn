@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
 import { useNotifications } from "../../hooks/useNotifications";
+import { useTransitionLoader } from "../../hooks/useTransitionLoader";
 import type {
     CurrentUser,
     MatchScore,
@@ -13,7 +14,18 @@ import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
 import { JobRadarView } from "../radar/JobRadarView";
 import { ResumesView } from "../resumes/ResumesView";
 import { PipelineTrackerView } from "../tracker/PipelineTrackerView";
+import { WorkspaceLoader } from "../ui/WorkspaceLoader";
 import { type ActiveTab, AppShell } from "./AppShell";
+
+const TAB_LOADER_HOLD_MS = 650;
+const TAB_LOADER_FADE_MS = 250;
+
+const TAB_LOADER_LABELS: Record<ActiveTab, string> = {
+    radar: "Loading Job Radar...",
+    tracker: "Loading Pipeline Tracker...",
+    analytics: "Loading Market Trends...",
+    resumes: "Loading Resumes...",
+};
 
 interface AuthenticatedWorkspaceProps {
     user: CurrentUser;
@@ -30,6 +42,21 @@ export function AuthenticatedWorkspace({
 }: Readonly<AuthenticatedWorkspaceProps>) {
     const [activeTab, setActiveTab] = useState<ActiveTab>("radar");
     const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+    const { loader: tabLoader, triggerLoader: triggerTabLoader } = useTransitionLoader({
+        holdMs: TAB_LOADER_HOLD_MS,
+        fadeMs: TAB_LOADER_FADE_MS,
+    });
+
+    const handleSelectTab = useCallback(
+        (nextTab: ActiveTab) => {
+            if (nextTab === activeTab) {
+                return;
+            }
+            triggerTabLoader(TAB_LOADER_LABELS[nextTab]);
+            setActiveTab(nextTab);
+        },
+        [activeTab, triggerTabLoader],
+    );
 
     useEffect(() => {
         globalThis.scrollTo?.({ top: 0, behavior: "instant" });
@@ -116,31 +143,31 @@ export function AuthenticatedWorkspace({
 
     const handleOpenTrackerFromNotification = useCallback(
         (item: NotificationItem) => {
-            setActiveTab("tracker");
+            handleSelectTab("tracker");
             if (!item.is_read) {
                 void markRead(item.uuid);
             }
         },
-        [markRead],
+        [handleSelectTab, markRead],
     );
 
     const handleOpenRadarFromNotification = useCallback(
         (item: NotificationItem) => {
-            setActiveTab("radar");
+            handleSelectTab("radar");
             if (!item.is_read) {
                 void markRead(item.uuid);
             }
         },
-        [markRead],
+        [handleSelectTab, markRead],
     );
 
     const handleSearchSkillInRadar = useCallback(
         (skill: string, resumeProfileUuid?: string) => {
             setPendingRadarSearch(skill);
             setPendingRadarResume(resumeProfileUuid ?? "");
-            setActiveTab("radar");
+            handleSelectTab("radar");
         },
-        [],
+        [handleSelectTab],
     );
 
     const handleConsumeRadarSearch = useCallback(() => {
@@ -171,7 +198,7 @@ export function AuthenticatedWorkspace({
         <>
             <AppShell
                 activeTab={activeTab}
-                onSelectTab={setActiveTab}
+                onSelectTab={handleSelectTab}
                 user={user}
                 settingsModalOpen={settingsModalOpen}
                 onOpenSettings={() => setSettingsModalOpen(true)}
@@ -233,6 +260,14 @@ export function AuthenticatedWorkspace({
                     />
                 )}
             </AppShell>
+
+            {tabLoader.phase !== "idle" && (
+                <WorkspaceLoader
+                    placement="content"
+                    exiting={tabLoader.phase === "exiting"}
+                    label={tabLoader.label}
+                />
+            )}
 
             <GapAnalysisDrawer
                 match={activeNotificationMatch}

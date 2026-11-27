@@ -2,6 +2,7 @@ import { type ReactNode, Suspense, lazy, useCallback, useEffect, useRef, useStat
 import { registerSessionExpiredHandler, vektrynApi } from "./api/client";
 import { LandingPage } from "./components/landing/LandingPage";
 import { WorkspaceLoader } from "./components/ui/WorkspaceLoader";
+import { useTransitionLoader } from "./hooks/useTransitionLoader";
 import type { CurrentUser, UserProfileDetail } from "./types/models";
 import { clearPendingImport } from "./utils/pendingImportStorage";
 import {
@@ -21,44 +22,6 @@ const AuthenticatedWorkspace = lazy(
 
 const TRANSITION_LOADER_HOLD_MS = 1800;
 const TRANSITION_LOADER_FADE_MS = 350;
-
-interface TransitionLoaderState {
-    phase: "idle" | "showing" | "exiting";
-    label: string;
-    token: number;
-}
-
-function useTransitionLoader(initialLabel: string | null) {
-    const [state, setState] = useState<TransitionLoaderState>(() =>
-        initialLabel
-            ? { phase: "showing", label: initialLabel, token: 1 }
-            : { phase: "idle", label: "", token: 0 },
-    );
-
-    const trigger = useCallback((label: string) => {
-        setState((prev) => ({ phase: "showing", label, token: prev.token + 1 }));
-    }, []);
-
-    useEffect(() => {
-        if (state.phase === "idle") {
-            return;
-        }
-        if (state.phase === "showing") {
-            const holdTimer = globalThis.setTimeout(() => {
-                setState((prev) =>
-                    prev.token === state.token ? { ...prev, phase: "exiting" } : prev,
-                );
-            }, TRANSITION_LOADER_HOLD_MS);
-            return () => globalThis.clearTimeout(holdTimer);
-        }
-        const fadeTimer = globalThis.setTimeout(() => {
-            setState((prev) => (prev.token === state.token ? { ...prev, phase: "idle" } : prev));
-        }, TRANSITION_LOADER_FADE_MS);
-        return () => globalThis.clearTimeout(fadeTimer);
-    }, [state.phase, state.token]);
-
-    return { loader: state, triggerLoader: trigger };
-}
 
 function DarkRouteFallback({ label = "Loading Vektryn..." }: Readonly<{ label?: string }>) {
     return <WorkspaceLoader label={label} />;
@@ -92,9 +55,11 @@ export function App() {
     const [user, setUser] = useState<CurrentUser | null>(null);
     const [sessionNotice, setSessionNotice] = useState<string | null>(null);
     const [hasCheckedSession, setHasCheckedSession] = useState(false);
-    const { loader: transitionLoader, triggerLoader } = useTransitionLoader(
-        resolveInitialLoaderLabel(boot),
-    );
+    const { loader: transitionLoader, triggerLoader } = useTransitionLoader({
+        initialLabel: resolveInitialLoaderLabel(boot),
+        holdMs: TRANSITION_LOADER_HOLD_MS,
+        fadeMs: TRANSITION_LOADER_FADE_MS,
+    });
 
     const routeRef = useRef<AppRoute>(route);
     const userRef = useRef<CurrentUser | null>(user);
@@ -340,7 +305,7 @@ export function App() {
         <>
             {transitionLoader.phase !== "idle" && (
                 <WorkspaceLoader
-                    overlay
+                    placement="overlay"
                     exiting={transitionLoader.phase === "exiting"}
                     label={transitionLoader.label}
                 />

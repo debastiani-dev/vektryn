@@ -2,24 +2,29 @@ import { VektrynLogo } from "./VektrynLogo";
 
 interface WorkspaceLoaderProps {
     label?: string;
-    overlay?: boolean;
+    placement?: "screen" | "overlay" | "content";
     exiting?: boolean;
 }
 
+const PLACEMENT_CLASSES: Record<NonNullable<WorkspaceLoaderProps["placement"]>, string> = {
+    screen: "min-h-screen bg-zinc-950",
+    overlay: "fixed inset-0 z-50 bg-zinc-950 transition-opacity duration-[350ms]",
+    content:
+        "fixed inset-0 z-20 bg-zinc-950/95 pt-20 backdrop-blur-sm transition-opacity duration-250",
+};
+
 export function WorkspaceLoader({
     label = "Initializing radar workspace...",
-    overlay = false,
+    placement = "screen",
     exiting = false,
 }: Readonly<WorkspaceLoaderProps>) {
-    const positionClasses = overlay
-        ? "fixed inset-0 z-50 transition-opacity duration-[350ms]"
-        : "min-h-screen";
+    const positionClasses = PLACEMENT_CLASSES[placement];
     const opacityClass = exiting ? "pointer-events-none opacity-0" : "opacity-100";
 
     return (
         <output
             aria-live="polite"
-            className={`${positionClasses} ${opacityClass} flex flex-col items-center justify-center bg-zinc-950 px-6 text-zinc-100`}
+            className={`${positionClasses} ${opacityClass} flex flex-col items-center justify-center px-6 text-zinc-100`}
         >
             <div className="vk-loader-enter flex flex-col items-center gap-5">
                 <div className="relative flex items-center justify-center">
