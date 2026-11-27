@@ -60,7 +60,6 @@ locals {
     "vektryn-database-url",
     "vektryn-redis-url",
     "vektryn-kafka-bootstrap",
-    "vektryn-gemini-api-key", # Retained during Stage A/B rollout; removed in Stage C post-deploy cleanup
     "vektryn-byok-encryption-key",
     "vektryn-ingest-api-key",
     "vektryn-stream-auth-secret",
