@@ -16,7 +16,15 @@
         "programadora",
         "arquiteto",
         "arquiteta",
-        "sistemas"
+        "sistemas",
+        "product designer",
+        "ux designer",
+        "ui designer",
+        "designer de produto",
+        "ui/ux",
+        "ux/ui",
+        "design engineer",
+        "design systems"
     ],
     "primary_stacks": [
         "python",
@@ -56,7 +64,13 @@
         "scala",
         "elixir",
         "c++",
-        "embedded"
+        "embedded",
+        "tailwind",
+        "css",
+        "figma",
+        "storybook",
+        "framer",
+        "design systems"
     ],
     "disciplines": {
         "backend": [
@@ -81,6 +95,22 @@
             "nextjs",
             "svelte",
             "tailwind"
+        ],
+        "ui_ux": [
+            "ui/ux",
+            "ux/ui",
+            "ux engineer",
+            "ui engineer",
+            "design engineer",
+            "product designer",
+            "ux designer",
+            "ui designer",
+            "designer de produto",
+            "design systems",
+            "figma",
+            "storybook",
+            "accessibility",
+            "wcag"
         ],
         "fullstack": [
             "fullstack",
@@ -189,16 +219,10 @@
         "home office",
         "home-office",
         "trabalho remoto",
+        "work from home",
+        "wfh",
         "worldwide",
-        "global",
-        "anywhere",
-        "latam",
-        "latin america",
-        "américa latina",
-        "america latina",
-        "brazil",
-        "brasil",
-        "americas"
+        "anywhere"
     ],
     "categories": {
         "language": [
@@ -222,7 +246,9 @@
             "scala",
             "elixir",
             "swift",
-            "sql"
+            "sql",
+            "html",
+            "css"
         ],
         "framework": [
             "django",
@@ -247,7 +273,8 @@
             "laravel",
             "symfony",
             "graphql",
-            "tailwind"
+            "tailwind",
+            "storybook"
         ],
         "database": [
             "postgresql",
@@ -333,6 +360,14 @@
             "machine learning",
             "spark",
             "airflow"
+        ],
+        "other": [
+            "figma",
+            "framer",
+            "sketch",
+            "design systems",
+            "wcag",
+            "accessibility"
         ]
     }
 }
