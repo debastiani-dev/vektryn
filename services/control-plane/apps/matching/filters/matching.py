@@ -17,6 +17,7 @@ class MatchScoreFilter(django_filters.FilterSet):
     is_stale = django_filters.BooleanFilter(method="filter_is_stale")
     seniority = django_filters.CharFilter(field_name="job_posting__seniority")
     contract_type = django_filters.CharFilter(field_name="job_posting__contract_type")
+    work_mode = django_filters.CharFilter(method="filter_work_mode")
     ats_source = django_filters.CharFilter(field_name="job_posting__ats_source")
     region = django_filters.CharFilter(method="filter_region")
     tech = django_filters.CharFilter(method="filter_tech")
@@ -49,3 +50,9 @@ class MatchScoreFilter(django_filters.FilterSet):
         for tag in tags:
             queryset = queryset.filter(job_posting__tech_stack__contains=[tag])
         return queryset
+
+    def filter_work_mode(self, queryset, _name: str, value: str):
+        modes = [m.strip().lower() for m in value.split(",") if m.strip()]
+        if not modes:
+            return queryset
+        return queryset.filter(job_posting__work_mode__in=modes)

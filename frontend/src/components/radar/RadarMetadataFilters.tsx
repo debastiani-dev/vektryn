@@ -8,6 +8,7 @@ import {
     REGION_OPTIONS,
     SENIORITY_OPTIONS,
     SOURCE_OPTIONS,
+    WORK_MODE_OPTIONS,
 } from "../../utils/radarFilters";
 
 function FilterSelectField({
@@ -112,6 +113,14 @@ export function MetadataFiltersPanel({
                 value={filters.seniority}
                 options={SENIORITY_OPTIONS}
                 onChange={(seniority) => onUpdateMetadata({ seniority })}
+            />
+            <FilterSelectField
+                id="radar-filter-work-mode"
+                label="Work Mode"
+                allLabel="All work modes"
+                value={filters.workMode}
+                options={WORK_MODE_OPTIONS}
+                onChange={(workMode) => onUpdateMetadata({ workMode })}
             />
             <FilterSelectField
                 id="radar-filter-contract"

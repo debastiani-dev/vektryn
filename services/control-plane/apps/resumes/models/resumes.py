@@ -6,8 +6,17 @@ from pgvector.django import VectorField
 from django.core.validators import MaxValueValidator, MinValueValidator
 
 from apps.base.models.base_model import BaseModel, enum_choices
-from vektryn_contracts.enums import ContractType, RegionEligibility, SeniorityLevel
+from vektryn_contracts.enums import (
+    ContractType,
+    RegionEligibility,
+    SeniorityLevel,
+    WorkMode,
+)
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS
+
+
+def default_target_work_modes() -> list[str]:
+    return [WorkMode.REMOTE.value]
 
 
 class ResumeProfile(BaseModel):
@@ -40,6 +49,14 @@ class ResumeProfile(BaseModel):
             choices=enum_choices(RegionEligibility),
         ),
         default=list,
+        blank=True,
+    )
+    target_work_modes = ArrayField(
+        base_field=models.CharField(
+            max_length=16,
+            choices=enum_choices(WorkMode),
+        ),
+        default=default_target_work_modes,
         blank=True,
     )
     min_alert_score = models.PositiveSmallIntegerField(

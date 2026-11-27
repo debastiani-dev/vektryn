@@ -16,6 +16,7 @@ class JobPostingSummarySerializer(serializers.ModelSerializer):
             "location_raw",
             "seniority",
             "contract_type",
+            "work_mode",
             "region_eligibility",
             "salary_min",
             "salary_max",

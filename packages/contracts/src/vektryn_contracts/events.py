@@ -22,6 +22,7 @@ from vektryn_contracts.enums import (
     RegionEligibility,
     SalaryPeriod,
     SeniorityLevel,
+    WorkMode,
 )
 
 EMBEDDING_DIMENSIONS = 768
@@ -105,6 +106,7 @@ class JobRawEvent(EventEnvelope):
 class JobEnrichedEvent(JobRawEvent):
     seniority: SeniorityLevel = SeniorityLevel.UNKNOWN
     contract_type: ContractType = ContractType.UNKNOWN
+    work_mode: WorkMode = WorkMode.UNKNOWN
     region_eligibility: list[RegionEligibility] = Field(default_factory=list)
     salary_min: Decimal | None = Field(default=None, ge=0)
     salary_max: Decimal | None = Field(default=None, ge=0)

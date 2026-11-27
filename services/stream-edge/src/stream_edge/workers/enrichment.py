@@ -121,6 +121,7 @@ async def process_raw_message(
         submitted_by_user_id=raw_event.submitted_by_user_id,
         seniority=metadata.seniority,
         contract_type=metadata.contract_type,
+        work_mode=metadata.work_mode,
         region_eligibility=metadata.region_eligibility,
         salary_min=metadata.salary_min,
         salary_max=metadata.salary_max,

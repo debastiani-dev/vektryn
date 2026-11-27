@@ -68,6 +68,7 @@ class LeverCollector(BaseATSCollector):
                     description_clean=item.get("descriptionPlain")
                     or html_to_clean_text(raw_html),
                     posted_at=_parse_dt(item.get("createdAt")),
+                    work_mode_hint=str(item.get("workplaceType") or "").strip(),
                 )
             )
         return jobs
@@ -302,6 +303,7 @@ class InHireCollector(BaseATSCollector):
                     posted_at=_parse_dt(
                         item.get("createdAt") or item.get("publishedAt")
                     ),
+                    work_mode_hint=str(workplace).strip(),
                 )
             )
         return jobs

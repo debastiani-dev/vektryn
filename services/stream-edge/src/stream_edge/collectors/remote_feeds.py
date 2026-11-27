@@ -176,11 +176,14 @@ class MultiCompanyFeedCollector:
             apply_url = item.get("jobUrl") or ""
             if not apply_url or not job_id:
                 continue
+            workplace_type = str(item.get("workplaceType") or "").strip()
+            if not workplace_type and item.get("isRemoteWork"):
+                workplace_type = "Remote"
             loc_parts = [
                 item.get("city") or "",
                 item.get("state") or "",
                 item.get("country") or "Brazil",
-                "Remote" if item.get("isRemoteWork") else "",
+                workplace_type,
             ]
             raw_html = item.get("description") or item.get("name") or ""
             jobs.append(
@@ -190,10 +193,11 @@ class MultiCompanyFeedCollector:
                     title=(item.get("name") or "").strip(),
                     company_name=(item.get("careerPageName") or "Gupy Company").strip(),
                     apply_url=apply_url,
-                    location_raw=", ".join(p for p in loc_parts if p),
+                    location_raw=", ".join(dict.fromkeys(p for p in loc_parts if p)),
                     raw_html=raw_html,
                     description_clean=html_to_clean_text(raw_html),
                     posted_at=_parse_iso_dt(item.get("publishedDate")),
+                    work_mode_hint=workplace_type,
                 )
             )
         return [j for j in jobs if j.title]

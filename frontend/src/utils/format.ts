@@ -1,4 +1,18 @@
-import type { ContractType, SeniorityLevel, TechCategory } from "../types/models";
+import type { ContractType, SeniorityLevel, TechCategory, WorkMode } from "../types/models";
+
+const WORK_MODE_LABELS: Record<WorkMode, string> = {
+    remote: "Remote",
+    hybrid: "Hybrid",
+    onsite: "On-site",
+    unknown: "Unknown",
+};
+
+const WORK_MODE_BADGE_STYLES: Record<WorkMode, string> = {
+    remote: "bg-emerald-500/12 text-emerald-300 ring-1 ring-emerald-500/25",
+    hybrid: "bg-amber-500/12 text-amber-300 ring-1 ring-amber-500/25",
+    onsite: "bg-rose-500/12 text-rose-300 ring-1 ring-rose-500/25",
+    unknown: "bg-zinc-800/80 text-zinc-400 ring-1 ring-zinc-700/60",
+};
 
 const CONTRACT_LABELS: Record<ContractType, string> = {
     clt: "CLT",
@@ -135,6 +149,22 @@ export function formatContractType(contract: string): string {
     return contract
         .replace(/_/g, " ")
         .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+export function formatWorkMode(workMode: string | null | undefined): string {
+    const key = (workMode ?? "unknown").trim().toLowerCase();
+    if (key in WORK_MODE_LABELS) {
+        return WORK_MODE_LABELS[key as WorkMode];
+    }
+    return WORK_MODE_LABELS.unknown;
+}
+
+export function workModeBadgeStyle(workMode: string | null | undefined): string {
+    const key = (workMode ?? "unknown").trim().toLowerCase();
+    if (key in WORK_MODE_BADGE_STYLES) {
+        return WORK_MODE_BADGE_STYLES[key as WorkMode];
+    }
+    return WORK_MODE_BADGE_STYLES.unknown;
 }
 
 export function formatSeniority(seniority: string): string {

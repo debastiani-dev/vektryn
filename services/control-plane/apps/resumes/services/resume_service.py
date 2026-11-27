@@ -352,11 +352,12 @@ class ResumeService(BaseService):
     @staticmethod
     def _targeting_signature(
         profile: ResumeProfile,
-    ) -> tuple[list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
         return (
             list(profile.target_seniority or []),
             list(profile.target_contract_types or []),
             list(profile.target_regions or []),
+            list(profile.target_work_modes or []),
         )
 
     def _schedule_auto_rescore(

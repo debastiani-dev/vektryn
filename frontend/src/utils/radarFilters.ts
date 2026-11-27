@@ -1,6 +1,7 @@
 export interface RadarMetadataFilters {
     seniority: string;
     contractType: string;
+    workMode: string;
     region: string;
     atsSource: string;
 }
@@ -8,6 +9,7 @@ export interface RadarMetadataFilters {
 export const EMPTY_METADATA_FILTERS: RadarMetadataFilters = {
     seniority: "",
     contractType: "",
+    workMode: "",
     region: "",
     atsSource: "",
 };
@@ -73,6 +75,13 @@ export const CONTRACT_OPTIONS: ReadonlyArray<FilterChoice> = [
     { value: "eor", label: "EOR" },
 ];
 
+export const WORK_MODE_OPTIONS: ReadonlyArray<FilterChoice> = [
+    { value: "remote", label: "Remote" },
+    { value: "hybrid", label: "Hybrid" },
+    { value: "onsite", label: "On-site" },
+    { value: "unknown", label: "Unknown" },
+];
+
 export const REGION_OPTIONS: ReadonlyArray<FilterChoice> = [
     { value: "brazil", label: "Brazil" },
     { value: "latam", label: "LATAM" },
@@ -107,6 +116,7 @@ export type ActiveFilterChipKey =
     | "minScore"
     | "seniority"
     | "contractType"
+    | "workMode"
     | "region"
     | "atsSource";
 
@@ -137,6 +147,7 @@ export function countActivePanelFilters(params: {
     if (params.minScore > 0) count += 1;
     if (params.metadataFilters.seniority) count += 1;
     if (params.metadataFilters.contractType) count += 1;
+    if (params.metadataFilters.workMode) count += 1;
     if (params.metadataFilters.region) count += 1;
     if (params.metadataFilters.atsSource) count += 1;
     return count;
@@ -176,6 +187,13 @@ export function buildActiveFilterChips(params: {
             key: "contractType",
             prefix: "Contract",
             label: lookupOptionLabel(CONTRACT_OPTIONS, params.metadataFilters.contractType),
+        });
+    }
+    if (params.metadataFilters.workMode) {
+        chips.push({
+            key: "workMode",
+            prefix: "Work Mode",
+            label: lookupOptionLabel(WORK_MODE_OPTIONS, params.metadataFilters.workMode),
         });
     }
     if (params.metadataFilters.region) {

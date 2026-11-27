@@ -2,7 +2,12 @@ from django import forms
 from django.contrib import admin
 
 from apps.resumes.models import ResumeProfile
-from vektryn_contracts import ContractType, RegionEligibility, SeniorityLevel
+from vektryn_contracts import (
+    ContractType,
+    RegionEligibility,
+    SeniorityLevel,
+    WorkMode,
+)
 
 
 def _enum_choices(enum_cls) -> list[tuple[str, str]]:
@@ -27,6 +32,11 @@ class ResumeProfileAdminForm(forms.ModelForm):
         widget=forms.CheckboxSelectMultiple,
         required=False,
     )
+    target_work_modes = forms.MultipleChoiceField(
+        choices=_enum_choices(WorkMode),
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+    )
 
     class Meta:
         model = ResumeProfile
@@ -42,6 +52,7 @@ class ResumeProfileAdmin(admin.ModelAdmin):
         "target_seniority",
         "target_contract_types",
         "target_regions",
+        "target_work_modes",
         "min_alert_score",
         "is_active",
         "created_at",

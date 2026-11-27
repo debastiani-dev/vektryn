@@ -38,6 +38,7 @@ export function serializeRadarStateToPreset(state: RadarFilterState): SavedFilte
     if (state.metadataFilters.contractType) {
         params.contract_type = state.metadataFilters.contractType;
     }
+    if (state.metadataFilters.workMode) params.work_mode = state.metadataFilters.workMode;
     if (state.metadataFilters.region) params.region = state.metadataFilters.region;
     if (state.metadataFilters.atsSource) params.ats_source = state.metadataFilters.atsSource;
     if (state.sortBy !== "best_match") params.sort_by = state.sortBy;
@@ -68,6 +69,7 @@ export function hydrateRadarStateFromPreset(
             ...EMPTY_METADATA_FILTERS,
             seniority: typeof params.seniority === "string" ? params.seniority : "",
             contractType: typeof params.contract_type === "string" ? params.contract_type : "",
+            workMode: typeof params.work_mode === "string" ? params.work_mode : "",
             region: typeof params.region === "string" ? params.region : "",
             atsSource: typeof params.ats_source === "string" ? params.ats_source : "",
         },
@@ -94,6 +96,7 @@ export function isPresetActive(
         (normalizedCurrent.hide_muted ?? true) === (normalizedPreset.hide_muted ?? true) &&
         (normalizedCurrent.seniority ?? "") === (normalizedPreset.seniority ?? "") &&
         (normalizedCurrent.contract_type ?? "") === (normalizedPreset.contract_type ?? "") &&
+        (normalizedCurrent.work_mode ?? "") === (normalizedPreset.work_mode ?? "") &&
         (normalizedCurrent.region ?? "") === (normalizedPreset.region ?? "") &&
         (normalizedCurrent.ats_source ?? "") === (normalizedPreset.ats_source ?? "") &&
         (normalizedCurrent.sort_by ?? "best_match") === (normalizedPreset.sort_by ?? "best_match")

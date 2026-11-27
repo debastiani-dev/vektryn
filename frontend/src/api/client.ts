@@ -42,6 +42,7 @@ import type {
     TriggerCollectResponse,
     UserProfileDetail,
     UserProfileUpdateInput,
+    WorkMode,
 } from "../types/models";
 
 export class ApiError extends Error {
@@ -276,6 +277,7 @@ export interface ResumeProfileInput {
     target_seniority?: SeniorityLevel[];
     target_contract_types?: ContractType[];
     target_regions?: string[];
+    target_work_modes?: WorkMode[];
     min_alert_score?: number;
     is_active?: boolean;
 }
@@ -300,6 +302,15 @@ function buildResumeBody(payload: Partial<ResumeProfileInput>): BodyInit {
         }
         for (const item of payload.target_regions ?? []) {
             form.append("target_regions", item);
+        }
+        if (payload.target_work_modes !== undefined) {
+            if (payload.target_work_modes.length === 0) {
+                form.append("target_work_modes", "");
+            } else {
+                for (const item of payload.target_work_modes) {
+                    form.append("target_work_modes", item);
+                }
+            }
         }
         return form;
     }

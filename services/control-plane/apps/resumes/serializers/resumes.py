@@ -43,6 +43,7 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
             "target_seniority",
             "target_contract_types",
             "target_regions",
+            "target_work_modes",
             "min_alert_score",
             "raw_text",
             "file",
@@ -73,6 +74,7 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
             "target_seniority",
             "target_contract_types",
             "target_regions",
+            "target_work_modes",
         ):
             if field_name not in mutable:
                 continue

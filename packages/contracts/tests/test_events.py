@@ -18,6 +18,7 @@ from vektryn_contracts import (
     RegionEligibility,
     SalaryPeriod,
     SeniorityLevel,
+    WorkMode,
     alert_partition_key,
     compute_job_content_hash,
     dlq_partition_key,
@@ -71,7 +72,26 @@ def test_job_enriched_event_normalizes_stack_and_validates_vector() -> None:
     )
 
     assert event.tech_stack == ["python", "django", "kafka"]
+    assert event.work_mode == WorkMode.UNKNOWN
     assert len(event.embedding) == 768
+
+
+def test_work_mode_enum_and_enriched_event_rollout_compatibility() -> None:
+    assert [m.value for m in WorkMode] == ["remote", "hybrid", "onsite", "unknown"]
+
+    explicit = JobEnrichedEvent(
+        **_sample_raw_kwargs(),
+        work_mode=WorkMode.REMOTE,
+        embedding=[0.01] * EMBEDDING_DIMENSIONS,
+    )
+    restored = JobEnrichedEvent.model_validate_json(explicit.model_dump_json())
+    assert restored.work_mode == WorkMode.REMOTE
+
+    # Simulate legacy in-flight Kafka payload without work_mode field
+    legacy_payload = explicit.model_dump(mode="json")
+    legacy_payload.pop("work_mode")
+    legacy_restored = JobEnrichedEvent.model_validate(legacy_payload)
+    assert legacy_restored.work_mode == WorkMode.UNKNOWN
 
 
 def test_job_enriched_event_rejects_invalid_embedding_size() -> None:

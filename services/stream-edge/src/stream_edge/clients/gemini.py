@@ -31,6 +31,7 @@ from vektryn_contracts import (
     SalaryPeriod,
     SeniorityLevel,
     ThinkingLevelName,
+    WorkMode,
     clamp_thinking_level,
     classify_gemini_error,
     gemini_invalid_key_pause_key,
@@ -65,6 +66,7 @@ def build_thinking_config(level: ThinkingLevelName) -> types.ThinkingConfig:
 class ExtractedJobMetadata(BaseModel):
     seniority: SeniorityLevel = SeniorityLevel.UNKNOWN
     contract_type: ContractType = ContractType.UNKNOWN
+    work_mode: WorkMode = WorkMode.UNKNOWN
     region_eligibility: list[RegionEligibility] = Field(default_factory=list)
     salary_min: Decimal | None = None
     salary_max: Decimal | None = None
@@ -233,6 +235,10 @@ class GeminiStreamClient:
         prompt = (
             "Analyze this software engineering job posting and extract structured metadata.\n"
             "- Map seniority and legal/tax contract_type (clt, pj, b2b_contractor, w2, c2c, eor, unknown).\n"
+            "- Classify work_mode (remote, hybrid, onsite, unknown) using BOTH the Location line and the full Description text. "
+            "Pay special attention to postings whose Location is vague (e.g., 'Brazil' or 'São Paulo, SP') while the body specifies "
+            "'modelo híbrido 3x/semana', '100% presencial', 'on-site', 'in-office', '100% remoto', 'home office', or 'fully remote'. "
+            "Return 'unknown' strictly when workplace arrangement is missing or genuinely ambiguous rather than guessing.\n"
             "- Identify all eligible regions in region_eligibility (e.g., brazil, latam, worldwide, north_america, europe, emea, apac, restricted).\n"
             "- Extract salary_min, salary_max, 3-letter ISO salary_currency, and salary_period only if explicitly stated.\n"
             "- Extract normalized lowercase tech_stack tags (languages, frameworks, databases, brokers, cloud, DevOps).\n\n"
