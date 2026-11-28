@@ -33,6 +33,8 @@ describe("VektrynLogo and WorkspaceLoader", () => {
         expect(html).toContain("vk-orbit-cw");
         expect(html).toContain("vk-sweep-bar");
         expect(html).toContain("fixed inset-0 z-50");
+        expect(html).toContain("rounded-full border border-violet-500/40");
+        expect(html).not.toContain("rounded-2xl bg-zinc-900");
 
         const contentHtml = renderToStaticMarkup(
             <WorkspaceLoader placement="content" label="Loading Pipeline Tracker..." />,

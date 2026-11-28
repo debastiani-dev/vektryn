@@ -41,9 +41,7 @@ export function LandingNavbar({
                     href="#top"
                     className="inline-flex min-h-11 items-center gap-2.5 rounded-lg pr-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70"
                 >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
-                        <VektrynLogo className="h-7 w-7" />
-                    </span>
+                    <VektrynLogo className="h-7 w-7 shrink-0" />
                     <span className="font-mono text-base font-semibold tracking-tight text-zinc-100">
                         vektryn
                     </span>

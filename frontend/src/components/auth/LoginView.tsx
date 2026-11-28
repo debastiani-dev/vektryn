@@ -126,9 +126,7 @@ export function LoginView({
                 )}
 
                 <div className="flex flex-col items-center space-y-3 text-center">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-900 ring-1 ring-zinc-800">
-                        <VektrynLogo className="h-9 w-9" />
-                    </div>
+                    <VektrynLogo className="h-11 w-11" />
                     <div className="space-y-1">
                         <h1 className="font-mono text-2xl font-semibold tracking-tight text-zinc-100">
                             vektryn

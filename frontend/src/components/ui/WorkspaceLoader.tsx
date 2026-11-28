@@ -27,18 +27,16 @@ export function WorkspaceLoader({
             className={`${positionClasses} ${opacityClass} flex flex-col items-center justify-center px-6 text-zinc-100`}
         >
             <div className="vk-loader-enter flex flex-col items-center gap-5">
-                <div className="relative flex items-center justify-center">
+                <div className="relative flex h-16 w-16 items-center justify-center">
                     <span
                         aria-hidden="true"
-                        className="vk-radar-pulse absolute h-20 w-20 rounded-2xl border border-violet-500/40"
+                        className="vk-radar-pulse absolute h-16 w-16 rounded-full border border-violet-500/40"
                     />
                     <span
                         aria-hidden="true"
                         className="absolute h-24 w-24 rounded-full bg-violet-500/15 blur-2xl"
                     />
-                    <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-zinc-900 ring-1 ring-zinc-800 shadow-2xl shadow-violet-950/50">
-                        <VektrynLogo animated className="h-12 w-12" />
-                    </div>
+                    <VektrynLogo animated className="relative h-14 w-14" />
                 </div>
 
                 <div className="flex flex-col items-center gap-2.5 text-center">

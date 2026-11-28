@@ -288,9 +288,7 @@ export function AppShell({
                             side="bottom"
                         >
                             <div className="flex items-center gap-2.5 sm:gap-3">
-                                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
-                                    <VektrynLogo className="h-7 w-7" />
-                                </div>
+                                <VektrynLogo className="h-7 w-7 shrink-0" />
                                 <span className="font-mono text-lg font-semibold tracking-tight text-zinc-100">
                                     vektryn
                                 </span>
