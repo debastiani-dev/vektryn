@@ -6,8 +6,10 @@ import time
 from typing import BinaryIO
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AbstractBaseUser
-from django.db import transaction
+from django.db import connection, transaction
+from django.utils import timezone
 from docx import Document
 from google import genai
 from pydantic import BaseModel as PydanticBaseModel
@@ -21,6 +23,7 @@ from apps.base.services.byok import (
     execute_user_gemini_generate,
     user_has_gemini_api_key,
 )
+from apps.matching.models.matching import MatchScore
 from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.services.rescore_publisher import (
     RescoreBrokerError,
@@ -29,7 +32,12 @@ from apps.resumes.services.rescore_publisher import (
     publish_rescore_event,
     release_rescore_cooldown,
 )
-from vektryn_contracts import JobRescoreEvent
+from vektryn_contracts import (
+    UNKNOWN_LANGUAGE,
+    JobRescoreEvent,
+    detect_content_language,
+    normalize_language_code,
+)
 
 try:
     from google.cloud import storage as gcs_storage
@@ -37,6 +45,10 @@ except ImportError:
     gcs_storage = None
 
 logger = logging.getLogger(__name__)
+
+
+class ActiveResumeLimitError(ValueError):
+    """Raised when creating or activating a ResumeProfile exceeds MAX_ACTIVE_RESUMES_PER_USER."""
 
 
 class GeminiServiceError(Exception):
@@ -348,17 +360,169 @@ class ResumeService(BaseService):
         return data
 
     DEFAULT_RESCORE_MAX_JOBS = 50
+    _LANGUAGE_UNSET = object()
+
+    @staticmethod
+    def _max_active_resumes() -> int:
+        return max(1, int(getattr(settings, "MAX_ACTIVE_RESUMES_PER_USER", 5)))
+
+    @classmethod
+    def _enforce_active_resume_cap(
+        cls,
+        *,
+        user: AbstractBaseUser,
+        excluding_pk: object | None = None,
+    ) -> None:
+        user_model = get_user_model()
+        user_model.objects.select_for_update().get(pk=user.pk)
+        qs = ResumeProfile.objects.filter(user=user, is_active=True)
+        if excluding_pk is not None:
+            qs = qs.exclude(pk=excluding_pk)
+        limit = cls._max_active_resumes()
+        if qs.count() >= limit:
+            raise ActiveResumeLimitError(
+                f"You can keep at most {limit} active resume profiles simultaneously. "
+                "Pause or delete an existing active resume before activating another."
+            )
+
+    @classmethod
+    def _resolve_profile_language(
+        cls,
+        *,
+        raw_text: str,
+        provided_language: object,
+        instance: ResumeProfile | None,
+        content_changed: bool,
+    ) -> str | None:
+        if provided_language is not cls._LANGUAGE_UNSET:
+            normalized = normalize_language_code(
+                None if provided_language is None else str(provided_language),
+                strict=True,
+            )
+            if normalized == UNKNOWN_LANGUAGE:
+                return detect_content_language(raw_text)
+            return normalized
+
+        if instance is None:
+            return detect_content_language(raw_text)
+
+        if content_changed and instance.language == UNKNOWN_LANGUAGE:
+            return detect_content_language(raw_text)
+        return None
 
     @staticmethod
     def _targeting_signature(
         profile: ResumeProfile,
-    ) -> tuple[list[str], list[str], list[str], list[str]]:
+    ) -> tuple[list[str], list[str], list[str], list[str], str, bool]:
         return (
             list(profile.target_seniority or []),
             list(profile.target_contract_types or []),
             list(profile.target_regions or []),
             list(profile.target_work_modes or []),
+            str(profile.language or UNKNOWN_LANGUAGE),
+            bool(profile.strict_language_match),
         )
+
+    @staticmethod
+    def _acquire_winner_locks(user_id: object, sorted_job_ids: list[object]) -> None:
+        if not sorted_job_ids:
+            return
+        with connection.cursor() as cur:
+            for job_id in sorted_job_ids:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock("
+                    "hashtextextended('vektryn:winner:' || %s || ':' || %s, 0))",
+                    [str(user_id), str(job_id)],
+                )
+
+    @staticmethod
+    def _is_strict_language_mismatch(match: MatchScore) -> bool:
+        profile = match.resume_profile
+        job_lang = normalize_language_code(match.job_posting.language, strict=False)
+        profile_lang = normalize_language_code(profile.language, strict=False)
+        return (
+            bool(profile.strict_language_match)
+            and job_lang != UNKNOWN_LANGUAGE
+            and profile_lang != UNKNOWN_LANGUAGE
+            and profile_lang != job_lang
+        )
+
+    @classmethod
+    def _promotion_rank_key(cls, match: MatchScore) -> tuple:
+        job_lang = normalize_language_code(match.job_posting.language, strict=False)
+        profile_lang = normalize_language_code(
+            match.resume_profile.language, strict=False
+        )
+        same_language_rank = (
+            0 if (job_lang != UNKNOWN_LANGUAGE and profile_lang == job_lang) else 1
+        )
+        fit_rank = -match.fit_score if match.fit_score is not None else 1
+        cosine_rank = -float(match.cosine_similarity)
+        modified_rank = -match.resume_profile.modified_at.timestamp()
+        return (
+            same_language_rank,
+            fit_rank,
+            cosine_rank,
+            modified_rank,
+            str(match.resume_profile_id),
+        )
+
+    def _reconcile_winners_after_deactivation(self, profile: ResumeProfile) -> None:
+        affected_job_ids = list(
+            MatchScore.objects.filter(
+                resume_profile=profile,
+                is_routed_winner=True,
+            )
+            .order_by("job_posting_id")
+            .values_list("job_posting_id", flat=True)
+        )
+        now = timezone.now()
+        if affected_job_ids:
+            self._acquire_winner_locks(profile.user_id, affected_job_ids)
+            MatchScore.objects.filter(
+                resume_profile=profile,
+                is_routed_winner=True,
+            ).update(is_routed_winner=False, modified_at=now)
+
+            candidates = (
+                MatchScore.objects.select_related("job_posting", "resume_profile")
+                .filter(
+                    job_posting_id__in=affected_job_ids,
+                    resume_profile__user_id=profile.user_id,
+                    resume_profile__is_active=True,
+                    resume_profile__is_deleted=False,
+                )
+                .exclude(resume_profile_id=profile.pk)
+            )
+            best_by_job: dict[object, MatchScore] = {}
+            for candidate in candidates:
+                if self._is_strict_language_mismatch(candidate):
+                    continue
+                existing = best_by_job.get(candidate.job_posting_id)
+                if existing is None or self._promotion_rank_key(
+                    candidate
+                ) < self._promotion_rank_key(existing):
+                    best_by_job[candidate.job_posting_id] = candidate
+
+            promoted_pks = [m.pk for m in best_by_job.values()]
+            if promoted_pks:
+                MatchScore.objects.filter(pk__in=promoted_pks).update(
+                    is_routed_winner=True,
+                    modified_at=now,
+                )
+
+        if not user_has_gemini_api_key(profile.user):
+            return
+
+        remaining_active = list(
+            ResumeProfile.objects.filter(
+                user_id=profile.user_id,
+                is_active=True,
+                embedding__isnull=False,
+            ).exclude(pk=profile.pk)
+        )
+        for sibling in remaining_active:
+            self._schedule_auto_rescore(sibling, force=False)
 
     def _schedule_auto_rescore(
         self,
@@ -435,10 +599,24 @@ class ResumeService(BaseService):
             raise ValueError(
                 "An authenticated user is required to create a ResumeProfile."
             )
+        is_active = validated_data.get("is_active", True)
+        if is_active:
+            self._enforce_active_resume_cap(user=self.user)
+
+        provided_language = validated_data.get("language", self._LANGUAGE_UNSET)
         enriched_data = self._enrich_if_content_changed(
             validated_data=validated_data,
             uploaded_file=uploaded_file,
         )
+        resolved_language = self._resolve_profile_language(
+            raw_text=enriched_data.get("raw_text", ""),
+            provided_language=provided_language,
+            instance=None,
+            content_changed=True,
+        )
+        if resolved_language is not None:
+            enriched_data["language"] = resolved_language
+
         profile = ResumeProfile.objects.create(user=self.user, **enriched_data)
         self._schedule_auto_rescore(profile, force=False)
         return profile
@@ -455,23 +633,56 @@ class ResumeService(BaseService):
         prev_active = instance.is_active
         prev_filters = self._targeting_signature(instance)
 
+        next_active = validated_data.get("is_active", prev_active)
+        if not prev_active and next_active:
+            self._enforce_active_resume_cap(
+                user=instance.user,
+                excluding_pk=instance.pk,
+            )
+
+        provided_language = validated_data.get("language", self._LANGUAGE_UNSET)
         enriched_data = self._enrich_if_content_changed(
             validated_data=validated_data,
             uploaded_file=uploaded_file,
             instance=instance,
         )
+        effective_raw_text = enriched_data.get("raw_text") or instance.raw_text
+        content_changed = (
+            enriched_data.get("content_hash", instance.content_hash) != prev_hash
+        )
+        resolved_language = self._resolve_profile_language(
+            raw_text=effective_raw_text,
+            provided_language=provided_language,
+            instance=instance,
+            content_changed=content_changed,
+        )
+        if resolved_language is not None:
+            enriched_data["language"] = resolved_language
+
         for attr, value in enriched_data.items():
             setattr(instance, attr, value)
         instance.save()
 
         hash_changed = instance.content_hash != prev_hash
         activated = not prev_active and instance.is_active
+        deactivated = prev_active and not instance.is_active
         filters_changed = self._targeting_signature(instance) != prev_filters
 
-        if instance.is_active and instance.embedding is not None:
+        if deactivated:
+            self._reconcile_winners_after_deactivation(instance)
+        elif instance.is_active and instance.embedding is not None:
             if hash_changed or activated:
                 self._schedule_auto_rescore(instance, force=False)
             elif filters_changed:
                 self._schedule_auto_rescore(instance, force=True)
 
         return instance
+
+    @transaction.atomic
+    def soft_delete_profile(self, instance: ResumeProfile) -> None:
+        was_active = instance.is_active
+        instance.is_active = False
+        instance.is_deleted = True
+        instance.save(update_fields=["is_active", "is_deleted"])
+        if was_active:
+            self._reconcile_winners_after_deactivation(instance)

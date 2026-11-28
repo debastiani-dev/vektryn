@@ -1,12 +1,30 @@
 import django_filters
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.jobs.models.jobs import JobPosting
+from vektryn_contracts.language import normalize_language_code
+
+
+def parse_language_filter_values(value: str) -> list[str]:
+    tokens = [part.strip() for part in value.split(",") if part.strip()]
+    normalized: list[str] = []
+    for token in tokens:
+        try:
+            code = normalize_language_code(token, strict=True)
+        except ValueError as exc:
+            raise DRFValidationError(
+                {"language": f"Invalid ISO 639-1 language code: {token!r}."}
+            ) from exc
+        if code not in normalized:
+            normalized.append(code)
+    return normalized
 
 
 class JobPostingFilter(django_filters.FilterSet):
     tech = django_filters.CharFilter(method="filter_tech")
     region = django_filters.CharFilter(method="filter_region")
     work_mode = django_filters.CharFilter(method="filter_work_mode")
+    language = django_filters.CharFilter(method="filter_language")
     min_salary = django_filters.NumberFilter(field_name="salary_max", lookup_expr="gte")
 
     class Meta:
@@ -36,3 +54,9 @@ class JobPostingFilter(django_filters.FilterSet):
         if not modes:
             return queryset
         return queryset.filter(work_mode__in=modes)
+
+    def filter_language(self, queryset, _name: str, value: str):
+        languages = parse_language_filter_values(value)
+        if not languages:
+            return queryset
+        return queryset.filter(language__in=languages)

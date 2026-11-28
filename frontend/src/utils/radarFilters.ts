@@ -1,7 +1,10 @@
+import { formatLanguageLabel } from "./languages";
+
 export interface RadarMetadataFilters {
     seniority: string;
     contractType: string;
     workMode: string;
+    language: string;
     region: string;
     atsSource: string;
 }
@@ -10,6 +13,7 @@ export const EMPTY_METADATA_FILTERS: RadarMetadataFilters = {
     seniority: "",
     contractType: "",
     workMode: "",
+    language: "",
     region: "",
     atsSource: "",
 };
@@ -117,6 +121,7 @@ export type ActiveFilterChipKey =
     | "seniority"
     | "contractType"
     | "workMode"
+    | "language"
     | "region"
     | "atsSource";
 
@@ -148,6 +153,7 @@ export function countActivePanelFilters(params: {
     if (params.metadataFilters.seniority) count += 1;
     if (params.metadataFilters.contractType) count += 1;
     if (params.metadataFilters.workMode) count += 1;
+    if (params.metadataFilters.language) count += 1;
     if (params.metadataFilters.region) count += 1;
     if (params.metadataFilters.atsSource) count += 1;
     return count;
@@ -194,6 +200,13 @@ export function buildActiveFilterChips(params: {
             key: "workMode",
             prefix: "Work Mode",
             label: lookupOptionLabel(WORK_MODE_OPTIONS, params.metadataFilters.workMode),
+        });
+    }
+    if (params.metadataFilters.language) {
+        chips.push({
+            key: "language",
+            prefix: "Language",
+            label: formatLanguageLabel(params.metadataFilters.language),
         });
     }
     if (params.metadataFilters.region) {

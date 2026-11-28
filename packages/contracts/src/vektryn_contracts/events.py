@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from vektryn_contracts.enums import (
+    UNKNOWN_LANGUAGE,
     ATSSource,
     ContractType,
     RegionEligibility,
@@ -24,6 +25,7 @@ from vektryn_contracts.enums import (
     SeniorityLevel,
     WorkMode,
 )
+from vektryn_contracts.language import normalize_language_code
 
 EMBEDDING_DIMENSIONS = 768
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
@@ -107,6 +109,7 @@ class JobEnrichedEvent(JobRawEvent):
     seniority: SeniorityLevel = SeniorityLevel.UNKNOWN
     contract_type: ContractType = ContractType.UNKNOWN
     work_mode: WorkMode = WorkMode.UNKNOWN
+    language: str = UNKNOWN_LANGUAGE
     region_eligibility: list[RegionEligibility] = Field(default_factory=list)
     salary_min: Decimal | None = Field(default=None, ge=0)
     salary_max: Decimal | None = Field(default=None, ge=0)
@@ -114,6 +117,13 @@ class JobEnrichedEvent(JobRawEvent):
     salary_period: SalaryPeriod | None = None
     tech_stack: list[str] = Field(default_factory=list)
     embedding: list[float]
+
+    @field_validator("language", mode="before")
+    @classmethod
+    def validate_language(cls, value: Any) -> str:
+        if value is None:
+            return UNKNOWN_LANGUAGE
+        return normalize_language_code(str(value), strict=True)
 
     @field_validator("tech_stack")
     @classmethod
@@ -159,6 +169,8 @@ class JobMatchAlertEvent(EventEnvelope):
     user_id: int | UUID
     job_posting_uuid: UUID
     resume_profile_uuid: UUID
+    resume_profile_label: str = Field(default="", max_length=120)
+    resume_language: str = UNKNOWN_LANGUAGE
     match_score_uuid: UUID
     title: str = Field(min_length=1, max_length=255)
     company_name: str = Field(min_length=1, max_length=180)
@@ -167,6 +179,13 @@ class JobMatchAlertEvent(EventEnvelope):
     matched_skills: list[str] = Field(default_factory=list)
     missing_keywords: list[str] = Field(default_factory=list)
     apply_url: ApplyUrl
+
+    @field_validator("resume_language", mode="before")
+    @classmethod
+    def validate_resume_language(cls, value: Any) -> str:
+        if value is None:
+            return UNKNOWN_LANGUAGE
+        return normalize_language_code(str(value), strict=True)
 
 
 class DeadLetterEvent(EventEnvelope):

@@ -53,6 +53,7 @@ export interface JobPostingSummary {
     seniority: SeniorityLevel;
     contract_type: ContractType;
     work_mode: WorkMode;
+    language?: string;
     region_eligibility: string[];
     salary_min: string | null;
     salary_max: string | null;
@@ -73,12 +74,20 @@ export interface JobPostingDetail extends JobPostingSummary {
     modified_at: string;
 }
 
+export interface ResumeProfileSummary {
+    uuid: string;
+    label: string;
+    language: string;
+}
+
 export interface MatchScore {
     uuid: string;
     job_posting: JobPostingSummary;
     resume_profile_uuid: string;
     resume_profile_label?: string;
+    resume_profile_summary?: ResumeProfileSummary;
     resume_min_alert_score?: number;
+    is_routed_winner?: boolean;
     cosine_similarity: number;
     fit_score: number | null;
     matched_skills: string[];
@@ -97,11 +106,13 @@ export interface ApplicationLead {
     uuid: string;
     job_posting: JobPostingSummary | string;
     resume_profile: string | null;
+    resume_profile_summary?: ResumeProfileSummary | null;
     job_title?: string;
     company_name?: string;
     apply_url?: string;
     ats_source?: string;
     work_mode?: WorkMode;
+    language?: string;
     status: LeadStatus;
     priority: LeadPriority;
     applied_at: string | null;
@@ -120,6 +131,7 @@ export interface SavedFilterQueryParams {
     seniority?: string;
     contract_type?: string;
     work_mode?: string;
+    language?: string;
     region?: string;
     ats_source?: string;
     sort_by?: string;
@@ -173,6 +185,8 @@ export interface LiveMatchAlert {
     user_id: string;
     job_posting_uuid: string;
     resume_profile_uuid: string;
+    resume_profile_label?: string;
+    resume_language?: string;
     match_score_uuid: string;
     title: string;
     company_name: string;
@@ -197,6 +211,8 @@ export type NotificationKind =
 export interface NotificationPayload {
     job_posting_uuid?: string;
     resume_profile_uuid?: string;
+    resume_profile_label?: string;
+    resume_language?: string;
     match_score_uuid?: string;
     lead_uuid?: string;
     lead_status?: string;
@@ -364,6 +380,8 @@ export interface ResumeProfile {
     target_contract_types: ContractType[];
     target_regions: string[];
     target_work_modes: WorkMode[];
+    language?: string;
+    strict_language_match?: boolean;
     min_alert_score: number;
     raw_text: string;
     source_file_gcs_uri: string;

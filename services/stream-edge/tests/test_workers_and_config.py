@@ -377,34 +377,35 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
         executed_sql.append(sql)
 
     fake_cursor.execute.side_effect = _capture_execute
-    # Sequence of fetchone/fetchall calls:
-    # 1. fetchone() -> ResumeProfile + UserProfile BYOK cols
-    # 2. fetchall() -> stale MatchScore candidate (1 row)
-    # 3. fetchall() -> unscored active JobPosting candidate (1 row)
-    # 4. fetchone() -> upsert returning (match_uuid, alert_sent_at) for stale job
-    # 5. fetchone() -> upsert returning (match_uuid, alert_sent_at) for unscored job
+    # Sequence of fetchall/fetchone calls:
+    # 1. fetchall() -> active ResumeProfiles for user (target + siblings)
+    # 2. fetchall() -> stale MatchScore candidate (1 row, ineligible -> Case A demotion)
+    # 3. fetchall() -> unscored active JobPosting candidate (1 row, winner -> Stage 2 + alert)
+    # 4. fetchone() -> upsert returning (match_uuid, alert_sent_at) for unscored job
+    # 5. fetchone() -> claim alert returning (match_uuid,)
     fake_cursor.fetchone.side_effect = [
-        (
-            resume_uuid,
-            42,
-            "Senior Python Django Engineer",
-            "new-hash" + "0" * 56,
-            ["python", "django"],
-            ["senior"],
-            ["pj"],
-            ["brazil"],
-            70,
-            [0.01] * EMBEDDING_DIMENSIONS,
-            "Primary Resume",
-            encrypted_user_key,
-            "auto",
-            True,
-        ),
-        (uuid4(), None),
         (uuid4(), None),
         (uuid4(),),
     ]
     fake_cursor.fetchall.side_effect = [
+        [
+            (
+                resume_uuid,
+                42,
+                "Senior Python Django Engineer",
+                "new-hash" + "0" * 56,
+                ["python", "django"],
+                ["senior"],
+                ["pj"],
+                ["brazil"],
+                70,
+                [0.01] * EMBEDDING_DIMENSIONS,
+                "Primary Resume",
+                encrypted_user_key,
+                "auto",
+                True,
+            )
+        ],
         [
             (
                 stale_job_uuid,
@@ -412,7 +413,7 @@ def test_matcher_rescore_uses_hnsw_stale_first_selection_and_commits_per_job():
                 "Acme",
                 "https://example.com/jobs/stale",
                 "Python Django",
-                "junior",  # Fails target_seniority=["senior"] -> should downgrade to None
+                "junior",  # Fails target_seniority=["senior"] -> Case A demotion, $0 BYOK
                 "pj",
                 ["brazil"],
                 ["python", "django"],
@@ -501,23 +502,27 @@ def test_matcher_rescore_force_watermark_and_consumer_poll_interval():
     fake_cursor = MagicMock()
     fake_cursor.__enter__.return_value = fake_cursor
     fake_cursor.execute.side_effect = lambda sql, params=None: executed_sql.append(sql)
-    fake_cursor.fetchone.return_value = (
-        resume_uuid,
-        42,
-        "Python Engineer",
-        "hash" + "0" * 60,
-        ["python"],
+    fake_cursor.fetchall.side_effect = [
+        [
+            (
+                resume_uuid,
+                42,
+                "Python Engineer",
+                "hash" + "0" * 60,
+                ["python"],
+                [],
+                [],
+                [],
+                70,
+                [0.01] * EMBEDDING_DIMENSIONS,
+                "Primary",
+                encrypted_user_key,
+                "auto",
+                True,
+            )
+        ],
         [],
-        [],
-        [],
-        70,
-        [0.01] * EMBEDDING_DIMENSIONS,
-        "Primary",
-        encrypted_user_key,
-        "auto",
-        True,
-    )
-    fake_cursor.fetchall.return_value = []
+    ]
 
     fake_conn = MagicMock()
     fake_conn.__enter__.return_value = fake_conn

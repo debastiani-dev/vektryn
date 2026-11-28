@@ -8,6 +8,7 @@ from pgvector.django import HnswIndex, VectorField
 
 from apps.base.models.base_model import BaseModel, enum_choices
 from vektryn_contracts.enums import (
+    UNKNOWN_LANGUAGE,
     ATSSource,
     ContractType,
     RegionEligibility,
@@ -16,6 +17,7 @@ from vektryn_contracts.enums import (
     WorkMode,
 )
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS, validate_apply_url
+from vektryn_contracts.language import is_valid_language_code
 
 
 def validate_apply_url_field(value: str) -> None:
@@ -23,6 +25,11 @@ def validate_apply_url_field(value: str) -> None:
         validate_apply_url(value)
     except ValueError as exc:
         raise ValidationError(str(exc)) from exc
+
+
+def validate_language_code_field(value: str) -> None:
+    if not is_valid_language_code(value, allow_unknown=True):
+        raise ValidationError(f"Invalid ISO 639-1 language code: {value!r}")
 
 
 class JobPosting(BaseModel):
@@ -59,6 +66,13 @@ class JobPosting(BaseModel):
         default=WorkMode.UNKNOWN,
         db_default=WorkMode.UNKNOWN,
         db_index=True,
+    )
+    language = models.CharField(
+        max_length=16,
+        default=UNKNOWN_LANGUAGE,
+        db_default=UNKNOWN_LANGUAGE,
+        db_index=True,
+        validators=[validate_language_code_field],
     )
     region_eligibility = ArrayField(
         base_field=models.CharField(

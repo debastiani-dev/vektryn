@@ -20,7 +20,15 @@ import type {
     SkillGapMetric,
 } from "../../types/models";
 import { formatAtsSource, formatContractType } from "../../utils/format";
+import { formatKnownLanguageBadge } from "../../utils/languages";
 import { Tooltip } from "../ui/Tooltip";
+
+function formatAnalyticsResumeOption(profile: ResumeProfile): string {
+    const langBadge = formatKnownLanguageBadge(profile.language);
+    const langSuffix = langBadge ? ` (${langBadge})` : "";
+    const pausedSuffix = profile.is_active ? "" : " · Paused";
+    return `${profile.label}${langSuffix}${pausedSuffix}`;
+}
 
 interface PersonalAnalyticsPanelProps {
     onSearchSkillInRadar?: (skill: string, resumeProfileUuid?: string) => void;
@@ -411,10 +419,10 @@ export function PersonalAnalyticsPanel({
                         }}
                         className="min-w-0 max-w-full flex-1 truncate rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-1.5 text-xs text-zinc-200 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25 sm:w-56 sm:flex-initial"
                     >
-                        <option value="">All Resumes</option>
+                        <option value="">All Active Resumes (Auto-Matched)</option>
                         {resumes.map((profile) => (
                             <option key={profile.uuid} value={profile.uuid}>
-                                {profile.label}
+                                {formatAnalyticsResumeOption(profile)}
                             </option>
                         ))}
                     </select>

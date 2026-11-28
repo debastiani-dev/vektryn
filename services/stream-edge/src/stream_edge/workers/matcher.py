@@ -1,8 +1,11 @@
 import asyncio
-from dataclasses import dataclass
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
 import logging
+import math
 import signal
 import uuid
 
@@ -34,6 +37,7 @@ from stream_edge.telemetry import (
 )
 from vektryn_contracts import (
     AUTO_GEMINI_MODEL,
+    UNKNOWN_LANGUAGE,
     ATSSource,
     BYOKCryptoError,
     BYOKKeyNotConfiguredError,
@@ -45,6 +49,7 @@ from vektryn_contracts import (
     alert_partition_key,
     build_fernet,
     decrypt_api_key,
+    normalize_language_code,
 )
 
 logging.basicConfig(
@@ -54,6 +59,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MATCHER_MAX_POLL_INTERVAL_MS = 600_000
+_EPOCH_UTC = datetime.fromtimestamp(0, tz=UTC)
 
 
 @dataclass
@@ -80,8 +86,32 @@ class _JobCandidate:
     region_eligibility: list[str]
     tech_stack: list[str]
     work_mode: str = "unknown"
+    language: str = UNKNOWN_LANGUAGE
     ats_source: str = ""
     submitted_by_user_id: int | uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class _ActiveProfile:
+    uuid: uuid.UUID
+    user_id: int | uuid.UUID
+    label: str
+    raw_text: str
+    content_hash: str
+    extracted_skills: list[str] | str | None
+    target_seniority: list[str] | None
+    target_contract_types: list[str] | None
+    target_regions: list[str] | None
+    min_alert_score: int
+    cosine_similarity: float = 0.0
+    target_work_modes: list[str] | None = None
+    language: str = UNKNOWN_LANGUAGE
+    strict_language_match: bool = False
+    modified_at: datetime = field(default_factory=lambda: _EPOCH_UTC)
+    embedding: object = None
+    api_key_encrypted: str = ""
+    preferred_model: str = AUTO_GEMINI_MODEL
+    allow_model_fallback: bool = True
 
 
 @dataclass
@@ -90,12 +120,57 @@ class _PairScoreResult:
     scored: bool = False
 
 
+@dataclass(frozen=True)
+class _RescoreCandidateState:
+    job: _JobCandidate
+    target_cosine: float
+    job_embedding: object = None
+    existing_resume_hash: str | None = None
+    existing_fit_score: int | None = None
+    target_is_routed_winner: bool | None = None
+
+
 def _parse_json_list(raw: list[str] | str | None) -> list[str]:
     if raw is None:
         return []
     if isinstance(raw, list):
         return [str(item) for item in raw]
     return [str(item) for item in json.loads(raw or "[]")]
+
+
+def _coerce_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return _EPOCH_UTC
+
+
+def _coerce_vector(raw: object) -> list[float] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        return [float(v) for v in raw]
+    if hasattr(raw, "tolist"):
+        converted = raw.tolist()
+        if isinstance(converted, list):
+            return [float(v) for v in converted]
+    if isinstance(raw, str) and raw.startswith("[") and raw.endswith("]"):
+        return [float(item) for item in json.loads(raw)]
+    return None
+
+
+def _vector_cosine_similarity(vec_a: object, vec_b: object) -> float:
+    a = _coerce_vector(vec_a)
+    b = _coerce_vector(vec_b)
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if math.isclose(norm_a, 0.0, abs_tol=1e-12) or math.isclose(
+        norm_b, 0.0, abs_tol=1e-12
+    ):
+        return 0.0
+    return max(0.0, min(1.0, dot / (norm_a * norm_b)))
 
 
 def _matches_profile_constraints(
@@ -109,17 +184,22 @@ def _matches_profile_constraints(
     work_mode: str = "unknown",
     target_work_modes: list[str] | None = None,
 ) -> bool:
-    if target_work_modes:
-        if work_mode not in target_work_modes:
-            return False
+    if target_work_modes and work_mode not in target_work_modes:
+        return False
 
-    if target_seniority and seniority != "unknown":
-        if seniority not in target_seniority:
-            return False
+    if (
+        target_seniority
+        and seniority != "unknown"
+        and seniority not in target_seniority
+    ):
+        return False
 
-    if target_contract_types and contract_type != "unknown":
-        if contract_type not in target_contract_types:
-            return False
+    if (
+        target_contract_types
+        and contract_type != "unknown"
+        and contract_type not in target_contract_types
+    ):
+        return False
 
     if target_regions:
         job_regions = set(region_eligibility)
@@ -130,11 +210,146 @@ def _matches_profile_constraints(
     return True
 
 
-@dataclass(frozen=True)
-class _UserBYOKConfig:
-    api_key_encrypted: str = ""
-    preferred_model: str = AUTO_GEMINI_MODEL
-    allow_model_fallback: bool = True
+def is_profile_eligible(profile: _ActiveProfile, job: _JobCandidate) -> bool:
+    """Step 1: Evaluate hard targeting gates and strict_language_match."""
+    if not _matches_profile_constraints(
+        seniority=job.seniority,
+        contract_type=job.contract_type,
+        region_eligibility=job.region_eligibility,
+        target_seniority=profile.target_seniority,
+        target_contract_types=profile.target_contract_types,
+        target_regions=profile.target_regions,
+        work_mode=job.work_mode,
+        target_work_modes=profile.target_work_modes,
+    ):
+        return False
+
+    job_lang = normalize_language_code(job.language, strict=False)
+    profile_lang = normalize_language_code(profile.language, strict=False)
+    if (
+        profile.strict_language_match
+        and job_lang != UNKNOWN_LANGUAGE
+        and profile_lang != UNKNOWN_LANGUAGE
+        and profile_lang != job_lang
+    ):
+        return False
+
+    return True
+
+
+def select_winning_profile(
+    profiles: Sequence[_ActiveProfile],
+    job: _JobCandidate,
+    *,
+    ignore_gates: bool = False,
+) -> _ActiveProfile | None:
+    """Steps 1-3: Deterministic language-aware single-winner router for one user."""
+    eligible = (
+        list(profiles)
+        if ignore_gates
+        else [p for p in profiles if is_profile_eligible(p, job)]
+    )
+    if not eligible:
+        return None
+
+    job_lang = normalize_language_code(job.language, strict=False)
+    if job_lang != UNKNOWN_LANGUAGE:
+        same_lang = [
+            p
+            for p in eligible
+            if normalize_language_code(p.language, strict=False) == job_lang
+        ]
+        pool = same_lang if same_lang else eligible
+    else:
+        pool = eligible
+
+    pool.sort(
+        key=lambda p: (
+            -float(p.cosine_similarity),
+            -_coerce_datetime(p.modified_at).timestamp(),
+            str(p.uuid),
+        )
+    )
+    return pool[0]
+
+
+def _acquire_winner_lock(
+    cur: psycopg.Cursor,
+    *,
+    user_id: int | uuid.UUID,
+    job_posting_uuid: uuid.UUID,
+) -> None:
+    """Acquire standardized 64-bit transaction-scoped advisory lock on (user, job)."""
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended('vektryn:winner:' || %s || ':' || %s, 0))",
+        (str(user_id), str(job_posting_uuid)),
+    )
+
+
+def _demote_sibling_winners(
+    cur: psycopg.Cursor,
+    *,
+    user_id: int | uuid.UUID,
+    job_posting_uuid: uuid.UUID,
+    winner_resume_uuid: uuid.UUID,
+    now: datetime,
+) -> None:
+    cur.execute(
+        """
+        UPDATE matching_matchscore ms
+        SET is_routed_winner = FALSE, modified_at = %s
+        FROM resumes_resumeprofile rp
+        WHERE ms.resume_profile_id = rp.uuid
+          AND rp.user_id = %s
+          AND ms.job_posting_id = %s
+          AND ms.resume_profile_id <> %s
+          AND ms.is_routed_winner = TRUE
+        """,
+        (now, user_id, job_posting_uuid, winner_resume_uuid),
+    )
+
+
+def _demote_non_winner_on_rescore(
+    cur: psycopg.Cursor,
+    *,
+    user_id: int | uuid.UUID,
+    job_posting_uuid: uuid.UUID,
+    target_resume_uuid: uuid.UUID,
+    winner_resume_uuid: uuid.UUID | None,
+    now: datetime,
+) -> None:
+    """Case A mandatory demotion: demote R_target and promote winner's existing score."""
+    _acquire_winner_lock(cur, user_id=user_id, job_posting_uuid=job_posting_uuid)
+    cur.execute(
+        """
+        UPDATE matching_matchscore
+        SET is_routed_winner = FALSE, modified_at = %s
+        WHERE job_posting_id = %s
+          AND resume_profile_id = %s
+          AND is_routed_winner = TRUE
+        """,
+        (now, job_posting_uuid, target_resume_uuid),
+    )
+    if winner_resume_uuid is not None:
+        cur.execute(
+            """
+            UPDATE matching_matchscore
+            SET is_routed_winner = TRUE, modified_at = %s
+            WHERE job_posting_id = %s
+              AND resume_profile_id = %s
+              AND is_deleted = FALSE
+            RETURNING uuid
+            """,
+            (now, job_posting_uuid, winner_resume_uuid),
+        )
+        if cur.fetchone() is not None:
+            _demote_sibling_winners(
+                cur,
+                user_id=user_id,
+                job_posting_uuid=job_posting_uuid,
+                winner_resume_uuid=winner_resume_uuid,
+                now=now,
+            )
 
 
 def _decrypt_user_byok_key(
@@ -177,6 +392,7 @@ def _run_llm_evaluation(
     raw_text: str,
     extracted_skills: list[str] | str | None,
     cosine_val: float,
+    resume_language: str = UNKNOWN_LANGUAGE,
     propagate_pause: bool = False,
 ) -> _EvaluationOutcome:
     if not api_key:
@@ -194,6 +410,8 @@ def _run_llm_evaluation(
             company_name=job.company_name,
             job_description=job.description_clean,
             job_stack=job.tech_stack,
+            job_language=job.language,
+            resume_language=resume_language,
         )
         return _EvaluationOutcome(
             fit_score=eval_result.fit_score,
@@ -242,7 +460,7 @@ def _upsert_job_posting(
             ats_source, external_id, content_hash,
             title, company_name, apply_url, raw_html_gcs_uri,
             location_raw, description_clean,
-            seniority, contract_type, work_mode, region_eligibility,
+            seniority, contract_type, work_mode, language, region_eligibility,
             salary_min, salary_max, salary_currency, salary_period,
             tech_stack, embedding, is_active, posted_at
         )
@@ -251,7 +469,7 @@ def _upsert_job_posting(
             %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s,
-            %s, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s::jsonb, %s::vector, TRUE, %s
         )
@@ -268,6 +486,7 @@ def _upsert_job_posting(
             seniority = EXCLUDED.seniority,
             contract_type = EXCLUDED.contract_type,
             work_mode = EXCLUDED.work_mode,
+            language = EXCLUDED.language,
             region_eligibility = EXCLUDED.region_eligibility,
             salary_min = EXCLUDED.salary_min,
             salary_max = EXCLUDED.salary_max,
@@ -296,6 +515,7 @@ def _upsert_job_posting(
             enriched.seniority.value,
             enriched.contract_type.value,
             enriched.work_mode.value,
+            enriched.language,
             region_list,
             enriched.salary_min,
             enriched.salary_max,
@@ -318,6 +538,7 @@ def _upsert_match_score(
     cosine_val: float,
     outcome: _EvaluationOutcome,
     resume_hash: str,
+    is_routed_winner: bool = True,
     replace_evaluation: bool = False,
 ) -> tuple[uuid.UUID, datetime | None]:
     cur.execute(
@@ -328,7 +549,8 @@ def _upsert_match_score(
             cosine_similarity, fit_score,
             matched_skills, missing_keywords, talking_points,
             gap_summary, fit_highlights, watchout_note,
-            resume_content_hash, scoring_model, alert_sent_at
+            resume_content_hash, scoring_model, alert_sent_at,
+            is_routed_winner
         )
         VALUES (
             %s, %s, %s, FALSE,
@@ -336,11 +558,14 @@ def _upsert_match_score(
             %s, %s,
             %s::jsonb, %s::jsonb, %s::jsonb,
             %s, %s::jsonb, %s,
-            %s, %s, NULL
+            %s, %s, NULL,
+            %s
         )
         ON CONFLICT (job_posting_id, resume_profile_id) DO UPDATE SET
             modified_at = EXCLUDED.modified_at,
+            is_deleted = FALSE,
             cosine_similarity = EXCLUDED.cosine_similarity,
+            is_routed_winner = EXCLUDED.is_routed_winner,
             fit_score = CASE
                 WHEN %s OR EXCLUDED.resume_content_hash <> matching_matchscore.resume_content_hash
                 THEN EXCLUDED.fit_score
@@ -400,6 +625,7 @@ def _upsert_match_score(
             outcome.watchout_note,
             resume_hash,
             outcome.scoring_model,
+            is_routed_winner,
             replace_evaluation,
             replace_evaluation,
             replace_evaluation,
@@ -424,15 +650,27 @@ def _claim_and_persist_match_alert(
     match_score_uuid: uuid.UUID,
     cosine_val: float,
     outcome: _EvaluationOutcome,
+    resume_label: str = "",
+    resume_language: str = UNKNOWN_LANGUAGE,
 ) -> JobMatchAlertEvent | None:
     cur.execute(
         """
-        UPDATE matching_matchscore
+        UPDATE matching_matchscore target
         SET alert_sent_at = %s, modified_at = %s
-        WHERE uuid = %s AND alert_sent_at IS NULL
+        WHERE target.uuid = %s
+          AND target.alert_sent_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM matching_matchscore other
+              INNER JOIN resumes_resumeprofile rp
+                ON rp.uuid = other.resume_profile_id
+              WHERE rp.user_id = %s
+                AND other.job_posting_id = %s
+                AND other.alert_sent_at IS NOT NULL
+          )
         RETURNING uuid
         """,
-        (now, now, match_score_uuid),
+        (now, now, match_score_uuid, user_id, job.uuid),
     )
     if cur.fetchone() is None:
         return None
@@ -442,6 +680,9 @@ def _claim_and_persist_match_alert(
     sim_pct = round(cosine_val * 100)
     matched_skills = outcome.matched_skills or []
     missing_keywords = outcome.missing_keywords or []
+    clean_label = (resume_label or "").strip()
+    clean_lang = normalize_language_code(resume_language, strict=False)
+    matched_target = clean_label if clean_label else "your resume"
 
     insert_notification_with_cursor(
         cur,
@@ -450,12 +691,14 @@ def _claim_and_persist_match_alert(
         kind=NotificationKind.MATCH_ALERT,
         title=f"{fit_score}% Fit: {job.title}"[:255],
         body=(
-            f"{job.company_name} matched your resume "
+            f"{job.company_name} matched {matched_target} "
             f"({sim_pct}% vector similarity)."
         ),
         payload={
             "job_posting_uuid": str(job.uuid),
             "resume_profile_uuid": str(resume_uuid),
+            "resume_profile_label": clean_label,
+            "resume_language": clean_lang,
             "match_score_uuid": str(match_score_uuid),
             "title": job.title,
             "company_name": job.company_name,
@@ -473,6 +716,8 @@ def _claim_and_persist_match_alert(
         user_id=user_id,
         job_posting_uuid=job.uuid,
         resume_profile_uuid=resume_uuid,
+        resume_profile_label=clean_label[:120],
+        resume_language=clean_lang,
         match_score_uuid=match_score_uuid,
         title=job.title,
         company_name=job.company_name,
@@ -506,6 +751,8 @@ def _persist_manual_import_ready(
     match_score_uuid: uuid.UUID,
     cosine_val: float,
     outcome: _EvaluationOutcome,
+    resume_label: str = "",
+    resume_language: str = UNKNOWN_LANGUAGE,
 ) -> None:
     if job.submitted_by_user_id is not None and str(user_id) != str(
         job.submitted_by_user_id
@@ -514,6 +761,8 @@ def _persist_manual_import_ready(
 
     fit_score = int(outcome.fit_score or 0)
     sim_pct = round(cosine_val * 100)
+    clean_label = (resume_label or "").strip()
+    clean_lang = normalize_language_code(resume_language, strict=False)
     insert_notification_with_cursor(
         cur,
         notification_uuid=uuid.uuid4(),
@@ -527,6 +776,8 @@ def _persist_manual_import_ready(
         payload={
             "job_posting_uuid": str(job.uuid),
             "resume_profile_uuid": str(resume_uuid),
+            "resume_profile_label": clean_label,
+            "resume_language": clean_lang,
             "match_score_uuid": str(match_score_uuid),
             "title": job.title,
             "company_name": job.company_name,
@@ -576,106 +827,104 @@ def _persist_rescore_completed(
     )
 
 
-def _score_and_persist_pair(
+def _score_and_persist_winner(
     cur: psycopg.Cursor,
     *,
     now: datetime,
     trace_id: str,
     job: _JobCandidate,
-    resume_uuid: uuid.UUID,
-    user_id: int | uuid.UUID,
-    raw_text: str,
-    resume_hash: str,
-    extracted_skills: list[str] | str | None,
-    target_seniority: list[str] | None,
-    target_contract_types: list[str] | None,
-    target_regions: list[str] | None,
-    min_alert_score: int,
-    cosine_val: float,
+    winner: _ActiveProfile,
     scoring_manager: UserGeminiScoringManager,
     user_api_key: str | None,
-    target_work_modes: list[str] | None = None,
-    preferred_model: str = AUTO_GEMINI_MODEL,
-    allow_model_fallback: bool = True,
+    bypass_threshold: bool = False,
     replace_evaluation: bool = False,
     notify_manual_import: bool = False,
     propagate_pause: bool = False,
 ) -> _PairScoreResult:
-    is_manual = job.ats_source == ATSSource.MANUAL.value
+    cosine_val = float(winner.cosine_similarity)
     should_score = bool(user_api_key) and (
-        is_manual
-        or (
-            cosine_val >= settings.cosine_similarity_threshold
-            and _matches_profile_constraints(
-                seniority=job.seniority,
-                contract_type=job.contract_type,
-                region_eligibility=job.region_eligibility,
-                target_seniority=target_seniority,
-                target_contract_types=target_contract_types,
-                target_regions=target_regions,
-                work_mode=job.work_mode,
-                target_work_modes=target_work_modes,
-            )
-        )
+        bypass_threshold or cosine_val >= settings.cosine_similarity_threshold
     )
     outcome = (
         _run_llm_evaluation(
             scoring_manager=scoring_manager,
-            user_id=int(user_id),
+            user_id=int(winner.user_id),
             api_key=user_api_key,
-            preferred_model=preferred_model,
-            allow_model_fallback=allow_model_fallback,
+            preferred_model=winner.preferred_model,
+            allow_model_fallback=winner.allow_model_fallback,
             job=job,
-            resume_uuid=resume_uuid,
-            raw_text=raw_text,
-            extracted_skills=extracted_skills,
+            resume_uuid=winner.uuid,
+            raw_text=winner.raw_text,
+            extracted_skills=winner.extracted_skills,
             cosine_val=cosine_val,
+            resume_language=winner.language,
             propagate_pause=propagate_pause,
         )
         if should_score
         else _EvaluationOutcome()
     )
 
+    _acquire_winner_lock(cur, user_id=winner.user_id, job_posting_uuid=job.uuid)
     match_score_uuid, _alert_sent_at = _upsert_match_score(
         cur,
         now=now,
         job_posting_uuid=job.uuid,
-        resume_uuid=resume_uuid,
+        resume_uuid=winner.uuid,
         cosine_val=cosine_val,
         outcome=outcome,
-        resume_hash=resume_hash,
+        resume_hash=winner.content_hash,
+        is_routed_winner=True,
         replace_evaluation=replace_evaluation,
+    )
+    _demote_sibling_winners(
+        cur,
+        user_id=winner.user_id,
+        job_posting_uuid=job.uuid,
+        winner_resume_uuid=winner.uuid,
+        now=now,
     )
 
     pending_alert: JobMatchAlertEvent | None = None
-    if outcome.fit_score is not None and outcome.fit_score >= min_alert_score:
+    if outcome.fit_score is not None and outcome.fit_score >= winner.min_alert_score:
         pending_alert = _claim_and_persist_match_alert(
             cur,
             now=now,
             trace_id=trace_id,
             job=job,
-            resume_uuid=resume_uuid,
-            user_id=user_id,
+            resume_uuid=winner.uuid,
+            resume_label=winner.label,
+            resume_language=winner.language,
+            user_id=winner.user_id,
             match_score_uuid=match_score_uuid,
             cosine_val=cosine_val,
             outcome=outcome,
         )
-    elif is_manual and notify_manual_import and outcome.fit_score is not None:
+    elif (
+        bypass_threshold
+        and job.ats_source == ATSSource.MANUAL.value
+        and notify_manual_import
+        and outcome.fit_score is not None
+    ):
         _persist_manual_import_ready(
             cur,
             now=now,
             job=job,
-            resume_uuid=resume_uuid,
-            user_id=user_id,
+            resume_uuid=winner.uuid,
+            resume_label=winner.label,
+            resume_language=winner.language,
+            user_id=winner.user_id,
             match_score_uuid=match_score_uuid,
             cosine_val=cosine_val,
             outcome=outcome,
         )
+
     logger.info(
-        "Evaluated %s @ %s against resume=%s | cosine=%.4f | fit_score=%s | alert=%s",
+        "Routed %s @ %s (%s) -> winner resume=%s (%s) | cosine=%.4f | fit_score=%s | alert=%s",
         job.title,
         job.company_name,
-        resume_uuid,
+        job.language,
+        winner.uuid,
+        winner.language,
         cosine_val,
         outcome.fit_score,
         pending_alert is not None,
@@ -684,6 +933,105 @@ def _score_and_persist_pair(
         alert=pending_alert,
         scored=outcome.fit_score is not None,
     )
+
+
+def _row_to_active_profile(row: tuple) -> _ActiveProfile:
+    (
+        resume_uuid,
+        user_id,
+        label,
+        raw_text,
+        resume_hash,
+        extracted_skills,
+        target_seniority,
+        target_contract_types,
+        target_regions,
+        min_alert_score,
+        cosine_sim,
+        *extra,
+    ) = row
+    encrypted_key = str(extra[0]) if len(extra) >= 1 and extra[0] else ""
+    preferred_model = (
+        str(extra[1]) if len(extra) >= 2 and extra[1] else AUTO_GEMINI_MODEL
+    )
+    allow_fallback = bool(extra[2]) if len(extra) >= 3 else True
+    target_work_modes = (
+        list(extra[3]) if len(extra) >= 4 and extra[3] is not None else None
+    )
+    language = (
+        normalize_language_code(str(extra[4]), strict=False)
+        if len(extra) >= 5 and extra[4]
+        else UNKNOWN_LANGUAGE
+    )
+    strict_language_match = bool(extra[5]) if len(extra) >= 6 else False
+    modified_at = _coerce_datetime(extra[6]) if len(extra) >= 7 else _EPOCH_UTC
+    return _ActiveProfile(
+        uuid=resume_uuid,
+        user_id=user_id,
+        label=str(label or "").strip(),
+        raw_text=raw_text,
+        content_hash=resume_hash,
+        extracted_skills=extracted_skills,
+        target_seniority=target_seniority,
+        target_contract_types=target_contract_types,
+        target_regions=target_regions,
+        min_alert_score=min_alert_score,
+        cosine_similarity=float(cosine_sim),
+        target_work_modes=target_work_modes,
+        language=language,
+        strict_language_match=strict_language_match,
+        modified_at=modified_at,
+        api_key_encrypted=encrypted_key,
+        preferred_model=preferred_model,
+        allow_model_fallback=allow_fallback,
+    )
+
+
+def _is_manual_bypass_user(job: _JobCandidate, user_id: int | uuid.UUID) -> bool:
+    if job.ats_source != ATSSource.MANUAL.value:
+        return False
+    if job.submitted_by_user_id is None:
+        return True
+    return str(user_id) == str(job.submitted_by_user_id)
+
+
+def _route_job_for_user(
+    cur: psycopg.Cursor,
+    *,
+    now: datetime,
+    trace_id: str,
+    job: _JobCandidate,
+    user_id: int | uuid.UUID,
+    user_profiles: list[_ActiveProfile],
+    scoring_manager: UserGeminiScoringManager,
+    encryption_key: str,
+) -> JobMatchAlertEvent | None:
+    is_manual_bypass = _is_manual_bypass_user(job, user_id)
+    winner = select_winning_profile(user_profiles, job)
+    if winner is None and is_manual_bypass:
+        winner = select_winning_profile(user_profiles, job, ignore_gates=True)
+    if winner is None:
+        return None
+
+    user_api_key = _decrypt_user_byok_key(
+        user_id=int(user_id),
+        encrypted_key=winner.api_key_encrypted,
+        encryption_key=encryption_key,
+    )
+    pair_result = _score_and_persist_winner(
+        cur,
+        now=now,
+        trace_id=trace_id,
+        job=job,
+        winner=winner,
+        scoring_manager=scoring_manager,
+        user_api_key=user_api_key,
+        bypass_threshold=is_manual_bypass,
+        replace_evaluation=False,
+        notify_manual_import=True,
+        propagate_pause=False,
+    )
+    return pair_result.alert
 
 
 def _upsert_job_and_score_sync(
@@ -715,6 +1063,7 @@ def _upsert_job_and_score_sync(
                 region_eligibility=[r.value for r in enriched.region_eligibility],
                 tech_stack=enriched.tech_stack,
                 work_mode=enriched.work_mode.value,
+                language=enriched.language,
                 ats_source=enriched.ats_source.value,
                 submitted_by_user_id=enriched.submitted_by_user_id,
             )
@@ -736,7 +1085,10 @@ def _upsert_job_and_score_sync(
                     COALESCE(p.gemini_api_key_encrypted, '') AS gemini_api_key_encrypted,
                     COALESCE(p.preferred_gemini_model, 'auto') AS preferred_gemini_model,
                     COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback,
-                    r.target_work_modes
+                    r.target_work_modes,
+                    r.language,
+                    r.strict_language_match,
+                    r.modified_at
                 FROM resumes_resumeprofile r
                 INNER JOIN auth_user u
                   ON u.id = r.user_id
@@ -750,76 +1102,34 @@ def _upsert_job_and_score_sync(
                 """,
                 (enriched.embedding,),
             )
-            profiles = cur.fetchall()
+            raw_profiles = cur.fetchall()
+
+            profiles_by_user: dict[int | uuid.UUID, list[_ActiveProfile]] = defaultdict(
+                list
+            )
+            for row in raw_profiles:
+                profile = _row_to_active_profile(row)
+                profiles_by_user[profile.user_id].append(profile)
 
             pending_alerts: list[JobMatchAlertEvent] = []
-            for row in profiles:
-                (
-                    resume_uuid,
-                    user_id,
-                    _label,
-                    raw_text,
-                    resume_hash,
-                    extracted_skills,
-                    target_seniority,
-                    target_contract_types,
-                    target_regions,
-                    min_alert_score,
-                    cosine_sim,
-                    *byok_cols,
-                ) = row
-                encrypted_key = (
-                    str(byok_cols[0]) if len(byok_cols) >= 1 and byok_cols[0] else ""
-                )
-                preferred_model = (
-                    str(byok_cols[1])
-                    if len(byok_cols) >= 2 and byok_cols[1]
-                    else AUTO_GEMINI_MODEL
-                )
-                allow_fallback = bool(byok_cols[2]) if len(byok_cols) >= 3 else True
-                target_work_modes = (
-                    list(byok_cols[3])
-                    if len(byok_cols) >= 4 and byok_cols[3] is not None
-                    else None
-                )
-
+            for user_id, user_profiles in profiles_by_user.items():
                 try:
-                    user_api_key = _decrypt_user_byok_key(
-                        user_id=int(user_id),
-                        encrypted_key=encrypted_key,
-                        encryption_key=encryption_key,
-                    )
-                    pair_result = _score_and_persist_pair(
+                    alert = _route_job_for_user(
                         cur,
                         now=now,
                         trace_id=enriched.trace_id,
                         job=candidate,
-                        resume_uuid=resume_uuid,
                         user_id=user_id,
-                        raw_text=raw_text,
-                        resume_hash=resume_hash,
-                        extracted_skills=extracted_skills,
-                        target_seniority=target_seniority,
-                        target_contract_types=target_contract_types,
-                        target_regions=target_regions,
-                        min_alert_score=min_alert_score,
-                        cosine_val=float(cosine_sim),
+                        user_profiles=user_profiles,
                         scoring_manager=scoring_manager,
-                        user_api_key=user_api_key,
-                        target_work_modes=target_work_modes,
-                        preferred_model=preferred_model,
-                        allow_model_fallback=allow_fallback,
-                        replace_evaluation=False,
-                        notify_manual_import=True,
-                        propagate_pause=False,
+                        encryption_key=encryption_key,
                     )
-                    if pair_result.alert is not None:
-                        pending_alerts.append(pair_result.alert)
+                    if alert is not None:
+                        pending_alerts.append(alert)
                 except Exception as exc:
                     logger.warning(
-                        "Per-user scoring boundary caught error for user=%s resume=%s job=%s: %s",
+                        "Per-user scoring boundary caught error for user=%s job=%s: %s",
                         user_id,
-                        resume_uuid,
                         job_posting_uuid,
                         exc,
                     )
@@ -828,6 +1138,158 @@ def _upsert_job_and_score_sync(
         if pending_alerts:
             _publish_match_alerts(producer, pending_alerts)
         producer.flush(5.0)
+
+
+@dataclass(frozen=True)
+class _RescoreContext:
+    target: _ActiveProfile
+    all_user_profiles: tuple[_ActiveProfile, ...]
+    user_api_key: str
+
+
+def _row_to_rescore_profile(row: tuple) -> _ActiveProfile:
+    (
+        resume_uuid,
+        user_id,
+        raw_text,
+        resume_hash,
+        extracted_skills,
+        target_seniority,
+        target_contract_types,
+        target_regions,
+        min_alert_score,
+        resume_embedding,
+        *extra,
+    ) = row
+    label = str(extra[0]).strip() if len(extra) >= 1 and extra[0] else "Active Resume"
+    encrypted_key = str(extra[1]) if len(extra) >= 2 and extra[1] else ""
+    preferred_model = (
+        str(extra[2]) if len(extra) >= 3 and extra[2] else AUTO_GEMINI_MODEL
+    )
+    allow_fallback = bool(extra[3]) if len(extra) >= 4 else True
+    target_work_modes = (
+        list(extra[4]) if len(extra) >= 5 and extra[4] is not None else None
+    )
+    language = (
+        normalize_language_code(str(extra[5]), strict=False)
+        if len(extra) >= 6 and extra[5]
+        else UNKNOWN_LANGUAGE
+    )
+    strict_language_match = bool(extra[6]) if len(extra) >= 7 else False
+    modified_at = _coerce_datetime(extra[7]) if len(extra) >= 8 else _EPOCH_UTC
+    return _ActiveProfile(
+        uuid=resume_uuid,
+        user_id=user_id,
+        label=label,
+        raw_text=raw_text,
+        content_hash=resume_hash,
+        extracted_skills=extracted_skills,
+        target_seniority=target_seniority,
+        target_contract_types=target_contract_types,
+        target_regions=target_regions,
+        min_alert_score=min_alert_score,
+        target_work_modes=target_work_modes,
+        language=language,
+        strict_language_match=strict_language_match,
+        modified_at=modified_at,
+        embedding=resume_embedding,
+        api_key_encrypted=encrypted_key,
+        preferred_model=preferred_model,
+        allow_model_fallback=allow_fallback,
+    )
+
+
+def _load_rescore_context(
+    cur: psycopg.Cursor,
+    *,
+    event: JobRescoreEvent,
+    scoring_manager: UserGeminiScoringManager,
+    encryption_key: str,
+) -> _RescoreContext | None:
+    cur.execute(
+        """
+        SELECT
+            r.uuid,
+            r.user_id,
+            r.raw_text,
+            r.content_hash,
+            r.extracted_skills,
+            r.target_seniority,
+            r.target_contract_types,
+            r.target_regions,
+            r.min_alert_score,
+            r.embedding,
+            r.label,
+            COALESCE(p.gemini_api_key_encrypted, '') AS gemini_api_key_encrypted,
+            COALESCE(p.preferred_gemini_model, 'auto') AS preferred_gemini_model,
+            COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback,
+            r.target_work_modes,
+            r.language,
+            r.strict_language_match,
+            r.modified_at
+        FROM resumes_resumeprofile r
+        INNER JOIN auth_user u
+          ON u.id = r.user_id
+         AND u.is_active = TRUE
+        LEFT JOIN base_userprofile p
+          ON p.user_id = r.user_id
+         AND p.is_deleted = FALSE
+        WHERE r.user_id = (
+            SELECT t.user_id
+            FROM resumes_resumeprofile t
+            WHERE t.uuid = %s
+              AND t.is_deleted = FALSE
+              AND t.is_active = TRUE
+              AND t.embedding IS NOT NULL
+        )
+          AND r.is_deleted = FALSE
+          AND r.is_active = TRUE
+          AND r.embedding IS NOT NULL
+        """,
+        (event.resume_profile_uuid,),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        logger.info(
+            "Skipping jobs.rescore for resume=%s (not found, inactive user/resume, or missing embedding)",
+            event.resume_profile_uuid,
+        )
+        return None
+
+    all_profiles = tuple(_row_to_rescore_profile(row) for row in rows)
+    target = next(
+        (p for p in all_profiles if str(p.uuid) == str(event.resume_profile_uuid)),
+        None,
+    )
+    if target is None:
+        return None
+
+    user_api_key = _decrypt_user_byok_key(
+        user_id=int(target.user_id),
+        encrypted_key=target.api_key_encrypted,
+        encryption_key=encryption_key,
+    )
+    if not user_api_key:
+        logger.info(
+            "Skipping jobs.rescore for keyless user=%s resume=%s to preserve existing scores",
+            target.user_id,
+            target.uuid,
+        )
+        return None
+
+    if scoring_manager.get_pause_state(int(target.user_id)) is not None:
+        logger.info(
+            "Skipping jobs.rescore for paused user=%s resume=%s",
+            target.user_id,
+            target.uuid,
+        )
+        return None
+
+    return _RescoreContext(
+        target=target,
+        all_user_profiles=all_profiles,
+        user_api_key=user_api_key,
+    )
 
 
 def _select_rescore_candidates(
@@ -855,7 +1317,12 @@ def _select_rescore_candidates(
                 j.tech_stack,
                 GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
                 j.ats_source,
-                j.work_mode
+                j.work_mode,
+                j.language,
+                j.embedding,
+                m.resume_content_hash,
+                m.fit_score,
+                m.is_routed_winner
             FROM jobs_jobposting j
             LEFT JOIN matching_matchscore m
               ON m.job_posting_id = j.uuid
@@ -864,13 +1331,13 @@ def _select_rescore_candidates(
             WHERE j.is_deleted = FALSE
               AND j.is_active = TRUE
               AND j.embedding IS NOT NULL
-              AND (m.uuid IS NULL OR m.modified_at < %s)
+              AND (m.uuid IS NULL OR m.modified_at < %s OR m.is_routed_winner = TRUE)
             ORDER BY j.embedding <=> %s::vector ASC
             LIMIT %s
             """,
             (resume_embedding, resume_uuid, produced_at, resume_embedding, max_jobs),
         )
-        return cur.fetchall()
+        return list(cur.fetchall())
 
     # Query 1: refresh existing stale MatchScore rows first so visible UI badges never starve
     cur.execute(
@@ -887,7 +1354,12 @@ def _select_rescore_candidates(
             j.tech_stack,
             GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
             j.ats_source,
-            j.work_mode
+            j.work_mode,
+            j.language,
+            j.embedding,
+            m.resume_content_hash,
+            m.fit_score,
+            m.is_routed_winner
         FROM jobs_jobposting j
         INNER JOIN matching_matchscore m
           ON m.job_posting_id = j.uuid
@@ -922,7 +1394,12 @@ def _select_rescore_candidates(
             j.tech_stack,
             GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
             j.ats_source,
-            j.work_mode
+            j.work_mode,
+            j.language,
+            j.embedding,
+            NULL::text AS resume_content_hash,
+            NULL::smallint AS fit_score,
+            FALSE AS is_routed_winner
         FROM jobs_jobposting j
         WHERE j.is_deleted = FALSE
           AND j.is_active = TRUE
@@ -943,146 +1420,7 @@ def _select_rescore_candidates(
     return rows
 
 
-@dataclass(frozen=True)
-class _RescoreContext:
-    resume_uuid: uuid.UUID
-    user_id: int | uuid.UUID
-    raw_text: str
-    resume_hash: str
-    extracted_skills: list[str] | str | None
-    target_seniority: list[str] | None
-    target_contract_types: list[str] | None
-    target_regions: list[str] | None
-    min_alert_score: int
-    resume_embedding: object
-    resume_label: str
-    user_api_key: str
-    preferred_model: str
-    allow_fallback: bool
-    target_work_modes: list[str] | None = None
-
-
-def _load_rescore_context(
-    cur: psycopg.Cursor,
-    *,
-    event: JobRescoreEvent,
-    scoring_manager: UserGeminiScoringManager,
-    encryption_key: str,
-) -> _RescoreContext | None:
-    cur.execute(
-        """
-        SELECT
-            r.uuid,
-            r.user_id,
-            r.raw_text,
-            r.content_hash,
-            r.extracted_skills,
-            r.target_seniority,
-            r.target_contract_types,
-            r.target_regions,
-            r.min_alert_score,
-            r.embedding,
-            r.label,
-            COALESCE(p.gemini_api_key_encrypted, '') AS gemini_api_key_encrypted,
-            COALESCE(p.preferred_gemini_model, 'auto') AS preferred_gemini_model,
-            COALESCE(p.allow_model_fallback, TRUE) AS allow_model_fallback,
-            r.target_work_modes
-        FROM resumes_resumeprofile r
-        INNER JOIN auth_user u
-          ON u.id = r.user_id
-         AND u.is_active = TRUE
-        LEFT JOIN base_userprofile p
-          ON p.user_id = r.user_id
-         AND p.is_deleted = FALSE
-        WHERE r.uuid = %s
-          AND r.is_deleted = FALSE
-          AND r.is_active = TRUE
-          AND r.embedding IS NOT NULL
-        """,
-        (event.resume_profile_uuid,),
-    )
-    profile_row = cur.fetchone()
-    if profile_row is None:
-        logger.info(
-            "Skipping jobs.rescore for resume=%s (not found, inactive user/resume, or missing embedding)",
-            event.resume_profile_uuid,
-        )
-        return None
-
-    (
-        resume_uuid,
-        user_id,
-        raw_text,
-        resume_hash,
-        extracted_skills,
-        target_seniority,
-        target_contract_types,
-        target_regions,
-        min_alert_score,
-        resume_embedding,
-        *extra_profile,
-    ) = profile_row
-    resume_label = (
-        str(extra_profile[0]).strip()
-        if extra_profile and extra_profile[0]
-        else "Active Resume"
-    )
-    encrypted_key = (
-        str(extra_profile[1]) if len(extra_profile) >= 2 and extra_profile[1] else ""
-    )
-    preferred_model = (
-        str(extra_profile[2])
-        if len(extra_profile) >= 3 and extra_profile[2]
-        else AUTO_GEMINI_MODEL
-    )
-    allow_fallback = bool(extra_profile[3]) if len(extra_profile) >= 4 else True
-    target_work_modes = (
-        list(extra_profile[4])
-        if len(extra_profile) >= 5 and extra_profile[4] is not None
-        else None
-    )
-
-    user_api_key = _decrypt_user_byok_key(
-        user_id=int(user_id),
-        encrypted_key=encrypted_key,
-        encryption_key=encryption_key,
-    )
-    if not user_api_key:
-        logger.info(
-            "Skipping jobs.rescore for keyless user=%s resume=%s to preserve existing scores",
-            user_id,
-            resume_uuid,
-        )
-        return None
-
-    if scoring_manager.get_pause_state(int(user_id)) is not None:
-        logger.info(
-            "Skipping jobs.rescore for paused user=%s resume=%s",
-            user_id,
-            resume_uuid,
-        )
-        return None
-
-    return _RescoreContext(
-        resume_uuid=resume_uuid,
-        user_id=user_id,
-        raw_text=raw_text,
-        resume_hash=resume_hash,
-        extracted_skills=extracted_skills,
-        target_seniority=target_seniority,
-        target_contract_types=target_contract_types,
-        target_regions=target_regions,
-        min_alert_score=min_alert_score,
-        resume_embedding=resume_embedding,
-        resume_label=resume_label,
-        user_api_key=user_api_key,
-        preferred_model=preferred_model,
-        allow_fallback=allow_fallback,
-        target_work_modes=target_work_modes,
-    )
-
-
-def _row_to_job_candidate(row: tuple) -> tuple[_JobCandidate, float]:
+def _row_to_rescore_state(row: tuple) -> _RescoreCandidateState:
     (
         job_uuid,
         title,
@@ -1096,10 +1434,20 @@ def _row_to_job_candidate(row: tuple) -> tuple[_JobCandidate, float]:
         cosine_sim,
         *rest,
     ) = row
-    ats_source = str(rest[0]) if rest else ""
+    ats_source = str(rest[0]) if len(rest) >= 1 and rest[0] else ""
     work_mode = str(rest[1]) if len(rest) >= 2 and rest[1] else "unknown"
-    return (
-        _JobCandidate(
+    language = (
+        normalize_language_code(str(rest[2]), strict=False)
+        if len(rest) >= 3 and rest[2]
+        else UNKNOWN_LANGUAGE
+    )
+    job_embedding = rest[3] if len(rest) >= 4 else None
+    existing_hash = str(rest[4]) if len(rest) >= 5 and rest[4] is not None else None
+    existing_fit = int(rest[5]) if len(rest) >= 6 and rest[5] is not None else None
+    target_winner = bool(rest[6]) if len(rest) >= 7 and rest[6] is not None else None
+
+    return _RescoreCandidateState(
+        job=_JobCandidate(
             uuid=job_uuid,
             title=title,
             company_name=company_name,
@@ -1110,10 +1458,158 @@ def _row_to_job_candidate(row: tuple) -> tuple[_JobCandidate, float]:
             region_eligibility=list(region_eligibility or []),
             tech_stack=_parse_json_list(tech_stack),
             work_mode=work_mode,
+            language=language,
             ats_source=ats_source,
         ),
-        float(cosine_sim),
+        target_cosine=float(cosine_sim),
+        job_embedding=job_embedding,
+        existing_resume_hash=existing_hash,
+        existing_fit_score=existing_fit,
+        target_is_routed_winner=target_winner,
     )
+
+
+def _profiles_with_job_cosines(
+    ctx: _RescoreContext,
+    state: _RescoreCandidateState,
+) -> list[_ActiveProfile]:
+    scored_profiles: list[_ActiveProfile] = []
+    for profile in ctx.all_user_profiles:
+        if str(profile.uuid) == str(ctx.target.uuid):
+            cosine_val = state.target_cosine
+        else:
+            cosine_val = _vector_cosine_similarity(
+                state.job_embedding, profile.embedding
+            )
+        scored_profiles.append(
+            _ActiveProfile(
+                uuid=profile.uuid,
+                user_id=profile.user_id,
+                label=profile.label,
+                raw_text=profile.raw_text,
+                content_hash=profile.content_hash,
+                extracted_skills=profile.extracted_skills,
+                target_seniority=profile.target_seniority,
+                target_contract_types=profile.target_contract_types,
+                target_regions=profile.target_regions,
+                min_alert_score=profile.min_alert_score,
+                cosine_similarity=cosine_val,
+                target_work_modes=profile.target_work_modes,
+                language=profile.language,
+                strict_language_match=profile.strict_language_match,
+                modified_at=profile.modified_at,
+                embedding=profile.embedding,
+                api_key_encrypted=profile.api_key_encrypted,
+                preferred_model=profile.preferred_model,
+                allow_model_fallback=profile.allow_model_fallback,
+            )
+        )
+    return scored_profiles
+
+
+def _flip_fresh_winner_only(
+    cur: psycopg.Cursor,
+    *,
+    user_id: int | uuid.UUID,
+    job_posting_uuid: uuid.UUID,
+    winner_resume_uuid: uuid.UUID,
+    now: datetime,
+) -> None:
+    _acquire_winner_lock(cur, user_id=user_id, job_posting_uuid=job_posting_uuid)
+    cur.execute(
+        """
+        UPDATE matching_matchscore
+        SET is_routed_winner = TRUE, modified_at = %s
+        WHERE job_posting_id = %s
+          AND resume_profile_id = %s
+          AND is_deleted = FALSE
+        """,
+        (now, job_posting_uuid, winner_resume_uuid),
+    )
+    _demote_sibling_winners(
+        cur,
+        user_id=user_id,
+        job_posting_uuid=job_posting_uuid,
+        winner_resume_uuid=winner_resume_uuid,
+        now=now,
+    )
+
+
+def _has_reusable_fresh_match(
+    state: _RescoreCandidateState,
+    *,
+    target_hash: str,
+    winner_cosine: float,
+    force: bool,
+) -> bool:
+    if force or state.existing_resume_hash != target_hash:
+        return False
+    return (
+        state.existing_fit_score is not None
+        or winner_cosine < settings.cosine_similarity_threshold
+    )
+
+
+def _process_single_rescore_candidate(
+    conn: psycopg.Connection,
+    cur: psycopg.Cursor,
+    *,
+    ctx: _RescoreContext,
+    event: JobRescoreEvent,
+    row: tuple,
+    scoring_manager: UserGeminiScoringManager,
+) -> _PairScoreResult | None:
+    state = _row_to_rescore_state(row)
+    now = datetime.now(UTC)
+    profiles_for_job = _profiles_with_job_cosines(ctx, state)
+    winner = select_winning_profile(profiles_for_job, state.job)
+
+    # Case A: R_target is not the routed winner -> $0 BYOK spend + mandatory demotion
+    if winner is None or str(winner.uuid) != str(ctx.target.uuid):
+        if state.target_is_routed_winner is not False:
+            _demote_non_winner_on_rescore(
+                cur,
+                user_id=ctx.target.user_id,
+                job_posting_uuid=state.job.uuid,
+                target_resume_uuid=ctx.target.uuid,
+                winner_resume_uuid=winner.uuid if winner is not None else None,
+                now=now,
+            )
+            conn.commit()
+        return None
+
+    # Case B1: R_target is the winner and already has a fresh MatchScore -> flip only ($0 BYOK)
+    if _has_reusable_fresh_match(
+        state,
+        target_hash=ctx.target.content_hash,
+        winner_cosine=winner.cosine_similarity,
+        force=event.force,
+    ):
+        _flip_fresh_winner_only(
+            cur,
+            user_id=ctx.target.user_id,
+            job_posting_uuid=state.job.uuid,
+            winner_resume_uuid=ctx.target.uuid,
+            now=now,
+        )
+        conn.commit()
+        return None
+
+    # Case B2: R_target is the winner and needs fresh Stage 2 evaluation
+    pair_result = _score_and_persist_winner(
+        cur,
+        now=now,
+        trace_id=event.trace_id,
+        job=state.job,
+        winner=winner,
+        scoring_manager=scoring_manager,
+        user_api_key=ctx.user_api_key,
+        bypass_threshold=False,
+        replace_evaluation=True,
+        propagate_pause=True,
+    )
+    conn.commit()
+    return pair_result
 
 
 def _score_rescore_candidates(
@@ -1130,49 +1626,33 @@ def _score_rescore_candidates(
     scored_count = 0
     alerts_count = 0
     for row in candidates:
-        candidate, cosine_val = _row_to_job_candidate(row)
         try:
-            pair_result = _score_and_persist_pair(
+            pair_result = _process_single_rescore_candidate(
+                conn,
                 cur,
-                now=datetime.now(UTC),
-                trace_id=event.trace_id,
-                job=candidate,
-                resume_uuid=ctx.resume_uuid,
-                user_id=ctx.user_id,
-                raw_text=ctx.raw_text,
-                resume_hash=ctx.resume_hash,
-                extracted_skills=ctx.extracted_skills,
-                target_seniority=ctx.target_seniority,
-                target_contract_types=ctx.target_contract_types,
-                target_regions=ctx.target_regions,
-                min_alert_score=ctx.min_alert_score,
-                cosine_val=cosine_val,
+                ctx=ctx,
+                event=event,
+                row=row,
                 scoring_manager=scoring_manager,
-                user_api_key=ctx.user_api_key,
-                target_work_modes=ctx.target_work_modes,
-                preferred_model=ctx.preferred_model,
-                allow_model_fallback=ctx.allow_fallback,
-                replace_evaluation=True,
-                propagate_pause=True,
             )
         except UserScoringPausedError as exc:
             logger.info(
                 "Stopping jobs.rescore early for user=%s resume=%s after %d jobs (%s)",
-                ctx.user_id,
-                ctx.resume_uuid,
+                ctx.target.user_id,
+                ctx.target.uuid,
                 processed,
                 exc.action.value,
             )
             break
 
-        # Commit per job so partial progress survives restarts and retries stay idempotent
-        conn.commit()
+        processed += 1
+        if pair_result is None:
+            continue
         if pair_result.scored:
             scored_count += 1
         if pair_result.alert is not None:
             alerts_count += 1
             _publish_match_alerts(producer, [pair_result.alert])
-        processed += 1
     return processed, scored_count, alerts_count
 
 
@@ -1202,9 +1682,9 @@ def _rescore_resume_sync(
 
             candidates = _select_rescore_candidates(
                 cur,
-                resume_uuid=ctx.resume_uuid,
-                resume_hash=ctx.resume_hash,
-                resume_embedding=ctx.resume_embedding,
+                resume_uuid=ctx.target.uuid,
+                resume_hash=ctx.target.content_hash,
+                resume_embedding=ctx.target.embedding,
                 max_jobs=event.max_jobs,
                 force=event.force,
                 produced_at=event.produced_at,
@@ -1222,9 +1702,9 @@ def _rescore_resume_sync(
                 _persist_rescore_completed(
                     cur,
                     now=datetime.now(UTC),
-                    user_id=ctx.user_id,
-                    resume_uuid=ctx.resume_uuid,
-                    resume_label=ctx.resume_label,
+                    user_id=ctx.target.user_id,
+                    resume_uuid=ctx.target.uuid,
+                    resume_label=ctx.target.label,
                     processed_count=processed,
                     scored_count=scored_count,
                     alerts_count=alerts_count,
@@ -1235,7 +1715,7 @@ def _rescore_resume_sync(
         producer.flush(5.0)
         logger.info(
             "Rescore complete for resume=%s | processed=%d | max_jobs=%d | force=%s",
-            ctx.resume_uuid,
+            ctx.target.uuid,
             processed,
             event.max_jobs,
             event.force,

@@ -477,41 +477,45 @@ def test_matcher_live_and_rescore_enforce_target_work_modes(
     producer.reset_mock()
     rescore_cur = MagicMock()
     rescore_cur.fetchone.side_effect = [
-        (
-            resume_uuid,
-            7,
-            "Senior Python engineer",
-            "h" * 64,
-            ["python", "django"],
-            ["senior"],
-            ["pj"],
-            ["brazil"],
-            70,
-            [0.1] * EMBEDDING_DIMENSIONS,
-            "Backend CV",
-            encrypted_key,
-            "auto",
-            True,
-            target_modes,
-        ),
         (match_uuid, None),
         (match_uuid,),
     ]
-    rescore_cur.fetchall.return_value = [
-        (
-            job_uuid,
-            enriched.title,
-            enriched.company_name,
-            str(enriched.apply_url),
-            enriched.description_clean,
-            enriched.seniority.value,
-            enriched.contract_type.value,
-            ["brazil"],
-            ["python", "django"],
-            0.91,
-            enriched.ats_source.value,
-            job_mode.value,
-        )
+    rescore_cur.fetchall.side_effect = [
+        [
+            (
+                resume_uuid,
+                7,
+                "Senior Python engineer",
+                "h" * 64,
+                ["python", "django"],
+                ["senior"],
+                ["pj"],
+                ["brazil"],
+                70,
+                [0.1] * EMBEDDING_DIMENSIONS,
+                "Backend CV",
+                encrypted_key,
+                "auto",
+                True,
+                target_modes,
+            )
+        ],
+        [
+            (
+                job_uuid,
+                enriched.title,
+                enriched.company_name,
+                str(enriched.apply_url),
+                enriched.description_clean,
+                enriched.seniority.value,
+                enriched.contract_type.value,
+                ["brazil"],
+                ["python", "django"],
+                0.91,
+                enriched.ats_source.value,
+                job_mode.value,
+            )
+        ],
     ]
 
     @contextmanager

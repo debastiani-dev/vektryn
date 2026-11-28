@@ -12,6 +12,8 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
     apply_url = serializers.CharField(source="job_posting.apply_url", read_only=True)
     ats_source = serializers.CharField(source="job_posting.ats_source", read_only=True)
     work_mode = serializers.CharField(source="job_posting.work_mode", read_only=True)
+    language = serializers.CharField(source="job_posting.language", read_only=True)
+    resume_profile_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = ApplicationLead
@@ -19,11 +21,13 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "uuid",
             "job_posting",
             "resume_profile",
+            "resume_profile_summary",
             "job_title",
             "company_name",
             "apply_url",
             "ats_source",
             "work_mode",
+            "language",
             "status",
             "priority",
             "notes",
@@ -40,6 +44,16 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "created_at",
             "modified_at",
         ]
+
+    def get_resume_profile_summary(self, obj: ApplicationLead) -> dict[str, str] | None:
+        profile = obj.resume_profile
+        if profile is None or profile.is_deleted:
+            return None
+        return {
+            "uuid": str(profile.uuid),
+            "label": profile.label,
+            "language": profile.language,
+        }
 
     def validate_resume_profile(self, value):
         request = self.context.get("request")

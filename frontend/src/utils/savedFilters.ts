@@ -24,6 +24,43 @@ export function normalizeCompanyName(raw: string): string {
     return raw.trim().toLowerCase().split(/\s+/).filter(Boolean).join(" ");
 }
 
+function asString(value: unknown): string {
+    return typeof value === "string" ? value : "";
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+    return typeof value === "boolean" ? value : fallback;
+}
+
+function resolvePresetSort(value: unknown): RadarSortOption {
+    const rawSort = asString(value);
+    return VALID_SORT_VALUES.has(rawSort) ? (rawSort as RadarSortOption) : "best_match";
+}
+
+function applyMetadataParams(
+    params: SavedFilterQueryParams,
+    metadataFilters: RadarMetadataFilters,
+): void {
+    if (metadataFilters.seniority) params.seniority = metadataFilters.seniority;
+    if (metadataFilters.contractType) params.contract_type = metadataFilters.contractType;
+    if (metadataFilters.workMode) params.work_mode = metadataFilters.workMode;
+    if (metadataFilters.language) params.language = metadataFilters.language;
+    if (metadataFilters.region) params.region = metadataFilters.region;
+    if (metadataFilters.atsSource) params.ats_source = metadataFilters.atsSource;
+}
+
+function hydrateMetadataFilters(params: SavedFilterQueryParams): RadarMetadataFilters {
+    return {
+        ...EMPTY_METADATA_FILTERS,
+        seniority: asString(params.seniority),
+        contractType: asString(params.contract_type),
+        workMode: asString(params.work_mode),
+        language: asString(params.language),
+        region: asString(params.region),
+        atsSource: asString(params.ats_source),
+    };
+}
+
 export function serializeRadarStateToPreset(state: RadarFilterState): SavedFilterQueryParams {
     const params: SavedFilterQueryParams = {};
     const trimmedSearch = state.searchTerm.trim();
@@ -34,13 +71,7 @@ export function serializeRadarStateToPreset(state: RadarFilterState): SavedFilte
     if (state.untrackedOnly) params.untracked_only = true;
     if (!state.hideDismissed) params.hide_dismissed = false;
     if (!state.hideMuted) params.hide_muted = false;
-    if (state.metadataFilters.seniority) params.seniority = state.metadataFilters.seniority;
-    if (state.metadataFilters.contractType) {
-        params.contract_type = state.metadataFilters.contractType;
-    }
-    if (state.metadataFilters.workMode) params.work_mode = state.metadataFilters.workMode;
-    if (state.metadataFilters.region) params.region = state.metadataFilters.region;
-    if (state.metadataFilters.atsSource) params.ats_source = state.metadataFilters.atsSource;
+    applyMetadataParams(params, state.metadataFilters);
     if (state.sortBy !== "best_match") params.sort_by = state.sortBy;
     return params;
 }
@@ -49,31 +80,22 @@ export function hydrateRadarStateFromPreset(
     params: SavedFilterQueryParams,
     availableResumes: ReadonlyArray<Pick<ResumeProfile, "uuid">>,
 ): RadarFilterState {
-    const rawResume = typeof params.resume_profile === "string" ? params.resume_profile : "";
+    const rawResume = asString(params.resume_profile);
     const resumeExists =
         rawResume.length > 0 && availableResumes.some((resume) => resume.uuid === rawResume);
-    const rawSort = typeof params.sort_by === "string" ? params.sort_by : "best_match";
-    const sortBy: RadarSortOption = VALID_SORT_VALUES.has(rawSort)
-        ? (rawSort as RadarSortOption)
-        : "best_match";
+    const minScore =
+        typeof params.min_score === "number" && params.min_score > 0 ? params.min_score : 0;
 
     return {
-        searchTerm: typeof params.search === "string" ? params.search : "",
+        searchTerm: asString(params.search),
         resumeFilter: resumeExists ? rawResume : "",
-        minScore: typeof params.min_score === "number" && params.min_score > 0 ? params.min_score : 0,
+        minScore,
         evaluatedOnly: Boolean(params.evaluated_only),
         untrackedOnly: Boolean(params.untracked_only),
-        hideDismissed: typeof params.hide_dismissed === "boolean" ? params.hide_dismissed : true,
-        hideMuted: typeof params.hide_muted === "boolean" ? params.hide_muted : true,
-        metadataFilters: {
-            ...EMPTY_METADATA_FILTERS,
-            seniority: typeof params.seniority === "string" ? params.seniority : "",
-            contractType: typeof params.contract_type === "string" ? params.contract_type : "",
-            workMode: typeof params.work_mode === "string" ? params.work_mode : "",
-            region: typeof params.region === "string" ? params.region : "",
-            atsSource: typeof params.ats_source === "string" ? params.ats_source : "",
-        },
-        sortBy,
+        hideDismissed: asBoolean(params.hide_dismissed, true),
+        hideMuted: asBoolean(params.hide_muted, true),
+        metadataFilters: hydrateMetadataFilters(params),
+        sortBy: resolvePresetSort(params.sort_by),
     };
 }
 
@@ -97,6 +119,7 @@ export function isPresetActive(
         (normalizedCurrent.seniority ?? "") === (normalizedPreset.seniority ?? "") &&
         (normalizedCurrent.contract_type ?? "") === (normalizedPreset.contract_type ?? "") &&
         (normalizedCurrent.work_mode ?? "") === (normalizedPreset.work_mode ?? "") &&
+        (normalizedCurrent.language ?? "") === (normalizedPreset.language ?? "") &&
         (normalizedCurrent.region ?? "") === (normalizedPreset.region ?? "") &&
         (normalizedCurrent.ats_source ?? "") === (normalizedPreset.ats_source ?? "") &&
         (normalizedCurrent.sort_by ?? "best_match") === (normalizedPreset.sort_by ?? "best_match")

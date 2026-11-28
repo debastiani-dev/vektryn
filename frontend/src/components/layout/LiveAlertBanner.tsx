@@ -1,4 +1,4 @@
-import { BellRing, ExternalLink, Mail, X } from "lucide-react";
+import { BellRing, ExternalLink, FileText, Mail, X } from "lucide-react";
 import type { LiveMatchAlert } from "../../types/models";
 import {
     formatApplyLinkLabel,
@@ -6,6 +6,7 @@ import {
     isMailtoUrl,
     scoreBadgeStyle,
 } from "../../utils/format";
+import { formatLanguageBadge, UNKNOWN_LANGUAGE } from "../../utils/languages";
 import { getAlertDedupeKey } from "../../utils/notifications";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -52,6 +53,17 @@ export function LiveAlertBanner({ alerts, onDismiss }: Readonly<LiveAlertBannerP
                                             {alert.fit_score}% Fit
                                         </span>
                                     </Tooltip>
+                                    {alert.resume_profile_label && (
+                                        <span className="inline-flex max-w-[190px] items-center gap-1 truncate rounded-md bg-zinc-800/90 px-2 py-0.5 text-[11px] font-medium text-zinc-200 ring-1 ring-zinc-700/80">
+                                            <FileText className="h-3 w-3 shrink-0 text-violet-400" />
+                                            <span className="truncate">
+                                                {alert.resume_language &&
+                                                alert.resume_language !== UNKNOWN_LANGUAGE
+                                                    ? `${formatLanguageBadge(alert.resume_language)} · ${alert.resume_profile_label}`
+                                                    : alert.resume_profile_label}
+                                            </span>
+                                        </span>
+                                    )}
                                 </div>
 
                                 <p className="truncate text-sm font-semibold text-zinc-100">

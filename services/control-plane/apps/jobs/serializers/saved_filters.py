@@ -3,6 +3,7 @@ from typing import Any
 from rest_framework import serializers
 
 from apps.jobs.models.saved_filter import SavedFilter
+from vektryn_contracts.language import normalize_language_code
 
 ALLOWED_QUERY_PARAM_KEYS = frozenset(
     {
@@ -13,6 +14,7 @@ ALLOWED_QUERY_PARAM_KEYS = frozenset(
         "seniority",
         "contract_type",
         "work_mode",
+        "language",
         "region",
         "ats_source",
         "sort_by",
@@ -30,6 +32,44 @@ BOOLEAN_QUERY_PARAM_KEYS = frozenset(
         "untracked_only",
     }
 )
+
+
+def _normalize_language_query_param(raw_lang: Any) -> str:
+    if not isinstance(raw_lang, str):
+        raise serializers.ValidationError(
+            "Filter parameter 'language' must be a string."
+        )
+    tokens = [part.strip() for part in raw_lang.split(",") if part.strip()]
+    normalized_tokens: list[str] = []
+    for token in tokens:
+        try:
+            code = normalize_language_code(token, strict=True)
+        except ValueError as exc:
+            raise serializers.ValidationError(
+                f"Invalid language filter value: {token!r}."
+            ) from exc
+        if code not in normalized_tokens:
+            normalized_tokens.append(code)
+    return ",".join(normalized_tokens)
+
+
+def _normalize_language_query_param(raw_lang: Any) -> str:
+    if not isinstance(raw_lang, str):
+        raise serializers.ValidationError(
+            "Filter parameter 'language' must be a string."
+        )
+    tokens = [part.strip() for part in raw_lang.split(",") if part.strip()]
+    normalized_tokens: list[str] = []
+    for token in tokens:
+        try:
+            code = normalize_language_code(token, strict=True)
+        except ValueError as exc:
+            raise serializers.ValidationError(
+                f"Invalid language filter value: {token!r}."
+            ) from exc
+        if code not in normalized_tokens:
+            normalized_tokens.append(code)
+    return ",".join(normalized_tokens)
 
 
 class SavedFilterSerializer(serializers.ModelSerializer):
@@ -73,4 +113,7 @@ class SavedFilterSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     f"Filter parameter '{bool_key}' must be a boolean."
                 )
+        if "language" in value and value["language"] not in (None, ""):
+            normalized = _normalize_language_query_param(value["language"])
+            value = {**value, "language": normalized}
         return value

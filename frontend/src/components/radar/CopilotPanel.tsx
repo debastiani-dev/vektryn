@@ -23,6 +23,7 @@ import type {
 } from "../../types/models";
 import { formatRelativeTime } from "../../utils/format";
 import { classifyCopilotError, type CopilotErrorInfo } from "../../utils/geminiModels";
+import { formatKnownLanguageBadge, getLanguageName } from "../../utils/languages";
 import { MarkdownContent } from "../ui/MarkdownContent";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -246,9 +247,30 @@ export function CopilotPanel({
         Boolean(currentArtifact?.is_stale),
         currentKindMeta.label,
     );
+    const matchedResumeLabel =
+        match.resume_profile_summary?.label || match.resume_profile_label || "";
+    const matchedResumeLang = match.resume_profile_summary?.language || "unknown";
+    const matchedResumeLangBadge = formatKnownLanguageBadge(matchedResumeLang);
 
     return (
         <div className="space-y-5">
+            {matchedResumeLabel && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-3.5 py-2 text-xs text-zinc-400">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-violet-400" />
+                    <span>
+                        Scored &amp; drafted using{" "}
+                        <span className="font-medium text-zinc-200">{matchedResumeLabel}</span>
+                        {matchedResumeLangBadge && (
+                            <span
+                                title={getLanguageName(matchedResumeLang)}
+                                className="ml-1.5 rounded bg-violet-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-violet-300 ring-1 ring-violet-500/30"
+                            >
+                                {matchedResumeLangBadge}
+                            </span>
+                        )}
+                    </span>
+                </div>
+            )}
             {!hasGeminiApiKey && (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-950/20 px-4 py-3 text-xs text-amber-200">
                     <div className="flex items-start gap-2.5">
@@ -487,7 +509,7 @@ export function CopilotPanel({
                         {currentKindMeta.description}
                     </p>
                     <p className="mt-2 text-[11px] text-zinc-500">
-                        Generated strictly on demand and cached for your active resume.
+                        Generated strictly on demand and cached for this resume profile.
                     </p>
                     <button
                         type="button"

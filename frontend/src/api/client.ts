@@ -278,41 +278,59 @@ export interface ResumeProfileInput {
     target_contract_types?: ContractType[];
     target_regions?: string[];
     target_work_modes?: WorkMode[];
+    language?: string;
+    strict_language_match?: boolean;
     min_alert_score?: number;
     is_active?: boolean;
 }
 
+function appendFormScalar(
+    form: FormData,
+    key: string,
+    value: string | number | boolean | undefined,
+): void {
+    if (value !== undefined) {
+        form.append(key, String(value));
+    }
+}
+
+function appendFormList(
+    form: FormData,
+    key: string,
+    values: readonly string[] | undefined,
+    includeEmptySentinel = false,
+): void {
+    if (values === undefined) {
+        return;
+    }
+    if (values.length === 0 && includeEmptySentinel) {
+        form.append(key, "");
+        return;
+    }
+    for (const item of values) {
+        form.append(key, item);
+    }
+}
+
+function buildResumeFormData(file: File, payload: Partial<ResumeProfileInput>): FormData {
+    const form = new FormData();
+    form.append("file", file);
+    appendFormScalar(form, "label", payload.label);
+    appendFormScalar(form, "raw_text", payload.raw_text);
+    appendFormScalar(form, "min_alert_score", payload.min_alert_score);
+    appendFormScalar(form, "is_active", payload.is_active);
+    appendFormScalar(form, "language", payload.language);
+    appendFormScalar(form, "strict_language_match", payload.strict_language_match);
+    appendFormList(form, "target_seniority", payload.target_seniority);
+    appendFormList(form, "target_contract_types", payload.target_contract_types);
+    appendFormList(form, "target_regions", payload.target_regions);
+    appendFormList(form, "target_work_modes", payload.target_work_modes, true);
+    return form;
+}
+
 function buildResumeBody(payload: Partial<ResumeProfileInput>): BodyInit {
     if (payload.file) {
-        const form = new FormData();
-        form.append("file", payload.file);
-        if (payload.label !== undefined) form.append("label", payload.label);
-        if (payload.raw_text !== undefined) form.append("raw_text", payload.raw_text);
-        if (payload.min_alert_score !== undefined) {
-            form.append("min_alert_score", String(payload.min_alert_score));
-        }
-        if (payload.is_active !== undefined) {
-            form.append("is_active", String(payload.is_active));
-        }
-        for (const item of payload.target_seniority ?? []) {
-            form.append("target_seniority", item);
-        }
-        for (const item of payload.target_contract_types ?? []) {
-            form.append("target_contract_types", item);
-        }
-        for (const item of payload.target_regions ?? []) {
-            form.append("target_regions", item);
-        }
-        if (payload.target_work_modes !== undefined) {
-            if (payload.target_work_modes.length === 0) {
-                form.append("target_work_modes", "");
-            } else {
-                for (const item of payload.target_work_modes) {
-                    form.append("target_work_modes", item);
-                }
-            }
-        }
-        return form;
+        return buildResumeFormData(payload.file, payload);
     }
 
     const { file: _ignored, ...jsonPayload } = payload;
@@ -541,7 +559,10 @@ export const vektrynApi = {
     updateLead: (
         uuid: string,
         payload: Partial<
-            Pick<ApplicationLead, "status" | "priority" | "notes" | "next_action_at">
+            Pick<
+                ApplicationLead,
+                "status" | "priority" | "notes" | "next_action_at" | "resume_profile"
+            >
         >,
     ) =>
         apiFetch<ApplicationLead>(`/api/v1/leads/${encodeURIComponent(uuid)}/`, {

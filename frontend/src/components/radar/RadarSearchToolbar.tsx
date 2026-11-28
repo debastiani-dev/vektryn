@@ -2,6 +2,7 @@ import {
     ArrowUpDown,
     ChevronDown,
     EyeOff,
+    FileText,
     Loader2,
     Search,
     SlidersHorizontal,
@@ -9,6 +10,7 @@ import {
     X,
 } from "lucide-react";
 import type { HybridSearchMode, ResumeProfile } from "../../types/models";
+import { formatLanguageBadge, UNKNOWN_LANGUAGE } from "../../utils/languages";
 import {
     type ActiveFilterChipKey,
     buildActiveFilterChips,
@@ -111,8 +113,10 @@ export function RadarSearchToolbar({
 }: Readonly<RadarSearchToolbarProps>) {
     const isDebouncing = searchTerm.trim() !== debouncedSearch;
     const isSearching = isDebouncing || (loading && Boolean(debouncedSearch));
+    const activeResumes = resumes.filter((r) => r.is_active);
+    const promoteResumeSelector = activeResumes.length >= 2;
     const panelFilterCount = countActivePanelFilters({
-        resumeFilter,
+        resumeFilter: promoteResumeSelector ? "" : resumeFilter,
         minScore,
         metadataFilters,
     });
@@ -174,6 +178,39 @@ export function RadarSearchToolbar({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5 lg:shrink-0">
+                    {promoteResumeSelector && (
+                        <Tooltip content="Auto-match across all active resumes or drill into a single resume profile">
+                            <div className="relative shrink-0">
+                                <FileText
+                                    className="pointer-events-none absolute top-3 left-3 h-4 w-4 text-violet-400"
+                                    aria-hidden="true"
+                                />
+                                <select
+                                    id="radar-toolbar-resume"
+                                    aria-label="Filter by resume profile"
+                                    value={resumeFilter}
+                                    onChange={(e) => onResumeChange(e.target.value)}
+                                    className="h-10 max-w-[240px] appearance-none truncate rounded-xl border border-violet-500/35 bg-zinc-950/90 pr-8 pl-9 text-xs font-medium text-zinc-100 transition hover:border-violet-400/50 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/25"
+                                >
+                                    <option value="">All Active Resumes (Auto-Matched)</option>
+                                    {resumes.map((r) => {
+                                        const langSuffix =
+                                            r.language && r.language !== UNKNOWN_LANGUAGE
+                                                ? ` (${formatLanguageBadge(r.language)})`
+                                                : "";
+                                        const pausedSuffix = r.is_active ? "" : " · Paused";
+                                        return (
+                                            <option key={r.uuid} value={r.uuid}>
+                                                {`${r.label}${langSuffix}${pausedSuffix}`}
+                                            </option>
+                                        );
+                                    })}
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute top-3 right-2.5 h-4 w-4 text-zinc-500" />
+                            </div>
+                        </Tooltip>
+                    )}
+
                     <Tooltip content="Only show roles with a Stage 2 AI fit score">
                         <button
                             type="button"
@@ -274,11 +311,12 @@ export function RadarSearchToolbar({
                 </div>
             </div>
 
-            {/* Row 2: Collapsible Structured Filters Panel (Balanced 3x2 Grid) */}
+            {/* Row 2: Collapsible Structured Filters Panel */}
             {filtersOpen && (
                 <MetadataFiltersPanel
                     resumes={resumes}
                     resumeFilter={resumeFilter}
+                    hideResumeSelect={promoteResumeSelector}
                     minScore={minScore}
                     filters={metadataFilters}
                     onResumeChange={onResumeChange}

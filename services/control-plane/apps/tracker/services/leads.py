@@ -3,6 +3,7 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.base.models.notification import Notification
+from apps.matching.models.matching import MatchScore
 from apps.tracker.models import ApplicationLead
 from vektryn_contracts.enums import LeadStatus, NotificationKind
 
@@ -72,12 +73,28 @@ def sync_due_followup_notifications_for_user(user) -> int:
 @transaction.atomic
 def create_lead(*, user, validated_data: dict) -> ApplicationLead:
     now = timezone.now()
-    status = validated_data.get("status", LeadStatus.SAVED)
-    notes = (validated_data.get("notes") or "").strip()
+    data = dict(validated_data)
+    if data.get("resume_profile") is None and data.get("job_posting") is not None:
+        winning_match = (
+            MatchScore.objects.select_related("resume_profile")
+            .filter(
+                job_posting=data["job_posting"],
+                resume_profile__user=user,
+                resume_profile__is_deleted=False,
+                resume_profile__is_active=True,
+                is_routed_winner=True,
+            )
+            .first()
+        )
+        if winning_match is not None:
+            data["resume_profile"] = winning_match.resume_profile
+
+    status = data.get("status", LeadStatus.SAVED)
+    notes = (data.get("notes") or "").strip()
 
     lead = ApplicationLead(
         user=user,
-        **validated_data,
+        **data,
     )
     if status == LeadStatus.APPLIED:
         lead.applied_at = now
