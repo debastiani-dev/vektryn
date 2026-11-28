@@ -23,6 +23,7 @@ from apps.analytics.services.dlq_inspector import (
     replay_dlq_messages,
 )
 from apps.analytics.services.system_status import build_system_status_payload
+from apps.jobs.services.fx_rates import get_fx_snapshot
 
 
 @api_view(["GET"])
@@ -30,6 +31,13 @@ from apps.analytics.services.system_status import build_system_status_payload
 def system_status_view(request: Request) -> Response:
     payload = build_system_status_payload(request.user)
     return Response(payload, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def system_fx_rates_view(_request: Request) -> Response:
+    snapshot = get_fx_snapshot()
+    return Response(snapshot.to_api_dict(), status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])

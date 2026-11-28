@@ -689,7 +689,7 @@ async def test_enrichment_sanitizes_non_iso_salary_currency_like_unknown() -> No
     assert normalize_salary_currency("R$") == "BRL"
     assert normalize_salary_currency("€") == "EUR"
     assert normalize_salary_currency("£") == "GBP"
-    assert normalize_salary_currency("$") == ""
+    assert normalize_salary_currency("$") == "USD"
     assert normalize_salary_currency(None) == ""
 
     raw = JobRawEvent(

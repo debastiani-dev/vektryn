@@ -12,6 +12,10 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from apps.jobs.models.jobs import JobPostingSource
+from apps.jobs.services.fx_rates import (
+    get_request_fx_snapshot,
+    resolve_display_currency,
+)
 from apps.tracker.models import ApplicationLead
 from apps.tracker.serializers.leads import ApplicationLeadSerializer
 
@@ -103,6 +107,16 @@ class ApplicationLeadViewSet(viewsets.ModelViewSet):
         "created_at",
     ]
     ordering = ["-modified_at"]
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action in ("list", "retrieve", "create", "update", "partial_update"):
+            fx_snapshot = get_request_fx_snapshot(self.request)
+            context["fx_snapshot"] = fx_snapshot
+            context["display_currency"] = resolve_display_currency(
+                self.request, fx_snapshot
+            )
+        return context
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):

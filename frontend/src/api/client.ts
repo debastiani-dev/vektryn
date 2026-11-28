@@ -10,6 +10,7 @@ import type {
     DlqInspectResponse,
     DlqReplayRequest,
     DlqReplayResponse,
+    FxRatesResponse,
     JobPostingDetail,
     JobPostingSummary,
     LeadPriority,
@@ -597,6 +598,8 @@ export const vektrynApi = {
         apiFetch<StackTrendSeriesResponse>(`/api/v1/analytics/trends/series/${params}`),
 
     getSystemStatus: () => apiFetch<PipelineStatusResponse>("/api/v1/system/status/"),
+
+    getFxRates: () => apiFetch<FxRatesResponse>("/api/v1/system/fx-rates/"),
 
     triggerCollectorSync: () =>
         apiFetch<TriggerCollectResponse>("/api/v1/system/collect/", {

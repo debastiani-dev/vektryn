@@ -1,4 +1,5 @@
-import { formatAtsSource, formatExactDate } from "./format";
+import type { SalaryPeriod } from "../types/models";
+import { formatAtsSource, formatCompactSalaryValue, formatExactDate } from "./format";
 import { formatLanguageLabel } from "./languages";
 
 export interface RadarMetadataFilters {
@@ -9,6 +10,11 @@ export interface RadarMetadataFilters {
     region: string;
     atsSource: string;
     hideReposts: boolean;
+    minSalary: string;
+    maxSalary: string;
+    salaryCurrency: string;
+    salaryPeriod: SalaryPeriod | "";
+    disclosedSalaryOnly: boolean;
 }
 
 export const EMPTY_METADATA_FILTERS: RadarMetadataFilters = {
@@ -19,7 +25,29 @@ export const EMPTY_METADATA_FILTERS: RadarMetadataFilters = {
     region: "",
     atsSource: "",
     hideReposts: false,
+    minSalary: "",
+    maxSalary: "",
+    salaryCurrency: "",
+    salaryPeriod: "",
+    disclosedSalaryOnly: false,
 };
+
+export function parsePositiveSalaryInput(raw: string | null | undefined): number | null {
+    if (!raw) return null;
+    const trimmed = raw.trim().replace(/,/g, "");
+    if (!trimmed) return null;
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+    return parsed;
+}
+
+export function isSalaryRangeInverted(minRaw: string, maxRaw: string): boolean {
+    const minVal = parsePositiveSalaryInput(minRaw);
+    const maxVal = parsePositiveSalaryInput(maxRaw);
+    return minVal !== null && maxVal !== null && minVal > maxVal;
+}
 
 export const DIRECT_ATS_SOURCES = new Set<string>([
     "greenhouse",
@@ -80,7 +108,7 @@ export interface FilterChoice {
     label: string;
 }
 
-export type RadarSortOption = "best_match" | "newest" | "posted_at" | "vector";
+export type RadarSortOption = "best_match" | "salary" | "newest" | "posted_at" | "vector";
 
 export const RADAR_SORT_OPTIONS: ReadonlyArray<{
     value: RadarSortOption;
@@ -91,6 +119,11 @@ export const RADAR_SORT_OPTIONS: ReadonlyArray<{
         value: "best_match",
         label: "Best Match",
         ordering: "-fit_score,-cosine_similarity,-created_at",
+    },
+    {
+        value: "salary",
+        label: "Highest Salary",
+        ordering: "-job_posting__salary_annual_mid_usd,-fit_score,-created_at",
     },
     {
         value: "newest",
@@ -108,6 +141,48 @@ export const RADAR_SORT_OPTIONS: ReadonlyArray<{
         ordering: "-cosine_similarity,-fit_score,-created_at",
     },
 ];
+
+export const SALARY_CURRENCY_OPTIONS: ReadonlyArray<FilterChoice> = [
+    { value: "USD", label: "USD ($)" },
+    { value: "BRL", label: "BRL (R$)" },
+    { value: "EUR", label: "EUR (€)" },
+    { value: "GBP", label: "GBP (£)" },
+    { value: "CAD", label: "CAD (C$)" },
+    { value: "AUD", label: "AUD (A$)" },
+    { value: "CHF", label: "CHF" },
+    { value: "PLN", label: "PLN" },
+];
+
+export const SALARY_PERIOD_OPTIONS: ReadonlyArray<{ value: SalaryPeriod; label: string }> = [
+    { value: "monthly", label: "Monthly" },
+    { value: "annual", label: "Annual" },
+    { value: "hourly", label: "Hourly" },
+];
+
+export function buildSalaryCurrencyOptions(
+    availableCodes?: ReadonlyArray<string>,
+): FilterChoice[] {
+    const primaryOrder = ["USD", "BRL", "EUR", "GBP"];
+    const knownLabels = new Map(SALARY_CURRENCY_OPTIONS.map((opt) => [opt.value, opt.label]));
+    const seen = new Set<string>();
+    const options: FilterChoice[] = [];
+
+    for (const code of primaryOrder) {
+        seen.add(code);
+        options.push({ value: code, label: knownLabels.get(code) ?? code });
+    }
+
+    const extraCodes = (availableCodes ?? SALARY_CURRENCY_OPTIONS.map((o) => o.value))
+        .map((c) => c.trim().toUpperCase())
+        .filter((c) => c.length === 3 && !seen.has(c))
+        .sort((a, b) => a.localeCompare(b));
+
+    for (const code of extraCodes) {
+        seen.add(code);
+        options.push({ value: code, label: knownLabels.get(code) ?? code });
+    }
+    return options;
+}
 
 export const MIN_FIT_OPTIONS: ReadonlyArray<{ value: number; label: string; shortLabel: string }> =
     [
@@ -181,7 +256,10 @@ export type ActiveFilterChipKey =
     | "language"
     | "region"
     | "atsSource"
-    | "hideReposts";
+    | "hideReposts"
+    | "minSalary"
+    | "maxSalary"
+    | "disclosedSalaryOnly";
 
 export interface ActiveFilterChip {
     key: ActiveFilterChipKey;
@@ -200,12 +278,20 @@ export function resolveRadarOrdering(sortBy: RadarSortOption): string | null {
     return RADAR_SORT_OPTIONS.find((opt) => opt.value === sortBy)?.ordering ?? null;
 }
 
+function countCompensationFilters(metadataFilters: RadarMetadataFilters): number {
+    let count = 0;
+    if (parsePositiveSalaryInput(metadataFilters.minSalary) !== null) count += 1;
+    if (parsePositiveSalaryInput(metadataFilters.maxSalary) !== null) count += 1;
+    if (metadataFilters.disclosedSalaryOnly) count += 1;
+    return count;
+}
+
 export function countActivePanelFilters(params: {
     resumeFilter: string;
     minScore: number;
     metadataFilters: RadarMetadataFilters;
 }): number {
-    let count = 0;
+    let count = countCompensationFilters(params.metadataFilters);
     if (params.resumeFilter) count += 1;
     if (params.minScore > 0) count += 1;
     if (params.metadataFilters.seniority) count += 1;
@@ -218,11 +304,47 @@ export function countActivePanelFilters(params: {
     return count;
 }
 
+function appendCompensationFilterChips(
+    chips: ActiveFilterChip[],
+    metadataFilters: RadarMetadataFilters,
+    defaultSalaryCurrency: string,
+    defaultSalaryPeriod: SalaryPeriod,
+): void {
+    const currency = (metadataFilters.salaryCurrency || defaultSalaryCurrency || "USD").toUpperCase();
+    const period = metadataFilters.salaryPeriod || defaultSalaryPeriod;
+    const minSalary = parsePositiveSalaryInput(metadataFilters.minSalary);
+    const maxSalary = parsePositiveSalaryInput(metadataFilters.maxSalary);
+
+    if (minSalary !== null) {
+        chips.push({
+            key: "minSalary",
+            prefix: "Min Salary",
+            label: `>= ${formatCompactSalaryValue(minSalary, currency, period)}`,
+        });
+    }
+    if (maxSalary !== null) {
+        chips.push({
+            key: "maxSalary",
+            prefix: "Max Salary",
+            label: `<= ${formatCompactSalaryValue(maxSalary, currency, period)}`,
+        });
+    }
+    if (metadataFilters.disclosedSalaryOnly) {
+        chips.push({
+            key: "disclosedSalaryOnly",
+            prefix: "Compensation",
+            label: "Salary Disclosed",
+        });
+    }
+}
+
 export function buildActiveFilterChips(params: {
     resumeFilter: string;
     resumeLabel?: string;
     minScore: number;
     metadataFilters: RadarMetadataFilters;
+    defaultSalaryCurrency?: string;
+    defaultSalaryPeriod?: SalaryPeriod;
 }): ActiveFilterChip[] {
     const chips: ActiveFilterChip[] = [];
     if (params.resumeFilter) {
@@ -289,5 +411,81 @@ export function buildActiveFilterChips(params: {
             label: "Hidden",
         });
     }
+    appendCompensationFilterChips(
+        chips,
+        params.metadataFilters,
+        params.defaultSalaryCurrency ?? "USD",
+        params.defaultSalaryPeriod ?? "annual",
+    );
     return chips;
+}
+
+function appendSalaryQueryParams(
+    params: URLSearchParams,
+    metadataFilters: RadarMetadataFilters,
+    minSalaryRaw: string,
+    maxSalaryRaw: string,
+    preferredCurrency: string,
+    defaultSalaryPeriod: SalaryPeriod,
+): void {
+    const minSalary = parsePositiveSalaryInput(minSalaryRaw);
+    const maxSalary = parsePositiveSalaryInput(maxSalaryRaw);
+    if (minSalary !== null) params.set("min_salary", String(minSalary));
+    if (maxSalary !== null) params.set("max_salary", String(maxSalary));
+    if (minSalary !== null || maxSalary !== null) {
+        const currency = (metadataFilters.salaryCurrency || preferredCurrency || "USD").toUpperCase();
+        const period = metadataFilters.salaryPeriod || defaultSalaryPeriod;
+        params.set("salary_currency", currency);
+        params.set("salary_period", period);
+    }
+    if (metadataFilters.disclosedSalaryOnly) {
+        params.set("disclosed_salary_only", "true");
+    }
+}
+
+export function buildMatchesQueryParams(opts: {
+    page: number;
+    minScore: number;
+    resumeFilter: string;
+    evaluatedOnly: boolean;
+    untrackedOnly: boolean;
+    hideDismissed: boolean;
+    hideMuted: boolean;
+    sortBy: RadarSortOption;
+    search: string;
+    metadataFilters: RadarMetadataFilters;
+    minSalaryRaw?: string;
+    maxSalaryRaw?: string;
+    preferredCurrency?: string;
+    defaultSalaryPeriod?: SalaryPeriod;
+}): string {
+    const params = new URLSearchParams();
+    params.set("page", String(opts.page));
+    if (opts.minScore > 0) params.set("min_fit_score", String(opts.minScore));
+    if (opts.resumeFilter) params.set("resume_profile", opts.resumeFilter);
+    if (opts.evaluatedOnly) params.set("evaluated_only", "true");
+    if (opts.untrackedOnly) params.set("untracked_only", "true");
+    if (!opts.hideDismissed) params.set("hide_dismissed", "false");
+    if (!opts.hideMuted) params.set("hide_muted", "false");
+    if (opts.search) params.set("search", opts.search);
+    if (opts.metadataFilters.seniority) params.set("seniority", opts.metadataFilters.seniority);
+    if (opts.metadataFilters.contractType) {
+        params.set("contract_type", opts.metadataFilters.contractType);
+    }
+    if (opts.metadataFilters.workMode) params.set("work_mode", opts.metadataFilters.workMode);
+    if (opts.metadataFilters.region) params.set("region", opts.metadataFilters.region);
+    if (opts.metadataFilters.atsSource) params.set("ats_source", opts.metadataFilters.atsSource);
+    if (opts.metadataFilters.language) params.set("language", opts.metadataFilters.language);
+    if (opts.metadataFilters.hideReposts) params.set("hide_reposts", "true");
+    appendSalaryQueryParams(
+        params,
+        opts.metadataFilters,
+        opts.minSalaryRaw ?? opts.metadataFilters.minSalary,
+        opts.maxSalaryRaw ?? opts.metadataFilters.maxSalary,
+        opts.preferredCurrency ?? "USD",
+        opts.defaultSalaryPeriod ?? "annual",
+    );
+    const orderingParam = resolveRadarOrdering(opts.sortBy);
+    if (orderingParam) params.set("ordering", orderingParam);
+    return `?${params.toString()}`;
 }

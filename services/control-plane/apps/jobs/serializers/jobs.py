@@ -1,6 +1,13 @@
+from typing import Any
+
 from rest_framework import serializers
 
 from apps.jobs.models.jobs import JobPosting, JobPostingSource
+from apps.jobs.services.fx_rates import (
+    build_salary_normalized_payload,
+    get_request_fx_snapshot,
+    resolve_display_currency,
+)
 from vektryn_contracts import get_source_priority_rank
 
 
@@ -45,6 +52,7 @@ class JobPostingSummarySerializer(serializers.ModelSerializer):
     sources_count = serializers.SerializerMethodField()
     primary_source = serializers.SerializerMethodField()
     observed_sources = serializers.SerializerMethodField()
+    salary_normalized = serializers.SerializerMethodField()
 
     class Meta:
         model = JobPosting
@@ -65,6 +73,10 @@ class JobPostingSummarySerializer(serializers.ModelSerializer):
             "salary_max",
             "salary_currency",
             "salary_period",
+            "salary_annual_min_usd",
+            "salary_annual_max_usd",
+            "salary_annual_mid_usd",
+            "salary_normalized",
             "tech_stack",
             "is_active",
             "posted_at",
@@ -75,6 +87,26 @@ class JobPostingSummarySerializer(serializers.ModelSerializer):
             "primary_source",
             "observed_sources",
         ]
+        read_only_fields = [
+            "salary_annual_min_usd",
+            "salary_annual_max_usd",
+            "salary_annual_mid_usd",
+        ]
+
+    def get_salary_normalized(self, obj: JobPosting) -> dict[str, Any] | None:
+        fx_snapshot = self.context.get("fx_snapshot")
+        display_currency = self.context.get("display_currency")
+        if fx_snapshot is None or not display_currency:
+            request = self.context.get("request")
+            fx_snapshot = get_request_fx_snapshot(request)
+            display_currency = resolve_display_currency(request, fx_snapshot)
+            self.context["fx_snapshot"] = fx_snapshot
+            self.context["display_currency"] = display_currency
+        return build_salary_normalized_payload(
+            obj,
+            display_currency=display_currency,
+            fx_snapshot=fx_snapshot,
+        )
 
     def get_sources_count(self, obj: JobPosting) -> int:
         rows = get_prefetched_job_sources(obj)

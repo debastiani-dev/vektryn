@@ -9,7 +9,11 @@ import {
     Sparkles,
     X,
 } from "lucide-react";
-import type { HybridSearchMode, ResumeProfile } from "../../types/models";
+import type {
+    HybridSearchMode,
+    ResumeProfile,
+    SalaryDisplayCadence,
+} from "../../types/models";
 import { formatLanguageBadge, UNKNOWN_LANGUAGE } from "../../utils/languages";
 import {
     type ActiveFilterChipKey,
@@ -63,6 +67,10 @@ interface RadarSearchToolbarProps {
     metadataFilters: RadarMetadataFilters;
     filtersOpen: boolean;
     hasActiveFilters: boolean;
+    preferredCurrency?: string;
+    salaryCadence?: SalaryDisplayCadence;
+    availableCurrencies?: ReadonlyArray<string>;
+    onChangeSalaryCadence?: (next: SalaryDisplayCadence) => void;
     onSearchChange: (value: string) => void;
     onCommitSearch: () => void;
     onClearSearch: () => void;
@@ -97,6 +105,10 @@ export function RadarSearchToolbar({
     metadataFilters,
     filtersOpen,
     hasActiveFilters,
+    preferredCurrency = "USD",
+    salaryCadence = "annual",
+    availableCurrencies,
+    onChangeSalaryCadence,
     onSearchChange,
     onCommitSearch,
     onClearSearch,
@@ -126,6 +138,8 @@ export function RadarSearchToolbar({
         resumeLabel,
         minScore,
         metadataFilters,
+        defaultSalaryCurrency: preferredCurrency,
+        defaultSalaryPeriod: salaryCadence,
     });
     const roleUnit = totalCount === 1 ? "role" : "roles";
     const statusSummary = loading
@@ -261,7 +275,7 @@ export function RadarSearchToolbar({
                         </button>
                     </Tooltip>
 
-                    <Tooltip content="Filter by resume, minimum fit, seniority, contract, region, or source">
+                    <Tooltip content="Filter by resume, minimum fit, compensation, seniority, contract, region, or source">
                         <button
                             type="button"
                             aria-expanded={filtersOpen}
@@ -308,6 +322,42 @@ export function RadarSearchToolbar({
                             <ChevronDown className="pointer-events-none absolute top-3 right-2.5 h-4 w-4 text-zinc-500" />
                         </div>
                     </Tooltip>
+
+                    {onChangeSalaryCadence && (
+                        <Tooltip
+                            content={`Display normalized salaries in ${preferredCurrency} as annual or monthly`}
+                        >
+                            <fieldset
+                                aria-label="Salary display cadence"
+                                className="inline-flex h-10 shrink-0 items-center rounded-xl border border-zinc-800 bg-zinc-950/80 p-1"
+                            >
+                                <button
+                                    type="button"
+                                    aria-pressed={salaryCadence === "annual"}
+                                    onClick={() => onChangeSalaryCadence("annual")}
+                                    className={`h-8 rounded-lg px-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                        salaryCadence === "annual"
+                                            ? "bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/40"
+                                            : "text-zinc-400 hover:text-zinc-200"
+                                    }`}
+                                >
+                                    Annual
+                                </button>
+                                <button
+                                    type="button"
+                                    aria-pressed={salaryCadence === "monthly"}
+                                    onClick={() => onChangeSalaryCadence("monthly")}
+                                    className={`h-8 rounded-lg px-2.5 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 ${
+                                        salaryCadence === "monthly"
+                                            ? "bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/40"
+                                            : "text-zinc-400 hover:text-zinc-200"
+                                    }`}
+                                >
+                                    Monthly
+                                </button>
+                            </fieldset>
+                        </Tooltip>
+                    )}
                 </div>
             </div>
 
@@ -319,6 +369,9 @@ export function RadarSearchToolbar({
                     hideResumeSelect={promoteResumeSelector}
                     minScore={minScore}
                     filters={metadataFilters}
+                    preferredCurrency={preferredCurrency}
+                    defaultSalaryPeriod={salaryCadence}
+                    availableCurrencies={availableCurrencies}
                     onResumeChange={onResumeChange}
                     onMinScoreChange={onMinScoreChange}
                     onUpdateMetadata={onUpdateMetadata}

@@ -33,6 +33,8 @@ import type {
     ManualJobImportResponse,
     MatchScore,
     ResumeProfile,
+    SalaryDisplayCadence,
+    SalaryPeriod,
     SavedFilter,
 } from "../../types/models";
 import {
@@ -42,8 +44,8 @@ import {
     formatAtsSource,
     formatContractType,
     formatExactDate,
+    formatNormalizedSalary,
     formatRelativeTime,
-    formatSalaryRange,
     formatSeniority,
     formatVectorSimilarity,
     formatWorkMode,
@@ -65,14 +67,16 @@ import {
 } from "../../utils/pendingImportStorage";
 import {
     type ActiveFilterChipKey,
+    buildMatchesQueryParams,
     countActivePanelFilters,
     EMPTY_METADATA_FILTERS,
     formatAdditionalSourcesTooltip,
     formatRepostLabel,
     formatRepostTooltip,
+    isSalaryRangeInverted,
+    parsePositiveSalaryInput,
     type RadarMetadataFilters,
     type RadarSortOption,
-    resolveRadarOrdering,
 } from "../../utils/radarFilters";
 import {
     hydrateRadarStateFromPreset,
@@ -147,6 +151,7 @@ function RadarSkeleton() {
 interface RadarMatchCardProps {
     match: MatchScore;
     minAlertScore: number;
+    salaryCadence: SalaryDisplayCadence;
     isSaved: boolean;
     isBusy: boolean;
     isTriaging: boolean;
@@ -160,6 +165,7 @@ interface RadarMatchCardProps {
 function RadarMatchCard({
     match,
     minAlertScore,
+    salaryCadence,
     isSaved,
     isBusy,
     isTriaging,
@@ -190,12 +196,7 @@ function RadarMatchCard({
     const jobLanguageName = getLanguageName(job.language);
     const alertTooltip = `Meets or exceeds your ${minAlertScore}% alert threshold for this resume profile.`;
     const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
-    const salaryLabel = formatSalaryRange(
-        job.salary_min,
-        job.salary_max,
-        job.salary_currency,
-        job.salary_period,
-    );
+    const salaryDisplay = formatNormalizedSalary(job, salaryCadence);
     const seniorityLabel = formatSeniority(job.seniority);
     const postedAge = formatRelativeTime(job.posted_at);
     const postedExact = formatExactDate(job.posted_at);
@@ -354,14 +355,25 @@ function RadarMatchCard({
                                 </Tooltip>
                             )}
 
-                            {salaryLabel && (
+                            {salaryDisplay && (
                                 <Tooltip
-                                    content={`Reported compensation range (${(job.salary_currency || "USD").toUpperCase()})`}
+                                    content={salaryDisplay.tooltip}
                                     className="pointer-events-auto inline-flex"
                                 >
-                                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1 font-mono text-xs font-medium tabular-nums text-emerald-300 ring-1 ring-emerald-500/25">
+                                    <span
+                                        className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs font-medium tabular-nums ring-1 ${
+                                            salaryDisplay.isUnverified
+                                                ? "bg-zinc-800/80 text-zinc-300 ring-zinc-700/70"
+                                                : "bg-emerald-500/10 text-emerald-300 ring-emerald-500/25"
+                                        }`}
+                                    >
                                         <Banknote className="h-3.5 w-3.5" />
-                                        {salaryLabel}
+                                        {salaryDisplay.label}
+                                        {salaryDisplay.isUnverified && (
+                                            <span className="font-sans text-[10px] font-normal text-amber-300/85">
+                                                · Unverified
+                                            </span>
+                                        )}
                                     </span>
                                 </Tooltip>
                             )}
@@ -1015,41 +1027,6 @@ function TriageUndoBanner({
 const SEARCH_DEBOUNCE_MS = 350;
 const TRIAGE_UNDO_MS = 8000;
 
-function buildMatchesQueryParams(opts: {
-    page: number;
-    minScore: number;
-    resumeFilter: string;
-    evaluatedOnly: boolean;
-    untrackedOnly: boolean;
-    hideDismissed: boolean;
-    hideMuted: boolean;
-    sortBy: RadarSortOption;
-    search: string;
-    metadataFilters: RadarMetadataFilters;
-}): string {
-    const params = new URLSearchParams();
-    params.set("page", String(opts.page));
-    if (opts.minScore > 0) params.set("min_fit_score", String(opts.minScore));
-    if (opts.resumeFilter) params.set("resume_profile", opts.resumeFilter);
-    if (opts.evaluatedOnly) params.set("evaluated_only", "true");
-    if (opts.untrackedOnly) params.set("untracked_only", "true");
-    if (!opts.hideDismissed) params.set("hide_dismissed", "false");
-    if (!opts.hideMuted) params.set("hide_muted", "false");
-    if (opts.search) params.set("search", opts.search);
-    if (opts.metadataFilters.seniority) params.set("seniority", opts.metadataFilters.seniority);
-    if (opts.metadataFilters.contractType) {
-        params.set("contract_type", opts.metadataFilters.contractType);
-    }
-    if (opts.metadataFilters.workMode) params.set("work_mode", opts.metadataFilters.workMode);
-    if (opts.metadataFilters.region) params.set("region", opts.metadataFilters.region);
-    if (opts.metadataFilters.atsSource) params.set("ats_source", opts.metadataFilters.atsSource);
-    if (opts.metadataFilters.language) params.set("language", opts.metadataFilters.language);
-    if (opts.metadataFilters.hideReposts) params.set("hide_reposts", "true");
-    const orderingParam = resolveRadarOrdering(opts.sortBy);
-    if (orderingParam) params.set("ordering", orderingParam);
-    return `?${params.toString()}`;
-}
-
 function formatExistingImportMessage(res: ManualJobImportResponse): string {
     if (res.status === "reactivated") {
         return "Previously closed role reactivated and refreshed in Job Radar.";
@@ -1120,6 +1097,9 @@ interface JobRadarViewProps {
     onConsumeInitialSearch?: () => void;
     defaultCopilotTone?: CopilotTone;
     hasGeminiApiKey?: boolean;
+    preferredCurrency?: string;
+    salaryCadence?: SalaryDisplayCadence;
+    onChangeSalaryCadence?: (next: SalaryDisplayCadence) => void;
     onOpenAccountSettings?: () => void;
 }
 
@@ -1129,6 +1109,9 @@ export function JobRadarView({
     onConsumeInitialSearch,
     defaultCopilotTone,
     hasGeminiApiKey = true,
+    preferredCurrency = "USD",
+    salaryCadence = "annual",
+    onChangeSalaryCadence,
     onOpenAccountSettings,
 }: Readonly<JobRadarViewProps> = {}) {
     const trimmedInitialSearch = initialSearch.trim();
@@ -1161,6 +1144,11 @@ export function JobRadarView({
     const [metadataFilters, setMetadataFilters] = useState<RadarMetadataFilters>(
         EMPTY_METADATA_FILTERS,
     );
+    const [debouncedSalaryBounds, setDebouncedSalaryBounds] = useState({
+        minSalary: "",
+        maxSalary: "",
+    });
+    const [availableCurrencies, setAvailableCurrencies] = useState<string[] | undefined>(undefined);
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [minScore, setMinScore] = useState<number>(0);
     const [sortBy, setSortBy] = useState<RadarSortOption>("best_match");
@@ -1228,14 +1216,21 @@ export function JobRadarView({
     useEffect(() => {
         let cancelled = false;
         async function loadMeta() {
-            const [leadsResult, resumesResult, presetsResult, dismissedResult, mutedResult] =
-                await Promise.allSettled([
-                    fetchAllPagesWithCount(vektrynApi.listLeads),
-                    vektrynApi.listResumes(),
-                    vektrynApi.listSavedFilters(),
-                    vektrynApi.listDismissedJobs(1),
-                    vektrynApi.listMutedCompanies(1),
-                ]);
+            const [
+                leadsResult,
+                resumesResult,
+                presetsResult,
+                dismissedResult,
+                mutedResult,
+                fxRatesResult,
+            ] = await Promise.allSettled([
+                fetchAllPagesWithCount(vektrynApi.listLeads),
+                vektrynApi.listResumes(),
+                vektrynApi.listSavedFilters(),
+                vektrynApi.listDismissedJobs(1),
+                vektrynApi.listMutedCompanies(1),
+                vektrynApi.getFxRates(),
+            ]);
             if (cancelled) return;
             if (leadsResult.status === "fulfilled") {
                 const nextMap: Record<string, string> = {};
@@ -1260,6 +1255,9 @@ export function JobRadarView({
             if (mutedResult.status === "fulfilled") {
                 setMutedTotalCount(mutedResult.value.count);
             }
+            if (fxRatesResult.status === "fulfilled") {
+                setAvailableCurrencies(Object.keys(fxRatesResult.value.rates));
+            }
         }
         void loadMeta();
         return () => {
@@ -1281,6 +1279,54 @@ export function JobRadarView({
     }, [searchTerm, debouncedSearch]);
 
     useEffect(() => {
+        const nextMin = metadataFilters.minSalary.trim();
+        const nextMax = metadataFilters.maxSalary.trim();
+        if (
+            nextMin === debouncedSalaryBounds.minSalary &&
+            nextMax === debouncedSalaryBounds.maxSalary
+        ) {
+            return;
+        }
+        const timerId = window.setTimeout(() => {
+            setDebouncedSalaryBounds({ minSalary: nextMin, maxSalary: nextMax });
+            setPage(1);
+        }, SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timerId);
+    }, [
+        metadataFilters.minSalary,
+        metadataFilters.maxSalary,
+        debouncedSalaryBounds.minSalary,
+        debouncedSalaryBounds.maxSalary,
+    ]);
+
+    const {
+        seniority,
+        contractType,
+        workMode,
+        language,
+        region,
+        atsSource,
+        hideReposts,
+        salaryCurrency,
+        salaryPeriod,
+        disclosedSalaryOnly,
+    } = metadataFilters;
+
+    const salaryFilterInverted = isSalaryRangeInverted(
+        debouncedSalaryBounds.minSalary,
+        debouncedSalaryBounds.maxSalary,
+    );
+    const hasActiveSalaryBound =
+        parsePositiveSalaryInput(debouncedSalaryBounds.minSalary) !== null ||
+        parsePositiveSalaryInput(debouncedSalaryBounds.maxSalary) !== null;
+    const effectiveQuerySalaryPeriod: SalaryPeriod = hasActiveSalaryBound
+        ? salaryPeriod || salaryCadence
+        : "annual";
+
+    useEffect(() => {
+        if (salaryFilterInverted) {
+            return;
+        }
         let cancelled = false;
         async function loadMatches() {
             setLoading(true);
@@ -1296,7 +1342,22 @@ export function JobRadarView({
                     hideMuted,
                     sortBy,
                     search: debouncedSearch,
-                    metadataFilters,
+                    metadataFilters: {
+                        seniority,
+                        contractType,
+                        workMode,
+                        language,
+                        region,
+                        atsSource,
+                        hideReposts,
+                        minSalary: debouncedSalaryBounds.minSalary,
+                        maxSalary: debouncedSalaryBounds.maxSalary,
+                        salaryCurrency,
+                        salaryPeriod,
+                        disclosedSalaryOnly,
+                    },
+                    preferredCurrency,
+                    defaultSalaryPeriod: effectiveQuerySalaryPeriod,
                 });
                 const matchRes = await vektrynApi.listMatches(query);
                 if (cancelled) return;
@@ -1345,7 +1406,21 @@ export function JobRadarView({
         hideMuted,
         sortBy,
         debouncedSearch,
-        metadataFilters,
+        seniority,
+        contractType,
+        workMode,
+        language,
+        region,
+        atsSource,
+        hideReposts,
+        salaryCurrency,
+        salaryPeriod,
+        disclosedSalaryOnly,
+        debouncedSalaryBounds.minSalary,
+        debouncedSalaryBounds.maxSalary,
+        salaryFilterInverted,
+        preferredCurrency,
+        effectiveQuerySalaryPeriod,
         reloadTick,
     ]);
 
@@ -1704,7 +1779,9 @@ export function JobRadarView({
 
     function updateMetadataFilters(patch: Partial<RadarMetadataFilters>) {
         setMetadataFilters((prev) => ({ ...prev, ...patch }));
-        setPage(1);
+        if (patch.minSalary === undefined && patch.maxSalary === undefined) {
+            setPage(1);
+        }
     }
 
     function handleRemoveFilterChip(key: ActiveFilterChipKey) {
@@ -1714,6 +1791,18 @@ export function JobRadarView({
             setMinScore(0);
         } else if (key === "hideReposts") {
             setMetadataFilters((prev) => ({ ...prev, hideReposts: false }));
+        } else if (key === "disclosedSalaryOnly") {
+            setMetadataFilters((prev) => ({ ...prev, disclosedSalaryOnly: false }));
+        } else if (key === "minSalary" || key === "maxSalary") {
+            setMetadataFilters((prev) => {
+                const next = { ...prev, [key]: "" };
+                if (!next.minSalary.trim() && !next.maxSalary.trim()) {
+                    next.salaryCurrency = "";
+                    next.salaryPeriod = "";
+                }
+                return next;
+            });
+            setDebouncedSalaryBounds((prev) => ({ ...prev, [key]: "" }));
         } else {
             setMetadataFilters((prev) => ({ ...prev, [key]: "" }));
         }
@@ -1730,6 +1819,7 @@ export function JobRadarView({
         setHideDismissed(true);
         setHideMuted(true);
         setMetadataFilters(EMPTY_METADATA_FILTERS);
+        setDebouncedSalaryBounds({ minSalary: "", maxSalary: "" });
         setSortBy("best_match");
         setPage(1);
     }
@@ -1746,6 +1836,11 @@ export function JobRadarView({
         sortBy,
     };
 
+    const salaryPresetDefaults = {
+        currency: preferredCurrency,
+        period: salaryCadence,
+    };
+
     function handleApplyPreset(preset: SavedFilter) {
         const next = hydrateRadarStateFromPreset(preset.query_params, resumes);
         setSearchTerm(next.searchTerm);
@@ -1757,6 +1852,10 @@ export function JobRadarView({
         setHideDismissed(next.hideDismissed);
         setHideMuted(next.hideMuted);
         setMetadataFilters(next.metadataFilters);
+        setDebouncedSalaryBounds({
+            minSalary: next.metadataFilters.minSalary,
+            maxSalary: next.metadataFilters.maxSalary,
+        });
         setSortBy(next.sortBy);
         setPage(1);
         setPresetError(null);
@@ -1768,7 +1867,7 @@ export function JobRadarView({
         try {
             const created = await vektrynApi.createSavedFilter({
                 name,
-                query_params: serializeRadarStateToPreset(currentRadarState),
+                query_params: serializeRadarStateToPreset(currentRadarState, salaryPresetDefaults),
             });
             setSavedPresets((prev) =>
                 [...prev, created].sort((a, b) => a.name.localeCompare(b.name)),
@@ -1838,6 +1937,7 @@ export function JobRadarView({
                         key={match.uuid}
                         match={match}
                         minAlertScore={resolveMinAlertScore(match)}
+                        salaryCadence={salaryCadence}
                         isSaved={Boolean(savedLeadsByJobId[match.job_posting.uuid])}
                         isBusy={savingJobId === match.job_posting.uuid}
                         isTriaging={triageBusyJobId === match.job_posting.uuid}
@@ -1929,6 +2029,7 @@ export function JobRadarView({
                     presets={savedPresets}
                     currentState={currentRadarState}
                     resumes={resumes}
+                    salaryDefaults={salaryPresetDefaults}
                     canSaveCurrent={hasActiveFilters || sortBy !== "best_match"}
                     saving={savingPreset}
                     deletingId={deletingPresetId}
@@ -1957,6 +2058,10 @@ export function JobRadarView({
                 metadataFilters={metadataFilters}
                 filtersOpen={filtersOpen}
                 hasActiveFilters={hasActiveFilters}
+                preferredCurrency={preferredCurrency}
+                salaryCadence={salaryCadence}
+                availableCurrencies={availableCurrencies}
+                onChangeSalaryCadence={onChangeSalaryCadence}
                 onSearchChange={setSearchTerm}
                 onCommitSearch={() => {
                     setDebouncedSearch(searchTerm.trim());
@@ -2028,6 +2133,7 @@ export function JobRadarView({
             <JobPostingDrawer
                 jobPreview={activeDrawerJob}
                 match={selectedJobMatch}
+                salaryCadence={salaryCadence}
                 saving={
                     selectedJobMatch ? savingJobId === selectedJobMatch.job_posting.uuid : false
                 }
@@ -2051,6 +2157,7 @@ export function JobRadarView({
                 minAlertScore={resolveMinAlertScore(selectedGapMatch)}
                 defaultCopilotTone={defaultCopilotTone}
                 hasGeminiApiKey={hasGeminiApiKey}
+                salaryCadence={salaryCadence}
                 onOpenAccountSettings={onOpenAccountSettings}
                 saving={
                     selectedGapMatch ? savingJobId === selectedGapMatch.job_posting.uuid : false

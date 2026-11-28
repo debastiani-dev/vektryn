@@ -1,8 +1,15 @@
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from rest_framework import serializers
 
 from apps.jobs.models.saved_filter import SavedFilter
+from apps.jobs.services.fx_rates import get_fx_snapshot
+from vektryn_contracts import (
+    SalaryPeriod,
+    normalize_currency_code,
+    resolve_annualization_multiplier,
+)
 from vektryn_contracts.language import normalize_language_code
 
 ALLOWED_QUERY_PARAM_KEYS = frozenset(
@@ -22,6 +29,11 @@ ALLOWED_QUERY_PARAM_KEYS = frozenset(
         "hide_muted",
         "hide_reposts",
         "untracked_only",
+        "min_salary",
+        "max_salary",
+        "salary_currency",
+        "salary_period",
+        "disclosed_salary_only",
     }
 )
 
@@ -32,8 +44,11 @@ BOOLEAN_QUERY_PARAM_KEYS = frozenset(
         "hide_muted",
         "hide_reposts",
         "untracked_only",
+        "disclosed_salary_only",
     }
 )
+
+_SALARY_NUMERIC_KEYS = ("min_salary", "max_salary")
 
 
 def _normalize_language_query_param(raw_lang: Any) -> str:
@@ -53,6 +68,68 @@ def _normalize_language_query_param(raw_lang: Any) -> str:
         if code not in normalized_tokens:
             normalized_tokens.append(code)
     return ",".join(normalized_tokens)
+
+
+def _parse_saved_salary_bound(raw: Any, key: str) -> Decimal | None:
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, bool):
+        raise serializers.ValidationError(f"Filter parameter '{key}' must be a number.")
+    try:
+        parsed = Decimal(str(raw).strip())
+    except InvalidOperation as exc:
+        raise serializers.ValidationError(
+            f"Filter parameter '{key}' must be a valid number."
+        ) from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise serializers.ValidationError(
+            f"Filter parameter '{key}' must be greater than or equal to 0."
+        )
+    return parsed
+
+
+def _validate_salary_query_params(value: dict[str, Any]) -> dict[str, Any]:
+    parsed_bounds: dict[str, Decimal | None] = {
+        key: _parse_saved_salary_bound(value.get(key), key)
+        for key in _SALARY_NUMERIC_KEYS
+        if key in value
+    }
+    min_sal = parsed_bounds.get("min_salary")
+    max_sal = parsed_bounds.get("max_salary")
+    if min_sal is not None and max_sal is not None and max_sal < min_sal:
+        raise serializers.ValidationError(
+            "Filter parameter 'max_salary' must be greater than or equal to 'min_salary'."
+        )
+
+    updated = dict(value)
+    if "salary_currency" in value and value["salary_currency"] not in (None, ""):
+        raw_currency = value["salary_currency"]
+        if not isinstance(raw_currency, str):
+            raise serializers.ValidationError(
+                "Filter parameter 'salary_currency' must be a string."
+            )
+        code = normalize_currency_code(raw_currency)
+        fx_rates = get_fx_snapshot().rates
+        if not code or code not in fx_rates:
+            raise serializers.ValidationError(
+                f"Invalid salary_currency filter value: {raw_currency!r}."
+            )
+        updated["salary_currency"] = code
+
+    if "salary_period" in value and value["salary_period"] not in (None, ""):
+        raw_period = value["salary_period"]
+        if not isinstance(raw_period, str):
+            raise serializers.ValidationError(
+                "Filter parameter 'salary_period' must be a string."
+            )
+        cleaned = raw_period.strip().lower()
+        if resolve_annualization_multiplier(cleaned) is None:
+            raise serializers.ValidationError(
+                f"Invalid salary_period filter value: {raw_period!r}."
+            )
+        updated["salary_period"] = SalaryPeriod(cleaned).value
+
+    return updated
 
 
 class SavedFilterSerializer(serializers.ModelSerializer):
@@ -99,4 +176,5 @@ class SavedFilterSerializer(serializers.ModelSerializer):
         if "language" in value and value["language"] not in (None, ""):
             normalized = _normalize_language_query_param(value["language"])
             value = {**value, "language": normalized}
+        value = _validate_salary_query_params(value)
         return value

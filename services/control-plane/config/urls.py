@@ -7,6 +7,7 @@ from apps.analytics.views.system import (
     system_dlq_dismiss_view,
     system_dlq_list_view,
     system_dlq_replay_view,
+    system_fx_rates_view,
     system_status_view,
     trigger_collector_sync_view,
 )
@@ -58,6 +59,7 @@ urlpatterns = [
     path("api/v1/analytics/", include("apps.analytics.urls")),
     path("api/v1/notifications/", include("apps.base.urls")),
     path("api/v1/system/status/", system_status_view, name="api-system-status"),
+    path("api/v1/system/fx-rates/", system_fx_rates_view, name="api-system-fx-rates"),
     path(
         "api/v1/system/collect/",
         trigger_collector_sync_view,

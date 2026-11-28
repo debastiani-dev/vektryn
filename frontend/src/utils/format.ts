@@ -1,4 +1,11 @@
-import type { ContractType, SeniorityLevel, TechCategory, WorkMode } from "../types/models";
+import type {
+    ContractType,
+    SalaryDisplayCadence,
+    SalaryNormalizedPayload,
+    SeniorityLevel,
+    TechCategory,
+    WorkMode,
+} from "../types/models";
 
 const WORK_MODE_LABELS: Record<WorkMode, string> = {
     remote: "Remote",
@@ -65,7 +72,50 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
     BRL: "R$",
     CAD: "C$",
     AUD: "A$",
+    CHF: "CHF ",
+    PLN: "PLN ",
+    JPY: "¥",
+    INR: "₹",
+    MXN: "MX$",
+    NZD: "NZ$",
+    SGD: "S$",
+    SEK: "SEK ",
+    NOK: "NOK ",
+    DKK: "DKK ",
 };
+
+export const SALARY_CADENCE_STORAGE_KEY = "vektryn:salary_cadence";
+
+export function getDefaultSalaryCadence(
+    preferredCurrency?: string | null,
+): SalaryDisplayCadence {
+    return (preferredCurrency ?? "").trim().toUpperCase() === "BRL" ? "monthly" : "annual";
+}
+
+export function readStoredSalaryCadence(): SalaryDisplayCadence | null {
+    try {
+        const stored = globalThis.localStorage?.getItem(SALARY_CADENCE_STORAGE_KEY);
+        if (stored === "annual" || stored === "monthly") {
+            return stored;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+export function writeStoredSalaryCadence(cadence: SalaryDisplayCadence): void {
+    try {
+        globalThis.localStorage?.setItem(SALARY_CADENCE_STORAGE_KEY, cadence);
+    } catch {
+        // Ignore storage errors in restricted environments
+    }
+}
+
+export function formatCurrencySymbol(currencyCode?: string | null): string {
+    const code = (currencyCode || "USD").trim().toUpperCase();
+    return CURRENCY_SYMBOLS[code] ?? `${code} `;
+}
 
 export const DEFAULT_MIN_ALERT_SCORE = 70;
 
@@ -229,8 +279,7 @@ export function formatSalaryRange(
 
     if (!hasMin && !hasMax) return null;
 
-    const code = (currency || "USD").toUpperCase();
-    const symbol = CURRENCY_SYMBOLS[code] ?? `${code} `;
+    const symbol = formatCurrencySymbol(currency);
     const suffix = formatSalaryPeriod(period);
 
     if (hasMin && hasMax && Math.round(min) !== Math.round(max)) {
@@ -238,6 +287,140 @@ export function formatSalaryRange(
     }
     const single = hasMin ? min : max;
     return `${symbol}${formatCompactMoney(single)}${suffix}`;
+}
+
+export function formatCompactSalaryValue(
+    amount: number,
+    currency: string | null | undefined,
+    period?: string | null,
+): string {
+    const symbol = formatCurrencySymbol(currency);
+    const suffix = formatSalaryPeriod(period ?? null);
+    return `${symbol}${formatCompactMoney(amount)}${suffix}`;
+}
+
+export interface SalaryDisplaySource {
+    salary_min?: string | null;
+    salary_max?: string | null;
+    salary_currency?: string | null;
+    salary_period?: string | null;
+    salary_normalized?: SalaryNormalizedPayload | null;
+}
+
+export interface FormattedSalaryDisplay {
+    label: string;
+    tooltip: string;
+    originalLabel: string | null;
+    isConverted: boolean;
+    isUnverified: boolean;
+    fxAsOf: string | null;
+    displayCurrency: string | null;
+}
+
+function formatNormalizedRangeText(
+    minVal: number | null,
+    maxVal: number | null,
+    symbol: string,
+    suffix: string,
+    prefix: string,
+): string | null {
+    const validMin =
+        typeof minVal === "number" && Number.isFinite(minVal) && minVal > 0 ? minVal : null;
+    const validMax =
+        typeof maxVal === "number" && Number.isFinite(maxVal) && maxVal > 0 ? maxVal : null;
+    if (validMin !== null && validMax !== null && Math.round(validMin) !== Math.round(validMax)) {
+        return `${prefix}${symbol}${formatCompactMoney(validMin)}–${symbol}${formatCompactMoney(validMax)}${suffix}`;
+    }
+    const single = validMin ?? validMax;
+    if (single === null) {
+        return null;
+    }
+    return `${prefix}${symbol}${formatCompactMoney(single)}${suffix}`;
+}
+
+function isSamePeriodCadence(
+    originalPeriod: string | null | undefined,
+    cadence: SalaryDisplayCadence,
+): boolean {
+    const normalized = (originalPeriod ?? "").trim().toLowerCase();
+    if (!normalized) {
+        return cadence === "annual";
+    }
+    if (cadence === "monthly") {
+        return normalized === "monthly" || normalized === "month" || normalized === "mo";
+    }
+    return normalized === "annual" || normalized === "yearly" || normalized === "year" || normalized === "yr";
+}
+
+function buildNormalizedSalaryTooltip(
+    norm: SalaryNormalizedPayload,
+    originalLabel: string | null,
+    originalPeriod: string | null | undefined,
+    cadence: SalaryDisplayCadence,
+): string {
+    if (norm.is_converted) {
+        const fxDate = norm.fx_as_of_date ? ` (FX rate as of ${norm.fx_as_of_date})` : "";
+        if (originalLabel) {
+            return `Original: ${originalLabel} · Converted to ${norm.currency}${fxDate}`;
+        }
+        return `Converted to ${norm.currency}${fxDate}`;
+    }
+    if (originalLabel && !isSamePeriodCadence(originalPeriod, cadence)) {
+        return `Original: ${originalLabel} · Displayed as ${cadence} in ${norm.currency}`;
+    }
+    return `Reported compensation range (${norm.currency})`;
+}
+
+export function formatNormalizedSalary(
+    source: SalaryDisplaySource | null | undefined,
+    cadence: SalaryDisplayCadence = "annual",
+): FormattedSalaryDisplay | null {
+    if (!source) {
+        return null;
+    }
+    const originalLabel = formatSalaryRange(
+        source.salary_min ?? null,
+        source.salary_max ?? null,
+        source.salary_currency ?? null,
+        source.salary_period ?? null,
+    );
+    const norm = source.salary_normalized;
+    if (norm) {
+        const minVal = cadence === "monthly" ? norm.monthly_min : norm.annual_min;
+        const maxVal = cadence === "monthly" ? norm.monthly_max : norm.annual_max;
+        const symbol = formatCurrencySymbol(norm.currency);
+        const suffix = cadence === "monthly" ? "/mo" : "/yr";
+        const prefix = norm.is_converted ? "~" : "";
+        const label = formatNormalizedRangeText(minVal, maxVal, symbol, suffix, prefix);
+        if (label) {
+            return {
+                label,
+                tooltip: buildNormalizedSalaryTooltip(
+                    norm,
+                    originalLabel,
+                    source.salary_period,
+                    cadence,
+                ),
+                originalLabel,
+                isConverted: norm.is_converted,
+                isUnverified: false,
+                fxAsOf: norm.fx_as_of_date || null,
+                displayCurrency: norm.currency,
+            };
+        }
+    }
+    if (originalLabel) {
+        return {
+            label: originalLabel,
+            tooltip: `Unverified range (${originalLabel}) — outside standard annual USD plausibility bounds or unsupported currency`,
+            originalLabel,
+            isConverted: false,
+            isUnverified: true,
+            fxAsOf: null,
+            displayCurrency: source.salary_currency ? source.salary_currency.toUpperCase() : null,
+        };
+    }
+    return null;
 }
 
 export function formatUsdAnnual(raw: string | null): string {

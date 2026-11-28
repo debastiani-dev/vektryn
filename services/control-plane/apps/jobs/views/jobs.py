@@ -2,15 +2,23 @@ from django.db.models import Prefetch
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
 from apps.jobs.filters.jobs import JobPostingFilter
+from apps.jobs.filters.salary_filtering import (
+    NullsLastOrderingFilter,
+    apply_salary_filters,
+    parse_and_validate_salary_filter_params,
+)
 from apps.jobs.models.jobs import JobPosting, JobPostingSource
 from apps.jobs.serializers.jobs import (
     JobPostingDetailSerializer,
     JobPostingSummarySerializer,
     ManualJobImportSerializer,
+)
+from apps.jobs.services.fx_rates import (
+    get_request_fx_snapshot,
+    resolve_display_currency,
 )
 from apps.jobs.services.hybrid_search import (
     annotate_rrf_score,
@@ -29,11 +37,27 @@ from apps.jobs.services.triage import apply_triage_filters
 
 class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = JobPosting.objects.all()
-    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filter_backends = [DjangoFilterBackend, NullsLastOrderingFilter]
     filterset_class = JobPostingFilter
-    ordering_fields = ["created_at", "posted_at", "salary_max"]
+    ordering_fields = [
+        "created_at",
+        "posted_at",
+        "salary_max",
+        "salary_annual_mid_usd",
+        "salary_annual_max_usd",
+    ]
     ordering = ["-created_at"]
     lookup_field = "uuid"
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action in ("list", "retrieve"):
+            fx_snapshot = get_request_fx_snapshot(self.request)
+            context["fx_snapshot"] = fx_snapshot
+            context["display_currency"] = resolve_display_currency(
+                self.request, fx_snapshot
+            )
+        return context
 
     def get_queryset(self):
         return JobPosting.objects.prefetch_related(
@@ -54,9 +78,18 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
         return JobPostingSummarySerializer
 
     def list(self, request, *args, **kwargs):
+        fx_snapshot = get_request_fx_snapshot(request)
+        resolve_display_currency(request, fx_snapshot)
+        salary_bounds = parse_and_validate_salary_filter_params(
+            request.query_params,
+            user=request.user,
+            fx_snapshot=fx_snapshot,
+        )
+
         structured_qs = DjangoFilterBackend().filter_queryset(
             request, self.get_queryset(), self
         )
+        structured_qs = apply_salary_filters(structured_qs, salary_bounds)
         structured_qs = apply_triage_filters(
             structured_qs,
             request,
@@ -75,7 +108,7 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
                 filtered_qs = structured_qs.filter(
                     uuid__in=list(result.rrf_scores.keys())
                 )
-                ordered_qs = OrderingFilter().filter_queryset(
+                ordered_qs = NullsLastOrderingFilter().filter_queryset(
                     request, filtered_qs, self
                 )
             else:
@@ -83,7 +116,9 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
                     structured_qs, result.rrf_scores, id_field="uuid"
                 ).order_by("-rrf_score", "-created_at")
         else:
-            ordered_qs = OrderingFilter().filter_queryset(request, structured_qs, self)
+            ordered_qs = NullsLastOrderingFilter().filter_queryset(
+                request, structured_qs, self
+            )
 
         page = self.paginate_queryset(ordered_qs)
         if page is not None:

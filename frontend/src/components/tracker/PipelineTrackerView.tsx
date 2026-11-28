@@ -30,14 +30,15 @@ import type {
     LeadStatus,
     MatchScore,
     ResumeProfile,
+    SalaryDisplayCadence,
 } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
     formatApplyLinkTooltip,
     formatContractType,
     formatExactDate,
+    formatNormalizedSalary,
     formatRelativeTime,
-    formatSalaryRange,
     formatScoreLabel,
     formatVectorSimilarity,
     formatWorkMode,
@@ -145,6 +146,14 @@ function buildLeadJobPreview(
         apply_url: lead.apply_url || getNestedField(lead.job_posting, "apply_url") || "#",
         ats_source: lead.ats_source || getNestedField(lead.job_posting, "ats_source"),
         language: lead.language,
+        salary_min: lead.salary_min,
+        salary_max: lead.salary_max,
+        salary_currency: lead.salary_currency,
+        salary_period: lead.salary_period,
+        salary_annual_min_usd: lead.salary_annual_min_usd,
+        salary_annual_max_usd: lead.salary_annual_max_usd,
+        salary_annual_mid_usd: lead.salary_annual_mid_usd,
+        salary_normalized: lead.salary_normalized,
     };
 }
 
@@ -187,6 +196,7 @@ interface PipelineLeadCardProps {
     lead: ApplicationLead;
     match: MatchScore | null;
     resumes: ResumeProfile[];
+    salaryCadence: SalaryDisplayCadence;
     isEditingNotes: boolean;
     isEditingFollowup: boolean;
     isDeleting: boolean;
@@ -399,6 +409,7 @@ function PipelineLeadCard({
     lead,
     match,
     resumes,
+    salaryCadence,
     isEditingNotes,
     isEditingFollowup,
     isDeleting,
@@ -454,20 +465,13 @@ function PipelineLeadCard({
         : "Schedule a follow-up reminder date";
 
     const nextPriority = NEXT_PRIORITY[lead.priority];
-    const salaryLabel = job
-        ? formatSalaryRange(
-            job.salary_min,
-            job.salary_max,
-            job.salary_currency,
-            job.salary_period,
-        )
-        : null;
+    const salaryDisplay = formatNormalizedSalary(job ?? lead, salaryCadence);
     const locationLabel = job ? job.location_raw || "Remote" : null;
     const workMode = job?.work_mode ?? lead.work_mode ?? null;
     const contractLabel =
         job && job.contract_type !== "unknown" ? formatContractType(job.contract_type) : null;
     const isClosed = job ? !job.is_active : false;
-    const hasDecisionMeta = Boolean(salaryLabel || locationLabel || workMode || contractLabel);
+    const hasDecisionMeta = Boolean(salaryDisplay || locationLabel || workMode || contractLabel);
     const cardAccentClass = getCardAccentClass(overdue, lead.priority);
 
     return (
@@ -526,11 +530,21 @@ function PipelineLeadCard({
 
             {hasDecisionMeta && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-zinc-800/60 pt-2.5 text-xs text-zinc-400">
-                    {salaryLabel && (
-                        <Tooltip content="Reported compensation range">
-                            <span className="inline-flex items-center gap-1 font-mono font-medium tabular-nums text-emerald-300">
-                                <Banknote className="h-3.5 w-3.5 text-emerald-400" />
-                                {salaryLabel}
+                    {salaryDisplay && (
+                        <Tooltip content={salaryDisplay.tooltip}>
+                            <span
+                                className={`inline-flex items-center gap-1 font-mono font-medium tabular-nums ${
+                                    salaryDisplay.isUnverified ? "text-zinc-300" : "text-emerald-300"
+                                }`}
+                            >
+                                <Banknote
+                                    className={`h-3.5 w-3.5 ${
+                                        salaryDisplay.isUnverified
+                                            ? "text-zinc-500"
+                                            : "text-emerald-400"
+                                    }`}
+                                />
+                                {salaryDisplay.label}
                             </span>
                         </Tooltip>
                     )}
@@ -766,6 +780,7 @@ interface PipelineStageColumnProps {
     matchesByJobAndResume: Record<string, MatchScore>;
     winningMatchByJobId: Record<string, MatchScore>;
     resumes: ResumeProfile[];
+    salaryCadence: SalaryDisplayCadence;
     editingNotesId: string | null;
     editingFollowupId: string | null;
     deletingId: string | null;
@@ -796,6 +811,7 @@ function PipelineStageColumn({
     matchesByJobAndResume,
     winningMatchByJobId,
     resumes,
+    salaryCadence,
     editingNotesId,
     editingFollowupId,
     deletingId,
@@ -857,6 +873,7 @@ function PipelineStageColumn({
                             lead={lead}
                             match={match}
                             resumes={resumes}
+                            salaryCadence={salaryCadence}
                             isEditingNotes={editingNotesId === lead.uuid}
                             isEditingFollowup={editingFollowupId === lead.uuid}
                             isDeleting={deletingId === lead.uuid}
@@ -922,12 +939,16 @@ function PipelineSkeleton() {
 interface PipelineTrackerViewProps {
     defaultCopilotTone?: CopilotTone;
     hasGeminiApiKey?: boolean;
+    preferredCurrency?: string;
+    salaryCadence?: SalaryDisplayCadence;
     onOpenAccountSettings?: () => void;
 }
 
 export function PipelineTrackerView({
     defaultCopilotTone,
     hasGeminiApiKey = true,
+    preferredCurrency = "USD",
+    salaryCadence = "annual",
     onOpenAccountSettings,
 }: Readonly<PipelineTrackerViewProps> = {}) {
     const [leads, setLeads] = useState<ApplicationLead[]>([]);
@@ -995,7 +1016,7 @@ export function PipelineTrackerView({
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [preferredCurrency]);
 
     function openJobListing(lead: ApplicationLead, match: MatchScore | null) {
         const preview = buildLeadJobPreview(lead, match);
@@ -1187,6 +1208,7 @@ export function PipelineTrackerView({
                             matchesByJobAndResume={matchesByJobAndResume}
                             winningMatchByJobId={winningMatchByJobId}
                             resumes={resumes}
+                            salaryCadence={salaryCadence}
                             editingNotesId={editingNotesId}
                             editingFollowupId={editingFollowupId}
                             deletingId={deletingId}
@@ -1381,6 +1403,7 @@ export function PipelineTrackerView({
             <JobPostingDrawer
                 jobPreview={selectedJobContext?.preview ?? null}
                 match={activeJobMatch}
+                salaryCadence={salaryCadence}
                 saved
                 onClose={() => setSelectedJobContext(null)}
                 onOpenGapDetails={activeJobMatch ? () => openGapDetails(activeJobMatch) : undefined}
@@ -1390,6 +1413,7 @@ export function PipelineTrackerView({
                 match={selectedGapMatch}
                 defaultCopilotTone={defaultCopilotTone}
                 hasGeminiApiKey={hasGeminiApiKey}
+                salaryCadence={salaryCadence}
                 onOpenAccountSettings={onOpenAccountSettings}
                 saving={false}
                 saved

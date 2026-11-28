@@ -360,11 +360,18 @@ def _backfill_canonical_metadata(
     canonical: JobPosting,
     duplicate: JobPosting,
 ) -> None:
-    if canonical.salary_min is None and duplicate.salary_min is not None:
+    if (
+        canonical.salary_min is None
+        and canonical.salary_max is None
+        and (duplicate.salary_min is not None or duplicate.salary_max is not None)
+    ):
         canonical.salary_min = duplicate.salary_min
         canonical.salary_max = duplicate.salary_max
         canonical.salary_currency = duplicate.salary_currency
         canonical.salary_period = duplicate.salary_period
+        canonical.salary_annual_min_usd = duplicate.salary_annual_min_usd
+        canonical.salary_annual_max_usd = duplicate.salary_annual_max_usd
+        canonical.salary_annual_mid_usd = duplicate.salary_annual_mid_usd
 
     for field_name, unknown_val in (
         ("work_mode", "unknown"),

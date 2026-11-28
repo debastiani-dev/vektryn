@@ -38,6 +38,7 @@ from vektryn_contracts import (
     gemini_invalid_key_pause_key,
     gemini_model_cooldown_key,
     gemini_payment_pause_key,
+    normalize_currency_code,
     normalize_language_code,
     resolve_model_chain,
 )
@@ -65,24 +66,9 @@ def build_thinking_config(level: ThinkingLevelName) -> types.ThinkingConfig:
     return types.ThinkingConfig(thinking_level=_THINKING_LEVEL_ENUM[level])
 
 
-_CURRENCY_SYMBOL_MAP: dict[str, str] = {
-    "R$": "BRL",
-    "€": "EUR",
-    "£": "GBP",
-}
-
-
 def normalize_salary_currency(raw: str | None) -> str:
     """Normalize an extracted currency to a 3-letter uppercase ISO 4217 code or ''."""
-    cleaned = (raw or "").strip()
-    if not cleaned:
-        return ""
-    if cleaned in _CURRENCY_SYMBOL_MAP:
-        return _CURRENCY_SYMBOL_MAP[cleaned]
-    upper = cleaned.upper()
-    if len(upper) == 3 and upper.isalpha():
-        return upper
-    return ""
+    return normalize_currency_code(raw)
 
 
 _EMPTY_LLM_VALUES = {"", "null", "none", "n/a", "na", "unknown"}
@@ -321,8 +307,10 @@ class GeminiStreamClient:
             "return 'unknown' only if the posting language is genuinely undetermined).\n"
             "- Identify all eligible regions in region_eligibility (e.g., brazil, latam, worldwide, north_america, europe, emea, apac, restricted).\n"
             "- Extract salary_min and salary_max as numbers (or null if not stated; never empty string ''), "
-            "3-letter ISO 4217 salary_currency (or empty string '' if not stated; never 'unknown'), "
-            "and salary_period (or null if not stated) only if explicitly stated.\n"
+            "salary_currency strictly as an uppercase 3-letter ISO 4217 code such as USD, BRL, EUR, GBP, CAD "
+            "(never symbols like '$' or 'R$', and empty string '' if not stated; never 'unknown'), "
+            "and salary_period strictly as 'hourly', 'monthly', or 'annual' (or null if not explicitly stated — "
+            "distinguish Brazilian CLT/PJ postings quoted monthly in BRL from US/EU annual salaries and USD hourly contractor rates).\n"
             "- Extract normalized lowercase tech_stack tags (languages, frameworks, databases, brokers, cloud, DevOps, "
             "and UI/UX tools such as figma, storybook, framer, sketch, tailwind, css, design systems, wcag, accessibility).\n\n"
             f"Title: {title}\n"
