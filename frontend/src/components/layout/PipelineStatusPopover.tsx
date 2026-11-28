@@ -203,6 +203,57 @@ function formatWorkerTooltip(item: WorkerHeartbeatItem): string {
     return `Heartbeat ${hbAge} · Processed ${item.processed_count} msgs · Last msg ${lastMsg}`;
 }
 
+export function StatusReasonsBanner({
+    status,
+    reasons,
+}: Readonly<{
+    status: PipelineOverallStatus;
+    reasons: ReadonlyArray<string>;
+}>) {
+    if (status === "healthy" || reasons.length === 0) {
+        return null;
+    }
+    const isDegraded = status === "degraded";
+    const toneClass = isDegraded
+        ? "border-red-500/35 bg-red-950/30 text-red-200"
+        : "border-amber-500/35 bg-amber-950/25 text-amber-200";
+    const Icon = isDegraded ? ShieldAlert : AlertTriangle;
+
+    return (
+        <div className={`rounded-xl border px-3 py-2 text-xs ${toneClass}`}>
+            <div className="flex items-start gap-2">
+                <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <ul className="space-y-0.5">
+                    {reasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                    ))}
+                </ul>
+            </div>
+        </div>
+    );
+}
+
+function JobBacklogSubtitle({
+    jobs,
+}: Readonly<{
+    jobs: PipelineStatusResponse["jobs"];
+}>) {
+    if (jobs.unembedded_active_count > 0) {
+        return (
+            <div className="text-[11px] text-amber-300">
+                {jobs.unembedded_active_count} missing embeddings
+            </div>
+        );
+    }
+    const filteredSuffix =
+        jobs.pending_match_count > 0 ? ` · ${jobs.pending_match_count} filtered out` : "";
+    return (
+        <div className="text-[11px] text-zinc-500">
+            {jobs.unscored_active_count} unscored{filteredSuffix}
+        </div>
+    );
+}
+
 function WorkerLivenessSection({ items }: Readonly<{ items: ReadonlyArray<WorkerHeartbeatItem> }>) {
     if (items.length === 0) {
         return null;
@@ -529,6 +580,11 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
 
                     {data && (
                         <div className="mt-3.5 space-y-4">
+                            <StatusReasonsBanner
+                                status={data.overall_status}
+                                reasons={data.status_reasons ?? []}
+                            />
+
                             <div className="space-y-2">
                                 <div className="flex items-center justify-between text-xs">
                                     <span className="font-medium text-zinc-400">
@@ -590,12 +646,7 @@ export function PipelineStatusPopover({ isStaff }: Readonly<{ isStaff: boolean }
                                     <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-zinc-100">
                                         {data.jobs.ai_scored_count} / {data.jobs.active_count}
                                     </div>
-                                    <div className="text-[11px] text-zinc-500">
-                                        {data.jobs.unscored_active_count} unscored
-                                        {data.jobs.pending_match_count > 0
-                                            ? ` · ${data.jobs.pending_match_count} unmatched`
-                                            : ""}
-                                    </div>
+                                    <JobBacklogSubtitle jobs={data.jobs} />
                                 </div>
                                 <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-3 py-2">
                                     <div className="text-[11px] text-zinc-400">Stack Rollup</div>

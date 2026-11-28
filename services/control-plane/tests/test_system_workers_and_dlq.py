@@ -112,6 +112,7 @@ def test_system_status_worker_liveness_alive_stale_offline_and_skew():
     assert res_alive.status_code == 200
     body_alive = res_alive.json()
     assert body_alive["overall_status"] == "healthy"
+    assert body_alive["status_reasons"] == []
     assert body_alive["workers"]["status"] == "healthy"
     assert body_alive["workers"]["items"][0]["status"] == "alive"
     assert body_alive["workers"]["items"][0]["age_seconds"] == 0
@@ -145,6 +146,9 @@ def test_system_status_worker_liveness_alive_stale_offline_and_skew():
         res_stale = client.get("/api/v1/system/status/")
     assert res_stale.json()["workers"]["status"] == "warning"
     assert res_stale.json()["overall_status"] == "warning"
+    assert res_stale.json()["status_reasons"] == [
+        "Stale worker heartbeat: enrichment-worker."
+    ]
 
     # 3. One worker missing/expired -> offline -> overall degraded
     fake_redis.mget.return_value = [
@@ -167,6 +171,66 @@ def test_system_status_worker_liveness_alive_stale_offline_and_skew():
     assert res_offline.json()["workers"]["status"] == "degraded"
     assert res_offline.json()["workers"]["items"][0]["status"] == "offline"
     assert res_offline.json()["overall_status"] == "degraded"
+    assert res_offline.json()["status_reasons"] == [
+        "Worker offline: enrichment-worker."
+    ]
+
+
+def test_overall_status_ignores_recent_filtered_unmatched_and_reports_operational_reasons():
+    now = datetime.now(UTC)
+    healthy_dlq = {"status": "healthy", "recent_24h_count": 0, "total_count": 0}
+    healthy_workers = {
+        "status": "healthy",
+        "items": [
+            {"worker": "enrichment-worker", "status": "alive"},
+            {"worker": "matcher-worker", "status": "alive"},
+        ],
+    }
+    clean_totals = {
+        "fetched_count": 20,
+        "ingested_count": 5,
+        "deduped_count": 15,
+        "error_count": 0,
+        "duration_ms": 1200,
+    }
+
+    # Normal Stage 1 eligibility filtering (recent_unmatched_count > 0) must stay healthy
+    status, reasons = system_status._evaluate_overall_status(
+        last_collect_at=now,
+        latest_run_totals=clean_totals,
+        jobs_metrics={
+            "active_count": 68,
+            "matched_active_count": 49,
+            "ai_scored_count": 30,
+            "unscored_active_count": 38,
+            "pending_match_count": 19,
+            "recent_unmatched_count": 19,
+            "unembedded_active_count": 0,
+        },
+        dlq=healthy_dlq,
+        workers=healthy_workers,
+    )
+    assert status == "healthy"
+    assert reasons == []
+
+    # Missing embeddings is an actual operational anomaly -> warning with explicit reason
+    warn_status, warn_reasons = system_status._evaluate_overall_status(
+        last_collect_at=now,
+        latest_run_totals=clean_totals,
+        jobs_metrics={
+            "active_count": 10,
+            "matched_active_count": 9,
+            "ai_scored_count": 9,
+            "unscored_active_count": 1,
+            "pending_match_count": 1,
+            "recent_unmatched_count": 1,
+            "unembedded_active_count": 2,
+        },
+        dlq=healthy_dlq,
+        workers=healthy_workers,
+    )
+    assert warn_status == "warning"
+    assert warn_reasons == ["2 active jobs are missing embeddings."]
 
 
 @pytest.mark.django_db
