@@ -38,9 +38,9 @@ export function LandingHero({
                 </h1>
 
                 <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-zinc-400 sm:text-lg">
-                    Ingests remote engineering roles across 14 sources, ranks every opening against
-                    your resume with semantic search and Gemini, and drives your pipeline from gap
-                    analysis to offer.
+                    Ingests engineering roles across 14 sources, routes every opening to your
+                    best-fitting resume with semantic search and Gemini, and drives your pipeline
+                    from gap analysis to offer.
                 </p>
 
                 <div className="mt-7 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">

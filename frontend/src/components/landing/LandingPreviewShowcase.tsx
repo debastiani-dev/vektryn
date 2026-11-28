@@ -19,6 +19,7 @@ import {
     ExternalLink,
     EyeOff,
     FileText,
+    Globe2,
     Kanban,
     Layers,
     MapPin,
@@ -157,6 +158,17 @@ function RadarPreviewCard({
                             </span>
                             <span className="rounded-lg bg-zinc-800/75 px-2 py-0.5 text-[11px] font-medium text-zinc-300">
                                 {role.contract}
+                            </span>
+                            <span className="inline-flex items-center gap-1 rounded-lg bg-sky-500/10 px-2 py-0.5 font-mono text-[11px] font-semibold text-sky-300 ring-1 ring-sky-500/25">
+                                <Globe2 className="h-3 w-3" aria-hidden="true" />
+                                {role.language}
+                            </span>
+                            <span className="inline-flex max-w-[160px] items-center gap-1 rounded-lg bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-200 ring-1 ring-violet-500/25">
+                                <FileText className="h-3 w-3 shrink-0 text-violet-400" aria-hidden="true" />
+                                <span className="shrink-0 whitespace-nowrap font-mono text-[10px] font-semibold text-violet-300">
+                                    {role.language}
+                                </span>
+                                <span className="min-w-0 truncate">{role.matchedResume}</span>
                             </span>
                             <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-0.5 font-mono text-[11px] font-medium tabular-nums text-emerald-300 ring-1 ring-emerald-500/25">
                                 <Banknote className="h-3 w-3" aria-hidden="true" />
@@ -1408,8 +1420,8 @@ export function ResumesPreviewPanel() {
                                     {rescoreNoticeId === profile.id && (
                                         <p className="font-mono text-[11px] text-violet-300">
                                             {selectedModes.length === 0
-                                                ? "Unrestricted work modes · jobs.rescore queued (no re-embedding)"
-                                                : `Targeting ${selectedModes.map(formatWorkMode).join(", ")} · jobs.rescore queued (no re-embedding)`}
+                                                ? "Unrestricted work modes · Background rescore queued"
+                                                : `Targeting ${selectedModes.map(formatWorkMode).join(", ")} · Background rescore queued`}
                                         </p>
                                     )}
                                 </div>
@@ -1700,7 +1712,7 @@ export function LandingPreviewShowcase() {
                 {/* Ecosystem Proof: Native ATS & Remote Feeds */}
                 <div className="mt-10 flex flex-col items-center gap-3 text-center">
                     <p className="font-mono text-[11px] uppercase tracking-widest text-zinc-500">
-                        Continuously ingesting across 14 ATS platforms &amp; remote feeds
+                        Continuously ingesting across 14 ATS platforms &amp; job feeds
                     </p>
                     <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
                         {INGESTED_SOURCES_STRIP.map((source) => (
