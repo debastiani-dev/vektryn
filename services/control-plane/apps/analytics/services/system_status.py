@@ -387,6 +387,7 @@ def _get_job_backlog_metrics(user) -> dict[str, int]:
     if not active_resumes.exists():
         return {
             "active_count": active_count,
+            "matched_active_count": 0,
             "ai_scored_count": 0,
             "unscored_active_count": active_count,
             "pending_match_count": 0,
@@ -416,6 +417,7 @@ def _get_job_backlog_metrics(user) -> dict[str, int]:
 
     return {
         "active_count": active_count,
+        "matched_active_count": max(0, active_count - pending_match_count),
         "ai_scored_count": ai_scored_count,
         "unscored_active_count": max(0, active_count - ai_scored_count),
         "pending_match_count": pending_match_count,
@@ -437,6 +439,109 @@ def _get_rollup_metrics() -> dict[str, str | None]:
     }
 
 
+def _workers_with_status(workers: dict[str, Any] | None, target: str) -> list[str]:
+    items = (workers or {}).get("items") or []
+    return [
+        str(item["worker"])
+        for item in items
+        if isinstance(item, dict) and item.get("status") == target
+    ]
+
+
+def _collect_degraded_reasons(
+    *,
+    last_collect_at: datetime | None,
+    latest_run_totals: dict[str, int],
+    dlq: dict[str, Any],
+    workers: dict[str, Any] | None,
+) -> list[str]:
+    reasons: list[str] = []
+    recent_dlq = int(dlq.get("recent_24h_count") or 0)
+    if recent_dlq > 0:
+        noun = "failure" if recent_dlq == 1 else "failures"
+        reasons.append(f"Dead-letter queue has {recent_dlq} unresolved {noun} (24h).")
+
+    offline_workers = _workers_with_status(workers, "offline")
+    if offline_workers:
+        reasons.append(f"Worker offline: {', '.join(offline_workers)}.")
+    elif (workers or {}).get("status") == "degraded":
+        reasons.append("One or more Kafka workers are offline.")
+
+    if (
+        last_collect_at is not None
+        and latest_run_totals["error_count"] > 0
+        and latest_run_totals["fetched_count"] == 0
+        and latest_run_totals["ingested_count"] == 0
+    ):
+        reasons.append("Latest collector sync failed across all sources.")
+
+    return reasons
+
+
+def _collect_warning_reasons(
+    *,
+    last_collect_at: datetime | None,
+    jobs_metrics: dict[str, int],
+    dlq: dict[str, Any],
+    workers: dict[str, Any] | None,
+    workers_redis_error: bool,
+) -> list[str]:
+    reasons: list[str] = []
+    stale_cutoff = datetime.now(UTC) - timedelta(hours=COLLECT_STALE_HOURS)
+    if last_collect_at is None:
+        reasons.append("No collector sync recorded yet.")
+    elif last_collect_at < stale_cutoff:
+        reasons.append(f"Last collector sync is older than {COLLECT_STALE_HOURS}h.")
+
+    if dlq.get("status") == "unavailable":
+        reasons.append("Kafka broker unavailable — DLQ health could not be verified.")
+
+    stale_workers = _workers_with_status(workers, "stale")
+    if stale_workers:
+        reasons.append(f"Stale worker heartbeat: {', '.join(stale_workers)}.")
+    elif (workers or {}).get("status") == "warning":
+        reasons.append("One or more Kafka worker heartbeats are stale.")
+
+    if workers_redis_error:
+        reasons.append("Redis unavailable — worker heartbeats could not be verified.")
+
+    unembedded = int(jobs_metrics.get("unembedded_active_count") or 0)
+    if unembedded > 0:
+        noun = "job is" if unembedded == 1 else "jobs are"
+        reasons.append(f"{unembedded} active {noun} missing embeddings.")
+
+    return reasons
+
+
+def _evaluate_overall_status(
+    *,
+    last_collect_at: datetime | None,
+    latest_run_totals: dict[str, int],
+    jobs_metrics: dict[str, int],
+    dlq: dict[str, Any],
+    workers: dict[str, Any] | None = None,
+    workers_redis_error: bool = False,
+) -> tuple[OverallStatus, list[str]]:
+    degraded_reasons = _collect_degraded_reasons(
+        last_collect_at=last_collect_at,
+        latest_run_totals=latest_run_totals,
+        dlq=dlq,
+        workers=workers,
+    )
+    warning_reasons = _collect_warning_reasons(
+        last_collect_at=last_collect_at,
+        jobs_metrics=jobs_metrics,
+        dlq=dlq,
+        workers=workers,
+        workers_redis_error=workers_redis_error,
+    )
+    if degraded_reasons:
+        return "degraded", [*degraded_reasons, *warning_reasons]
+    if warning_reasons:
+        return "warning", warning_reasons
+    return "healthy", []
+
+
 def _derive_overall_status(
     *,
     last_collect_at: datetime | None,
@@ -446,31 +551,15 @@ def _derive_overall_status(
     workers: dict[str, Any] | None = None,
     workers_redis_error: bool = False,
 ) -> OverallStatus:
-    recent_dlq = dlq.get("recent_24h_count") or 0
-    worker_status = (workers or {}).get("status")
-    if recent_dlq > 0 or worker_status == "degraded":
-        return "degraded"
-    if (
-        last_collect_at is not None
-        and latest_run_totals["error_count"] > 0
-        and latest_run_totals["fetched_count"] == 0
-        and latest_run_totals["ingested_count"] == 0
-    ):
-        return "degraded"
-
-    stale_cutoff = datetime.now(UTC) - timedelta(hours=COLLECT_STALE_HOURS)
-    if (
-        last_collect_at is None
-        or last_collect_at < stale_cutoff
-        or dlq.get("status") == "unavailable"
-        or worker_status == "warning"
-        or workers_redis_error
-        or jobs_metrics["unembedded_active_count"] > 0
-        or jobs_metrics["recent_unmatched_count"] > 0
-    ):
-        return "warning"
-
-    return "healthy"
+    status, _ = _evaluate_overall_status(
+        last_collect_at=last_collect_at,
+        latest_run_totals=latest_run_totals,
+        jobs_metrics=jobs_metrics,
+        dlq=dlq,
+        workers=workers,
+        workers_redis_error=workers_redis_error,
+    )
+    return status
 
 
 def build_system_status_payload(user) -> dict[str, Any]:
@@ -479,7 +568,7 @@ def build_system_status_payload(user) -> dict[str, Any]:
     rollup_metrics = _get_rollup_metrics()
     dlq_health = get_dlq_health()
     workers_health, workers_redis_error = get_worker_health()
-    overall_status = _derive_overall_status(
+    overall_status, status_reasons = _evaluate_overall_status(
         last_collect_at=last_collect_at,
         latest_run_totals=latest_run_totals,
         jobs_metrics=jobs_metrics,
@@ -492,6 +581,7 @@ def build_system_status_payload(user) -> dict[str, Any]:
 
     return {
         "overall_status": overall_status,
+        "status_reasons": status_reasons,
         "last_collect_at": last_collect_at.isoformat() if last_collect_at else None,
         "latest_run_totals": latest_run_totals,
         "sources": sources,

@@ -494,6 +494,7 @@ export interface CollectorSourceLog {
 
 export interface PipelineStatusResponse {
     overall_status: PipelineOverallStatus;
+    status_reasons?: string[];
     last_collect_at: string | null;
     latest_run_totals: {
         fetched_count: number;
@@ -505,6 +506,7 @@ export interface PipelineStatusResponse {
     sources: CollectorSourceLog[];
     jobs: {
         active_count: number;
+        matched_active_count?: number;
         ai_scored_count: number;
         unscored_active_count: number;
         pending_match_count: number;

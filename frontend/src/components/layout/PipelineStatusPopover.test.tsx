@@ -5,6 +5,7 @@ import { computeDrawerLayout, computePopoverCoords } from "../../utils/popoverPo
 import { PersonalAnalyticsPanel } from "../analytics/PersonalAnalyticsPanel";
 import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
 import { JobPostingDrawer } from "../radar/JobPostingDrawer";
+import { StatusReasonsBanner } from "./PipelineStatusPopover";
 
 describe("Mobile layout hardening: PipelineStatusPopover & PersonalAnalyticsPanel", () => {
     it("clamps PipelineStatusPopover inside narrow mobile viewports when trigger is on the left", () => {
@@ -136,5 +137,34 @@ describe("Mobile layout hardening: PipelineStatusPopover & PersonalAnalyticsPane
         expect(jobHtml).toContain('role="dialog"');
         expect(jobHtml).not.toContain("<dialog");
         expect(jobHtml).toContain("overscroll-contain");
+    });
+
+    it("renders StatusReasonsBanner only for non-healthy pipeline statuses with exact reasons", () => {
+        expect(
+            renderToStaticMarkup(
+                <StatusReasonsBanner
+                    status="healthy"
+                    reasons={["Should never render when healthy"]}
+                />,
+            ),
+        ).toBe("");
+
+        const warnHtml = renderToStaticMarkup(
+            <StatusReasonsBanner
+                status="warning"
+                reasons={["Stale worker heartbeat: matcher-worker."]}
+            />,
+        );
+        expect(warnHtml).toContain("Stale worker heartbeat: matcher-worker.");
+        expect(warnHtml).toContain("text-amber-200");
+
+        const degradedHtml = renderToStaticMarkup(
+            <StatusReasonsBanner
+                status="degraded"
+                reasons={["Dead-letter queue has 2 unresolved failures (24h)."]}
+            />,
+        );
+        expect(degradedHtml).toContain("Dead-letter queue has 2 unresolved failures (24h).");
+        expect(degradedHtml).toContain("text-red-200");
     });
 });
