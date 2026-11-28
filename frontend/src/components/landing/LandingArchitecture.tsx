@@ -12,14 +12,14 @@ const PIPELINE_STAGES = [
         step: "02",
         title: "Enrich",
         summary:
-            "Workers deduplicate reposts, classify work mode and language, extract stack and salary metadata via Gemini, and generate 768-dim vectors.",
+            "Workers apply a tier-aware Redis wave guard, classify work mode and language, extract stack and salary metadata via Gemini, and generate 768-dim vectors.",
         tag: "Gemini · 768-dim Vectors",
     },
     {
         step: "03",
-        title: "Route & Score",
+        title: "Merge & Score",
         summary:
-            "Per-user routing selects one winning resume via pgvector and language gates before BYOK Gemini keys run structured fit analysis.",
+            "Two-layer near-duplicate & repost merging promotes Direct ATS links before pgvector routing selects one winning resume for BYOK Gemini fit analysis.",
         tag: "pgvector · BYOK AI",
     },
     {

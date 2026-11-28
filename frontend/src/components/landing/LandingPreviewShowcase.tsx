@@ -95,6 +95,47 @@ interface RadarPreviewCardProps {
     onOpenGapDetails: () => void;
 }
 
+function RadarPreviewSourceBadges({
+    source,
+    additionalSources,
+    repostCount = 0,
+}: Readonly<{
+    source: string;
+    additionalSources?: string[];
+    repostCount?: number;
+}>) {
+    const extraSources = additionalSources ?? [];
+    const extraCount = extraSources.length;
+    const extraLabel = extraCount === 1 ? "+1 source" : `+${extraCount} sources`;
+    const extraTooltip = extraCount > 0 ? `Also seen on ${extraSources.join(", ")}` : "";
+    const repostLabel = repostCount > 1 ? `Reposted ×${repostCount}` : "Reposted";
+
+    return (
+        <>
+            <span className="inline-flex items-center gap-1.5">
+                <span className="px-1 text-[11px] font-medium text-zinc-500">{source}</span>
+                {extraCount > 0 && (
+                    <span
+                        title={extraTooltip}
+                        className="rounded-md border border-zinc-700/80 bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[11px] font-medium text-zinc-300"
+                    >
+                        {extraLabel}
+                    </span>
+                )}
+            </span>
+            {repostCount >= 1 && (
+                <span
+                    title="Previously listed role seen again after initial posting"
+                    className="inline-flex items-center gap-1 rounded-lg bg-amber-500/12 px-2 py-0.5 text-[11px] font-medium text-amber-300 ring-1 ring-amber-500/30"
+                >
+                    <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                    {repostLabel}
+                </span>
+            )}
+        </>
+    );
+}
+
 function RadarPreviewCard({
     role,
     isSaved,
@@ -174,9 +215,11 @@ function RadarPreviewCard({
                                 <Banknote className="h-3 w-3" aria-hidden="true" />
                                 {role.salary}
                             </span>
-                            <span className="px-1 text-[11px] font-medium text-zinc-500">
-                                {role.source}
-                            </span>
+                            <RadarPreviewSourceBadges
+                                source={role.source}
+                                additionalSources={role.additionalSources}
+                                repostCount={role.repostCount}
+                            />
                             <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
                                 <Clock className="h-3 w-3" aria-hidden="true" />
                                 {role.postedAge}
