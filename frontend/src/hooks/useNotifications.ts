@@ -89,9 +89,15 @@ export function useNotifications(streamToken: string | null) {
         void fetchPage(filter, 1, false);
     }, [fetchPage, filter, streamToken]);
 
+    const refreshStreamToken = useCallback(async (): Promise<string | null> => {
+        const currentUser = await vektrynApi.getCurrentUser();
+        return currentUser.stream_token || null;
+    }, []);
+
     const { alerts, connected, dismissAlert } = useAlertStream(streamToken, {
         onAlert: handleIncomingAlert,
         onOpen: handleStreamOpen,
+        refreshToken: refreshStreamToken,
     });
 
     useEffect(() => {

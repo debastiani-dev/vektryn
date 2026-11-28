@@ -382,6 +382,7 @@ resource "google_cloud_run_v2_service" "frontend" {
 
   template {
     service_account = var.frontend_sa_email
+    timeout         = "3600s" # Match stream-edge & nginx proxy_read_timeout for SSE alert streams
 
     scaling {
       min_instance_count = 0
