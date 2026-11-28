@@ -123,6 +123,8 @@ describe("LandingPage and interactive coded preview helpers", () => {
         expect(panels[0]).toContain("92%");
         expect(panels[0]).toContain("Remote");
         expect(panels[0]).toContain("Hybrid");
+        expect(panels[0]).toContain("Senior Backend");
+        expect(panels[0]).toContain("Staff Platform");
         expect(panels[0]).toContain("Gap Details");
         expect(panels[1]).toContain("Fit Summary");
         expect(panels[1]).toContain("Matched Skills");

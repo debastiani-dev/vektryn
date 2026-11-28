@@ -6,28 +6,28 @@ const PIPELINE_STAGES = [
         title: "Ingest",
         summary:
             "Scheduled collectors and manual imports normalize postings and publish schema-validated events to Kafka.",
-        topic: "jobs.raw",
+        tag: "Kafka · Event Stream",
     },
     {
         step: "02",
         title: "Enrich",
         summary:
-            "Workers deduplicate reposts, extract stack and salary metadata via Gemini, and generate 768-dim vectors.",
-        topic: "jobs.enriched",
+            "Workers deduplicate reposts, classify work mode and language, extract stack and salary metadata via Gemini, and generate 768-dim vectors.",
+        tag: "Gemini · 768-dim Vectors",
     },
     {
         step: "03",
-        title: "Score",
+        title: "Route & Score",
         summary:
-            "pgvector filters high-similarity candidates before per-user BYOK Gemini keys run structured fit and gap analysis.",
-        topic: "jobs.alerts",
+            "Per-user routing selects one winning resume via pgvector and language gates before BYOK Gemini keys run structured fit analysis.",
+        tag: "pgvector · BYOK AI",
     },
     {
         step: "04",
         title: "Serve",
         summary:
             "Django serves Hybrid RRF search, Copilot drafts, and Kanban tracking while FastAPI streams live SSE alerts.",
-        topic: "REST + SSE",
+        tag: "REST + Live SSE",
     },
 ];
 
@@ -94,7 +94,7 @@ export function LandingArchitecture() {
                                     </p>
                                 </div>
                                 <p className="mt-4 w-fit rounded-lg border border-zinc-800 bg-zinc-950/90 px-2.5 py-1 font-mono text-[11px] text-zinc-300">
-                                    {stage.topic}
+                                    {stage.tag}
                                 </p>
                             </li>
                         ))}

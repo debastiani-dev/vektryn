@@ -28,6 +28,8 @@ export interface RadarPreviewRole {
     source: string;
     seniority: string;
     workMode: WorkMode;
+    language: "EN" | "PT";
+    matchedResume: string;
     postedAge: string;
     region: "Global Remote" | "Brazil / LATAM";
     contract: string;
@@ -189,6 +191,8 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         source: "Ashby",
         seniority: "Senior",
         workMode: "remote",
+        language: "EN",
+        matchedResume: "Senior Backend",
         postedAge: "2h ago",
         region: "Global Remote",
         contract: "B2B Contractor",
@@ -208,6 +212,8 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         source: "Greenhouse",
         seniority: "Staff",
         workMode: "remote",
+        language: "PT",
+        matchedResume: "Staff Platform",
         postedAge: "5h ago",
         region: "Brazil / LATAM",
         contract: "PJ",
@@ -227,6 +233,8 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         source: "Lever",
         seniority: "Senior",
         workMode: "hybrid",
+        language: "PT",
+        matchedResume: "Fullstack",
         postedAge: "1d ago",
         region: "Brazil / LATAM",
         contract: "CLT",

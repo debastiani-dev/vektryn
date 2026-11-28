@@ -40,20 +40,19 @@ export function LandingCapabilities() {
                                 </span>
                             </div>
                             <h3 className="mt-3 text-lg font-semibold text-zinc-100">
-                                Vector filtering before structured Gemini analysis
+                                Multi-resume multilingual routing before Gemini analysis
                             </h3>
                             <p className="mt-2 max-w-xl text-sm leading-relaxed text-zinc-400">
-                                Incoming postings are narrowed by{" "}
+                                Keep multiple active resumes across any language. Stage 1 applies
+                                work-mode &amp; language routing plus{" "}
                                 <span className="font-mono text-zinc-200">pgvector</span> similarity
-                                before Gemini evaluates a 0–100 fit score, matched skills, and
-                                missing keywords. Resume edits automatically trigger retroactive
-                                rescoring.
+                                to pick one winning resume before Gemini scores fit and gaps.
                             </p>
                         </div>
 
                         <div className="mt-6 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800/90 bg-zinc-950/80 p-3.5 font-mono text-xs">
                             <span className="rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-zinc-300">
-                                Resume 768-dim
+                                Multi-Resume
                             </span>
                             <ArrowRight className="h-3.5 w-3.5 text-zinc-600" aria-hidden="true" />
                             <span className="rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-zinc-300">
@@ -83,8 +82,8 @@ export function LandingCapabilities() {
                             </h3>
                             <p className="mt-2 text-sm leading-relaxed text-zinc-400">
                                 Reciprocal Rank Fusion merges full-text and vector search with
-                                saved filter presets, role hiding, company muting, and manual URL
-                                imports.
+                                work-mode and ISO 639-1 language filters, saved presets, role
+                                hiding, company muting, and manual URL imports.
                             </p>
                         </div>
 
@@ -93,10 +92,10 @@ export function LandingCapabilities() {
                                 Hybrid RRF
                             </span>
                             <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-zinc-300">
-                                Saved Presets
+                                Work &amp; Language
                             </span>
                             <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-zinc-300">
-                                Mute Company
+                                Saved Presets
                             </span>
                             <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-zinc-300">
                                 Manual Import
@@ -117,9 +116,9 @@ export function LandingCapabilities() {
                                 From gap breakdown to tailored drafts
                             </h3>
                             <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-                                Generate role-specific Markdown artifacts grounded in your resume,
-                                match analysis, and preferred tone—cached per role for instant
-                                reuse.
+                                Generate role-specific Markdown artifacts in the posting&apos;s
+                                language—grounded in your resume, match analysis, and preferred
+                                tone, and cached per role for instant reuse.
                             </p>
                         </div>
 

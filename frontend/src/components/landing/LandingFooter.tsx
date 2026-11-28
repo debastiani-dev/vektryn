@@ -91,21 +91,6 @@ export function LandingFooter({
                         <a href="#stack" className="transition hover:text-zinc-100">
                             Stack
                         </a>
-                        <a
-                            href={VEKTRYN_GITHUB_URL}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="transition hover:text-zinc-100"
-                        >
-                            GitHub
-                        </a>
-                        <button
-                            type="button"
-                            onClick={primaryAction}
-                            className="font-medium text-violet-300 transition hover:text-violet-200"
-                        >
-                            {isAuthenticated ? "Open Workspace" : "Sign In"}
-                        </button>
                     </div>
                 </div>
             </div>

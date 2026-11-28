@@ -4,7 +4,7 @@
 [![Deploy - GCP Cloud Run](https://github.com/debastiani-dev/vektryn/actions/workflows/deploy-gcp.yml/badge.svg)](https://github.com/debastiani-dev/vektryn/actions/workflows/deploy-gcp.yml)
 [![Live](https://img.shields.io/badge/live-vektryn.debastiani.dev-7c3aed)](https://vektryn.debastiani.dev)
 
-**Vektryn** is an event-driven fullstack job intelligence platform that continuously ingests remote software engineering postings across 14 global and Brazilian ATS/feed sources, tracks live tech-stack demand, and semantically scores resumes against incoming roles with structured AI gap analysis and on-demand application drafting—deployed on Google Cloud Platform at **[vektryn.debastiani.dev](https://vektryn.debastiani.dev)**.
+**Vektryn** is an event-driven fullstack job intelligence platform that continuously ingests software engineering postings across 14 global and Brazilian ATS/feed sources, classifies work mode and ISO 639-1 language, tracks live tech-stack demand, and semantically routes up to 5 concurrent active resumes against incoming roles with structured AI gap analysis and on-demand application drafting—deployed on Google Cloud Platform at **[vektryn.debastiani.dev](https://vektryn.debastiani.dev)**.
 
 > **Why "Vektryn"?** **Vekt-** (*vector / Vektor*) reflects the `pgvector` semantic similarity engine and directional tech-market vectors; **-ryn** (from Old English/Norse *rin* / *ryn*, a fast-flowing channel or current) reflects the continuous Apache Kafka pipeline filtering high-signal postings out of noisy ATS streams.
 
@@ -25,12 +25,14 @@
 | Domain | Capabilities |
 | --- | --- |
 | **Multi-Source Ingestion & Manual Import** | 8 ATS board collectors (`Greenhouse`, `Ashby`, `Lever`, `Workable`, `SmartRecruiters`, `Recruitee`, `Breezy`, `InHire`) + 6 Global/BR feeds (`Remotive`, `Himalayas`, `Jobicy`, `Gupy`, `Trampos`, `GitHub Vagas`) with dynamic slug discovery, Devicon taxonomy sync, Redis SHA-256 deduplication, and SSRF-guarded manual job import (`POST /api/v1/jobs/import/` supporting public URL extraction or pasted descriptions with HTTP/HTTPS and `mailto:` apply targets). |
-| **Two-Stage Semantic Scoring & Rescoring** | Stage 1 `pgvector` HNSW cosine similarity filters candidate roles before Stage 2 structured Gemini fit/gap evaluation (`0–100 fit_score`, `matched_skills`, `missing_keywords`, `talking_points`, `gap_summary`), with `resume_content_hash` stale detection (`is_stale`) and automatic/on-demand retroactive rescoring via `jobs.rescore`. |
-| **Hybrid Keyword + Semantic Search** | Combines trigger-maintained PostgreSQL `tsvector` full-text search (GIN-indexed across `title`, `company_name`, `tech_stack`, `description_clean`) with `pgvector` HNSW cosine similarity via Reciprocal Rank Fusion (`RRF`, `k=60`), Redis-cached `gemini-embedding-001` query embeddings, graceful keyword-only fallback, and composable structured filters. |
-| **Radar Triage & Saved Filter Presets** | Per-user role dismissal (`DismissedJob`), normalized company muting (`MutedCompany`) with quick undo, `Unapplied Only` (`untracked_only`) filtering applied ahead of Hybrid RRF search and KPIs, and one-click named `SavedFilter` presets (`/api/v1/jobs/filters/`). |
-| **On-Demand AI Application Copilot** | Generates ready-to-use Markdown application drafts (`tailored_bullets`, `cover_letter`, `recruiter_outreach`, `interview_questions`, `questions_to_ask`) strictly on demand via BYOK Gemini, grounded in saved `UserProfile` identity/links, cached in PostgreSQL (`MatchArtifact`) per `(match_score, kind, resume_content_hash)`, with tone/guidance controls and per-user Redis rate limiting. |
-| **Kanban Tracker, Reminders & Export** | 8-stage Kanban pipeline (`discovered` → `saved` → `applied` → `screening` → `interviewing` → `offer` / `rejected` / `withdrawn`), scheduled `next_action_at` follow-up reminders (overdue highlights + automated `vektryn-lifecycle` alerts), and formula-safe CSV/JSON export (`/api/v1/leads/export/`). |
-| **Persistent Notification Center & SSE** | User-scoped PostgreSQL `Notification` inbox (`match_alert`, `tracked_job_closed`, `lead_followup_due`, `pipeline_error`, `rescore_completed`, `manual_import_ready`, `collector_sync_completed`, `ai_quota_exhausted`, `ai_key_invalid`) hydrated via REST and merged live with signed HMAC-SHA256 Server-Sent Events (`/stream/alerts` deduplicated by `notification_uuid`), plus daily 30-day retention pruning. |
+| **Work Mode Classification & Gating** | Classifies every job into `remote`, `hybrid`, `onsite`, or `unknown` using structured Gemini extraction (evaluating both `location_raw` and full description text) plus collector hints; supports per-resume `target_work_modes` hard gating (default `["remote"]`), composable `?work_mode=` filtering on `/api/v1/jobs/` and `/api/v1/matches/`, and `SavedFilter` preset persistence. |
+| **Multi-Resume & Multilingual Auto-Matching** | Supports up to `MAX_ACTIVE_RESUMES_PER_USER` (default `5`) concurrent active resumes with open ISO 639-1 (184 codes) + `unknown` language detection (Gemini + lazy `py3langid >= 0.4.0`). Deterministic Stage 1 routing (`strict_language_match`, exact ISO 639-1 narrowing, 64-bit advisory-locked `is_routed_winner`) guarantees strictly `<= 1` Stage 2 BYOK call and deduplicated `match_alert` per `(user, job_posting)`, `$0` rescore skips, and deduplicated Auto-Matched Radar/RRF/Analytics views (`?resume_profile=` drill-down, `?language=` filter). |
+| **Two-Stage Semantic Scoring & Rescoring** | Stage 1 `pgvector` HNSW cosine similarity and targeting gates filter candidate roles before Stage 2 structured Gemini fit/gap evaluation (`0–100 fit_score`, `matched_skills`, `missing_keywords`, `talking_points`, `gap_summary`, `fit_highlights`, `watchout_note` written in the posting's ISO 639-1 language), with `resume_content_hash` stale detection (`is_stale`), automatic/on-demand retroactive rescoring via `jobs.rescore`, and transactional winner reconciliation on resume pause or soft-delete. |
+| **Hybrid Keyword + Semantic Search** | Combines trigger-maintained PostgreSQL `tsvector` full-text search (GIN-indexed across `title`, `company_name`, `tech_stack`, `description_clean`) with `pgvector` HNSW cosine similarity via Reciprocal Rank Fusion (`RRF`, `k=60`), Redis-cached `gemini-embedding-001` query embeddings, graceful keyword-only fallback, default `is_routed_winner=True` deduplication, and composable structured filters (`?work_mode=`, `?language=`, `?seniority=`, `?contract_type=`, `?region=`, `?ats_source=`, `?resume_profile=`). |
+| **Radar Triage & Saved Filter Presets** | Per-user role dismissal (`DismissedJob`), normalized company muting (`MutedCompany`) with quick undo, `Unapplied Only` (`untracked_only`) filtering applied ahead of Hybrid RRF search and KPIs, and one-click named `SavedFilter` presets (`/api/v1/jobs/filters/`) preserving `work_mode`, `language`, triage flags, and resume filters. |
+| **On-Demand AI Application Copilot** | Generates ready-to-use Markdown application drafts (`tailored_bullets`, `cover_letter`, `recruiter_outreach`, `interview_questions`, `questions_to_ask`) strictly on demand via BYOK Gemini with dynamic ISO 639-1 output-language alignment (`job.language` → `resume.language` → `"en"`, overridable via custom guidance), grounded in saved `UserProfile` identity/links, cached in PostgreSQL (`MatchArtifact`) per `(match_score, kind, resume_content_hash)`, with tone/guidance controls and per-user Redis rate limiting. |
+| **Kanban Tracker, Reminders & Export** | 8-stage Kanban pipeline (`discovered` → `saved` → `applied` → `screening` → `interviewing` → `offer` / `rejected` / `withdrawn`) that auto-attaches the winning `resume_profile` on lead creation (`POST /api/v1/leads/`) and supports inline `PATCH` resume switching, scheduled `next_action_at` follow-up reminders (overdue highlights + automated `vektryn-lifecycle` alerts), and formula-safe CSV/JSON export (`/api/v1/leads/export/`). |
+| **Persistent Notification Center & SSE** | User-scoped PostgreSQL `Notification` inbox (`match_alert`, `tracked_job_closed`, `lead_followup_due`, `pipeline_error`, `rescore_completed`, `manual_import_ready`, `collector_sync_completed`, `ai_quota_exhausted`, `ai_key_invalid`) tagged with matched `resume_profile_label` / `resume_language`, hydrated via REST and merged live with signed HMAC-SHA256 Server-Sent Events (`/stream/alerts` deduplicated by `notification_uuid`, with exponential-backoff reconnect on `EventSource.CLOSED`), plus daily 30-day retention pruning. |
 | **Market & Personal Analytics** | Daily `StackTrendDaily` demand & normalized `median_annual_usd` benchmarks alongside PostgreSQL-aggregated user-scoped personal funnel conversion rates, channel performance (`ats_source` / `contract_type`), and recurring `missing_keywords` skill-gap charts with click-to-search jumps into `JobRadarView`. |
 | **In-App Pipeline Telemetry & DLQ Ops** | `PipelineStatusPopover` displays per-source `CollectorRunLog` metrics, backlog/rollup freshness, Redis-backed worker liveness heartbeats (`enrichment-worker`, `matcher-worker`), a staff manual collector trigger, and `DlqInspectorModal` for staff inspection, dry-run preview, topic-allowlisted replay, and dismissal of `jobs.dlq` messages. |
 | **Auth Hardening & Account Security** | Session authentication protected by proxy-aware Redis brute-force login throttling (`429 Too Many Requests` + `Retry-After`, fail-open resilience), self-service password rotation (`AUTH_PASSWORD_VALIDATORS` + `update_session_auth_hash`), and automatic SPA session-expiry handling. |
@@ -86,10 +88,10 @@ flowchart LR
 
 ### End-to-End Pipeline Flow
 
-1. **Ingest & Snapshot:** Scheduled collectors (`vektryn-collect`) and SSRF-guarded manual imports (`POST /api/v1/jobs/import/`) store raw HTML snapshots in GCS and push normalized payloads to FastAPI (`POST /ingest/jobs`), which validates schemas against `vektryn-contracts` and publishes to `jobs.raw`.
-2. **Deduplicate & Enrich:** `enrichment-worker` claims SHA-256 content hashes in Redis, extracts structured metadata (`seniority`, `contract_type`, salary, `region_eligibility`, `tech_stack`) and 768-dim `gemini-embedding-001` embeddings via Gemini, and publishes to `jobs.enriched` (routing failures to `jobs.dlq`).
-3. **Score, Rescore & Persist:** `matcher-worker` runs `pgvector` HNSW cosine filtering against active `ResumeProfile` rows, executes Stage 2 Gemini gap analysis, upserts `JobPosting` / `MatchScore` and persistent `Notification` rows atomically in PostgreSQL, and publishes `JobMatchAlertEvent` to `jobs.alerts`. Resume mutations or manual rescore requests publish to `jobs.rescore` for retroactive evaluation.
-4. **Serve, Stream & Observe:** The React SPA queries Django DRF APIs (Hybrid RRF search, triage/presets, Copilot drafts, Kanban tracker, market/personal analytics, pipeline telemetry) and subscribes to unbuffered `GET /stream/alerts` SSE frames merged into `NotificationCenter`.
+1. **Ingest & Snapshot:** Scheduled collectors (`vektryn-collect`, pre-filtering against the union of all active resumes including `work_mode` and unrestricted gate parity) and SSRF-guarded manual imports (`POST /api/v1/jobs/import/`) store raw HTML snapshots in GCS and push normalized payloads to FastAPI (`POST /ingest/jobs`), which validates schemas against `vektryn-contracts` and publishes to `jobs.raw`.
+2. **Deduplicate & Enrich:** `enrichment-worker` claims SHA-256 content hashes in Redis, extracts structured metadata (`seniority`, `contract_type`, `work_mode`, ISO 639-1 `language` with lazy `py3langid >= 0.4.0` offline fallback, normalized `salary_currency`/salary, `region_eligibility`, `tech_stack`) and 768-dim `gemini-embedding-001` embeddings via Gemini, and publishes to `jobs.enriched` (routing failures to `jobs.dlq`).
+3. **Route, Score, Rescore & Persist:** `matcher-worker` groups active `ResumeProfile` rows per user, evaluates hard targeting gates (`target_work_modes`, `seniority`, `contract_type`, `region`, `strict_language_match`), `pgvector` HNSW cosine similarity, and exact ISO 639-1 narrowing to select a single winning resume per `(user, job_posting)`, runs at most 1 Stage 2 BYOK Gemini gap evaluation, atomically flips `is_routed_winner` under a 64-bit `pg_advisory_xact_lock`, and publishes user-level deduplicated `JobMatchAlertEvent` alerts to `jobs.alerts`. Resume mutations or manual rescore triggers publish to `jobs.rescore`, skipping Stage 2 at `$0` BYOK cost whenever the target resume is not the routed winner (mandatory demotion) or already holds a fresh `resume_content_hash`.
+4. **Serve, Stream & Observe:** The React SPA queries Django DRF APIs (default `is_routed_winner=True` Auto-Matched Job Radar, Hybrid RRF search, `?work_mode=` / `?language=` / `?resume_profile=` filtering, triage/presets, ISO 639-1-aligned Copilot drafts, Kanban tracker, deduplicated market/personal analytics, pipeline telemetry) and subscribes to unbuffered `GET /stream/alerts` SSE frames merged into `NotificationCenter` with automatic backoff reconnection.
 
 ---
 
@@ -101,7 +103,7 @@ flowchart LR
 | **Async Edge & Workers** | FastAPI, Uvicorn, Pydantic v2, HTTPX, BeautifulSoup4, `confluent-kafka`, `psycopg` 3 |
 | **Event Streaming** | Apache Kafka 3.9 (KRaft mode — `jobs.raw`, `jobs.enriched`, `jobs.rescore`, `jobs.alerts`, `jobs.dlq`) |
 | **Data & Vector Store** | PostgreSQL 17 + `pgvector` (HNSW vector + GIN `tsvector`), Redis 7 |
-| **AI Pipeline** | Google Gemini API (`gemini-embedding-001` + tiered BYOK Gemini 3.5/3.8/4 structured JSON & Markdown generation) |
+| **AI & NLP Pipeline** | Google Gemini API (`gemini-embedding-001` + tiered BYOK Gemini 3.5/3.8/4 structured JSON & Markdown generation), `py3langid >= 0.4.0` (lazy offline ISO 639-1 language detection) |
 | **Frontend** | React 19, TypeScript, Vite 8, Tailwind CSS v4, Lucide Icons, Nginx 1.27 |
 | **Observability** | In-app `PipelineStatusPopover` & `DlqInspectorModal`, GCP Cloud Run Logs/Metrics, Sentry (`sentry-sdk` 3 + `@sentry/react` 11) |
 | **Cloud, IaC & CI/CD** | GCP (Cloud Run Services/Jobs, Cloud Scheduler, Compute Engine `e2-micro`, GCS, Artifact Registry, Secret Manager, Direct VPC Egress, IAP OS Login, OIDC WIF), Terraform 1.11+, Docker BuildKit, GitHub Actions |
@@ -114,7 +116,7 @@ vektryn/
 │   ├── scripts/                # Path-filtered PR CI (detect_ci_changes.py) & incremental CD (detect_deploy_changes.py) classifiers + pytest suites
 │   └── workflows/              # Path-filtered 4-job parallel CI (ci.yml) & incremental OIDC Cloud Run CD (deploy-gcp.yml)
 ├── packages/
-│   └── contracts/              # Shared Pydantic v2 Kafka events, enums, topic helpers & HMAC stream tokens
+│   └── contracts/              # Shared Pydantic v2 Kafka events, enums, language.py (184 ISO 639-1 codes + lazy py3langid), topic helpers & HMAC stream tokens
 ├── services/
 │   ├── control-plane/          # Django 6 + DRF persistence owner, REST APIs, Copilot, auth & staff admin
 │   └── stream-edge/            # FastAPI ingestion/SSE edge, 14 ATS/feed collectors & Kafka/batch workers
@@ -139,12 +141,12 @@ services/control-plane/
 │   ├── urls.py                 # REST/health/Swagger/admin routing
 │   └── asgi.py / wsgi.py       # Server entrypoints initializing Sentry
 └── apps/
-    ├── base/                   # BaseModel, UserProfile, Notification, /api/v1/auth/*, /api/v1/users/, verify_sentry CLI
-    ├── resumes/                # ResumeProfile uploads (PDF/DOCX/TXT/MD), GCS storage, embeddings & jobs.rescore publishing
-    ├── jobs/                   # JobPosting catalog, Hybrid RRF search, SavedFilter presets, DismissedJob/MutedCompany triage, SSRF-guarded manual import
-    ├── matching/               # MatchScore gap views, stale detection & PostgreSQL-cached MatchArtifact AI Copilot
-    ├── tracker/                # ApplicationLead Kanban CRUD, follow-up reminders & CSV/JSON export
-    └── analytics/              # StackTrendDaily market trends, PersonalAnalytics funnel/skill-gaps, CollectorRunLog, /api/v1/system/{status,collect,dlq}/*
+    ├── base/                   # BaseModel, UserProfile, Notification, /api/v1/auth/*, /api/v1/users/, backfill_languages & verify_sentry CLIs
+    ├── resumes/                # Multi-active ResumeProfile uploads (PDF/DOCX/TXT/MD, cap=5), language/strict_language_match/target_work_modes, winner reconciliation, embeddings & jobs.rescore publishing
+    ├── jobs/                   # JobPosting catalog (work_mode & ISO 639-1 language), Hybrid RRF search, SavedFilter presets, DismissedJob/MutedCompany triage, SSRF-guarded manual import
+    ├── matching/               # Single-winner MatchScore feed (is_routed_winner), ?work_mode=/?language=/?resume_profile= filters, stale detection & ISO 639-1-aligned MatchArtifact AI Copilot
+    ├── tracker/                # ApplicationLead Kanban CRUD (auto-linked & editable resume_profile), follow-up reminders & CSV/JSON export
+    └── analytics/              # StackTrendDaily market trends, deduplicated PersonalAnalytics funnel/skill-gaps, CollectorRunLog, /api/v1/system/{status,collect,dlq}/*
 ```
 
 ```text
@@ -179,12 +181,12 @@ services/stream-edge/src/stream_edge/
 | --- | --- | --- |
 | `/api/v1/auth/` | Control Plane | CSRF cookie, Redis-throttled login/logout, `/me/` (with `profile` & HMAC `stream_token`), `GET`/`PATCH /profile/`, `POST /change-password/`, `POST /deactivate/` |
 | `/api/v1/users/` | Control Plane | Staff-only (`IsAdminUser`) paginated user management (`GET`, `POST`, `PATCH`, soft-deactivate `DELETE`) |
-| `/api/v1/resumes/` | Control Plane | Resume profile CRUD (file upload or raw text), 768-dim embedding generation & `POST /{uuid}/rescore/` |
-| `/api/v1/jobs/` | Control Plane | Job catalog with Hybrid RRF search (`?search=`), `POST /import/`, `/filters/` presets, `/dismissed/` & `/muted-companies/` triage |
-| `/api/v1/matches/` | Control Plane | Resume-to-job `MatchScore` feed with Hybrid RRF search, stale flags & `GET`/`POST /{uuid}/artifacts/` AI Copilot |
-| `/api/v1/leads/` | Control Plane | Kanban `ApplicationLead` CRUD, `next_action_at` reminders & `GET /export/?format=csv\|json` |
-| `/api/v1/notifications/` | Control Plane | Persistent user inbox list (`unread_count`, `?unread=`, `?kind=`), `read/`, `dismiss/`, `read-all/` |
-| `/api/v1/analytics/` | Control Plane | Macro market trends (`/trends/`) & user-scoped funnel/channel/skill-gap analytics (`/personal/`) |
+| `/api/v1/resumes/` | Control Plane | Multi-active resume CRUD (up to `MAX_ACTIVE_RESUMES_PER_USER`, file upload or raw text, ISO 639-1 auto-detection, `strict_language_match`, `target_work_modes`), 768-dim embeddings, winner reconciliation on pause/delete & `POST /{uuid}/rescore/` |
+| `/api/v1/jobs/` | Control Plane | Job catalog with Hybrid RRF search (`?search=`), `?work_mode=` & `?language=` filters, `POST /import/`, `/filters/` presets, `/dismissed/` & `/muted-companies/` triage |
+| `/api/v1/matches/` | Control Plane | Default `is_routed_winner=True` Auto-Matched `MatchScore` feed (plus `?resume_profile=` drill-down, `?work_mode=`, `?language=`, Hybrid RRF search, stale flags) & `GET`/`POST /{uuid}/artifacts/` ISO 639-1-aligned AI Copilot |
+| `/api/v1/leads/` | Control Plane | Kanban `ApplicationLead` CRUD (auto-attaches winning `resume_profile`, supports `PATCH` resume switching), `next_action_at` reminders & `GET /export/?format=csv\|json` |
+| `/api/v1/notifications/` | Control Plane | Persistent user inbox list (`unread_count`, `?unread=`, `?kind=`, matched-resume/language metadata), `read/`, `dismiss/`, `read-all/` |
+| `/api/v1/analytics/` | Control Plane | Macro market trends (`/trends/`) & deduplicated user-scoped funnel/channel/skill-gap analytics (`/personal/`, optional `?resume_profile=` filter) |
 | `/api/v1/system/` | Control Plane | Pipeline health & worker heartbeats (`/status/`), staff collector trigger (`/collect/`), staff DLQ peek/replay/dismiss (`/dlq/`, `/dlq/replay/`, `/dlq/dismiss/`) |
 | `/stream/alerts` & `/ingest/jobs` | Stream Edge | Signed HMAC-SHA256 unbuffered SSE alert stream (`GET /stream/alerts?token=`) and API-key-authenticated ingestion (`POST /ingest/jobs`) |
 | `/health/`, `/api/v1/health/`, `/health`, `/api/docs/` | Both | Liveness probes and OpenAPI 3 / Swagger UI documentation |
@@ -281,6 +283,7 @@ Run `make help` at any time for the full target list.
 | `STORAGE_BACKEND` / `GCS_SNAPSHOTS_BUCKET` / `GCS_RESUMES_BUCKET` / `GCS_DB_BACKUPS_BUCKET` | Backend, Workers & Backup | `local` in dev (`.local_storage/`) or `gcs` with GCS buckets in production (including daily `pg_dump` backups) |
 | `GREENHOUSE_BOARD_TOKENS` / `ASHBY_BOARD_TOKENS` | Collectors | Optional comma-separated pinned ATS board slugs merged into dynamic discovery |
 | `HYBRID_SEARCH_MIN_SIMILARITY` | Control Plane | Minimum cosine similarity threshold for semantic candidates in Hybrid RRF search (default `0.60`) |
+| `MAX_ACTIVE_RESUMES_PER_USER` | Control Plane | Maximum number of concurrent active `ResumeProfile` rows allowed per user (default `5`) |
 | `COPILOT_GEMINI_TIMEOUT_MS` / `COPILOT_RATE_LIMIT_*` | Control Plane | Optional AI Application Copilot total request timeout (`50000` ms) and per-user Redis rate limits (`15` req / `300s`) |
 | `AUTH_LOGIN_ACCT_MAX_FAILURES` / `AUTH_LOGIN_IP_MAX_FAILURES` / `AUTH_LOGIN_LOCKOUT_WINDOW_SECONDS` / `AUTH_LOGIN_TRUSTED_PROXY_COUNT` | Control Plane | Redis brute-force login throttle thresholds (`5` acct, `20` IP, `900s` window, `1` trusted proxy hop) |
 | `SENTRY_DSN` / `SENTRY_ENVIRONMENT` / `SENTRY_TRACES_SAMPLE_RATE` / `SENTRY_RELEASE` / `SENTRY_SERVICE_NAME` | Backend, Jobs & Workers | Optional Sentry error tracking (`traces_sample_rate` defaults to `0.0`; zero-op when `SENTRY_DSN` is blank) |
@@ -325,7 +328,7 @@ make lint
 Provisioned declaratively with Terraform ([infra/terraform/](infra/terraform/)) backed by GCS remote state in `us-central1`:
 
 - **Cloud Run Services:** `vektryn-frontend` (Nginx reverse proxy with custom domain `vektryn.debastiani.dev` and Google-managed TLS), `vektryn-control-plane`, and `vektryn-stream-edge` (3600s request timeout for long-lived SSE streams), connected over Direct VPC Egress.
-- **Cloud Run Jobs & Cloud Scheduler:** `vektryn-migrate` (executed conditionally during CD when migrations change), `vektryn-collect` (`0 */4 * * *` UTC), `vektryn-rollup` (`0 1 * * *` UTC), and `vektryn-lifecycle` (`0 3 * * *` UTC).
+- **Cloud Run Jobs & Cloud Scheduler:** `vektryn-migrate` (splits `command = ["python", "manage.py"]` and `args = ["migrate", "--noinput"]`, executed conditionally during CD when migrations change and reusable for one-off commands like `gcloud run jobs execute vektryn-migrate --region us-central1 --args="backfill_languages" --wait`), `vektryn-collect` (`0 */4 * * *` UTC), `vektryn-rollup` (`0 1 * * *` UTC), and `vektryn-lifecycle` (`0 3 * * *` UTC).
 - **Private VPC Data & Worker Node (`vektryn-data-node`):** Compute Engine `e2-micro` VM (static internal VPC IP, 30 GB `pd-standard`, 2 GB swap) running `pgvector/pgvector:pg17`, `redis:7-alpine`, `apache/kafka:3.9.0` (KRaft), `enrichment-worker`, and `matcher-worker`, with OS Login enabled and IAP-only SSH.
 - **Storage, Registry & Secrets:** GCS buckets (`raw-snapshots`, `resumes`, `db-backups` with 14-day lifecycle for daily `pg_dump` snapshots, `tfstate`), Artifact Registry (`vektryn`), 9 GCP Secret Manager secrets with least-privilege `secretAccessor` bindings, and keyless GitHub Actions OIDC Workload Identity Federation (`vektryn-deployer`).
 
@@ -335,7 +338,7 @@ Provisioned declaratively with Terraform ([infra/terraform/](infra/terraform/)) 
 - **Fast Incremental CD** ([.github/workflows/deploy-gcp.yml](.github/workflows/deploy-gcp.yml)): Uses `.github/scripts/detect_deploy_changes.py` to classify changed paths on push to `main` (plus `workflow_dispatch` force overrides):
   - Builds only affected Docker images in parallel with BuildKit GHA layer caching, baking immutable `SENTRY_RELEASE=<git_sha>` / `VITE_SENTRY_*` metadata into each image.
   - Runs `terraform apply` only when `infra/terraform/**` changes and executes `vektryn-migrate` only when Django migrations change.
-  - Updates affected Cloud Run services/jobs in parallel, refreshes `enrichment-worker` and `matcher-worker` on `vektryn-data-node` via IAP OS Login SSH (updating `/opt/vektryn/.env` atomically with `chmod 600` and verifying container health), and finishes with a production `/api/v1/health/` smoke check.
+  - Updates affected Cloud Run services/jobs in parallel, refreshes `matcher-worker` before `enrichment-worker` on `vektryn-data-node` via IAP OS Login SSH (ensuring `EventEnvelope(extra="forbid")` schema rollout safety, updating `/opt/vektryn/.env` atomically with `chmod 600`, and verifying container health), and finishes with a production `/api/v1/health/` smoke check.
 
 ### Consolidated Observability
 
@@ -347,15 +350,30 @@ Provisioned declaratively with Terraform ([infra/terraform/](infra/terraform/)) 
 
 - **Automated Daily Backups:** `vektryn-pg-backup.timer` runs `/opt/vektryn/backup-postgres.sh` daily at `05:00 UTC` (offset after `vektryn-rollup` `01:00`, `vektryn-lifecycle` `03:00`, and the `04:00` `vektryn-collect` wave) under `flock` + `nice -n 19` + `ionice -c 3`. It runs `pg_dump -Fc --compress=6 --no-owner --no-privileges`, validates the archive with `pg_restore --list`, uploads to `gs://<project_id>-db-backups/daily/vektryn-pg-YYYYMMDD-HHMMSSZ.dump` using `ifGenerationMatch=0` and append-only `roles/storage.objectCreator` IAM (14-day GCS lifecycle delete, `soft_delete_policy = 0s`, `public_access_prevention = "enforced"`), and reports any failure to Sentry (`service=pg-backup`).
 - **Offline Key Hygiene:** Keep a secure offline copy of `BYOK_ENCRYPTION_KEY` in a password manager alongside the GCS dumps; restoring `base_userprofile.gemini_api_key_encrypted` requires the matching Fernet key.
-- **Disaster-Recovery Restore Procedure:**
-  1. Download the desired archive using an operator account with bucket read access:
-     ```bash
-     gcloud storage ls gs://<project_id>-db-backups/daily/
-     gcloud storage cp gs://<project_id>-db-backups/daily/<archive>.dump /tmp/restore.dump
-     ```
-  2. Pause write workers on `vektryn-data-node` (`sudo docker compose -f /opt/vektryn/docker-compose.yml stop enrichment-worker matcher-worker`).
-  3. Ensure `vector` and `pgcrypto` extensions exist on the target PostgreSQL 17 database and restore cleanly:
-     ```bash
-     cat /tmp/restore.dump | sudo docker exec -i vektryn-postgres sh -c 'pg_restore --clean --if-exists --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-     ```
-  4. Restart workers (`sudo docker compose -f /opt/vektryn/docker-compose.yml start enrichment-worker matcher-worker`) and verify row counts, `https://vektryn.debastiani.dev/api/v1/health/`, and `GET /api/v1/system/status/`.
+
+#### Disaster-Recovery Restore Procedure
+
+1. Download the desired archive using an operator account with bucket read access:
+
+   ```bash
+   gcloud storage ls gs://<project_id>-db-backups/daily/
+   gcloud storage cp gs://<project_id>-db-backups/daily/<archive>.dump /tmp/restore.dump
+   ```
+
+2. Pause write workers on `vektryn-data-node`:
+
+   ```bash
+   sudo docker compose -f /opt/vektryn/docker-compose.yml stop enrichment-worker matcher-worker
+   ```
+
+3. Ensure `vector` and `pgcrypto` extensions exist on the target PostgreSQL 17 database and restore cleanly:
+
+   ```bash
+   cat /tmp/restore.dump | sudo docker exec -i vektryn-postgres sh -c 'pg_restore --clean --if-exists --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+   ```
+
+4. Restart workers and verify row counts, `https://vektryn.debastiani.dev/api/v1/health/`, and `GET /api/v1/system/status/`:
+
+   ```bash
+   sudo docker compose -f /opt/vektryn/docker-compose.yml start enrichment-worker matcher-worker
+   ```
