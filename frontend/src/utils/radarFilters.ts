@@ -1,3 +1,4 @@
+import { formatAtsSource, formatExactDate } from "./format";
 import { formatLanguageLabel } from "./languages";
 
 export interface RadarMetadataFilters {
@@ -7,6 +8,7 @@ export interface RadarMetadataFilters {
     language: string;
     region: string;
     atsSource: string;
+    hideReposts: boolean;
 }
 
 export const EMPTY_METADATA_FILTERS: RadarMetadataFilters = {
@@ -16,7 +18,62 @@ export const EMPTY_METADATA_FILTERS: RadarMetadataFilters = {
     language: "",
     region: "",
     atsSource: "",
+    hideReposts: false,
 };
+
+export const DIRECT_ATS_SOURCES = new Set<string>([
+    "greenhouse",
+    "ashby",
+    "lever",
+    "workable",
+    "smartrecruiters",
+    "recruitee",
+    "breezy",
+    "inhire",
+    "gupy",
+    "solides",
+]);
+
+export function isDirectAtsSource(source: string | null | undefined): boolean {
+    if (!source) return false;
+    return DIRECT_ATS_SOURCES.has(source.trim().toLowerCase());
+}
+
+export function formatRepostLabel(repostCount: number): string {
+    if (repostCount <= 1) return "Reposted";
+    return `Reposted ×${repostCount}`;
+}
+
+export function formatRepostTooltip(
+    createdAt: string | null | undefined,
+    lastRepostedAt: string | null | undefined,
+): string {
+    const firstSeen = formatExactDate(createdAt ?? null);
+    const lastSeen = formatExactDate(lastRepostedAt ?? null);
+    if (firstSeen && lastSeen) {
+        return `First observed ${firstSeen} · Last reposted ${lastSeen}`;
+    }
+    if (lastSeen) {
+        return `Last reposted ${lastSeen}`;
+    }
+    if (firstSeen) {
+        return `First observed ${firstSeen}`;
+    }
+    return "This role has been reposted multiple times";
+}
+
+export function formatAdditionalSourcesTooltip(
+    primarySource: string,
+    observedSources: ReadonlyArray<string>,
+): string {
+    const others = observedSources
+        .filter((s) => s !== primarySource)
+        .map((s) => formatAtsSource(s));
+    if (others.length === 0) {
+        return `Observed across multiple job boards (primary: ${formatAtsSource(primarySource)})`;
+    }
+    return `Also seen on ${others.join(", ")}`;
+}
 
 export interface FilterChoice {
     value: string;
@@ -123,7 +180,8 @@ export type ActiveFilterChipKey =
     | "workMode"
     | "language"
     | "region"
-    | "atsSource";
+    | "atsSource"
+    | "hideReposts";
 
 export interface ActiveFilterChip {
     key: ActiveFilterChipKey;
@@ -156,6 +214,7 @@ export function countActivePanelFilters(params: {
     if (params.metadataFilters.language) count += 1;
     if (params.metadataFilters.region) count += 1;
     if (params.metadataFilters.atsSource) count += 1;
+    if (params.metadataFilters.hideReposts) count += 1;
     return count;
 }
 
@@ -221,6 +280,13 @@ export function buildActiveFilterChips(params: {
             key: "atsSource",
             prefix: "Source",
             label: lookupOptionLabel(SOURCE_OPTIONS, params.metadataFilters.atsSource),
+        });
+    }
+    if (params.metadataFilters.hideReposts) {
+        chips.push({
+            key: "hideReposts",
+            prefix: "Reposts",
+            label: "Hidden",
         });
     }
     return chips;

@@ -15,6 +15,7 @@ import {
     Globe2,
     Mail,
     MapPin,
+    Repeat,
     Sparkles,
     StickyNote,
     Trash2,
@@ -57,6 +58,7 @@ import {
     isLeadFollowupOverdue,
     toDatetimeLocalValue,
 } from "../../utils/leadReminders";
+import { formatRepostLabel, formatRepostTooltip } from "../../utils/radarFilters";
 import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
 import { type JobListingPreview, JobPostingDrawer } from "../radar/JobPostingDrawer";
 import { Tooltip } from "../ui/Tooltip";
@@ -224,7 +226,16 @@ function LeadScoreBadges({
     const jobLanguageBadge = formatKnownLanguageBadge(jobLanguage);
     const resumeSummary = lead.resume_profile_summary ?? match?.resume_profile_summary ?? null;
     const resumeLangBadge = formatKnownLanguageBadge(resumeSummary?.language);
-    if (!match && !isClosed && !followupDate && !jobLanguageBadge && !resumeSummary) {
+    const repostCount = lead.repost_count ?? match?.job_posting.repost_count ?? 0;
+    const lastRepostedAt = lead.last_reposted_at ?? match?.job_posting.last_reposted_at ?? null;
+    if (
+        !match &&
+        !isClosed &&
+        !followupDate &&
+        !jobLanguageBadge &&
+        !resumeSummary &&
+        repostCount < 1
+    ) {
         return null;
     }
 
@@ -325,6 +336,17 @@ function LeadScoreBadges({
                             <CalendarClock className="h-3 w-3 text-sky-300" />
                         )}
                         {overdue ? `Overdue · ${followupDate}` : `Follow up · ${followupDate}`}
+                    </span>
+                </Tooltip>
+            )}
+
+            {repostCount >= 1 && (
+                <Tooltip
+                    content={formatRepostTooltip(match?.job_posting.created_at, lastRepostedAt)}
+                >
+                    <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300 ring-1 ring-amber-500/30">
+                        <Repeat className="h-3 w-3" />
+                        {formatRepostLabel(repostCount)}
                     </span>
                 </Tooltip>
             )}

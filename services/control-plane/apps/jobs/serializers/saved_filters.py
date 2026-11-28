@@ -20,6 +20,7 @@ ALLOWED_QUERY_PARAM_KEYS = frozenset(
         "sort_by",
         "hide_dismissed",
         "hide_muted",
+        "hide_reposts",
         "untracked_only",
     }
 )
@@ -29,28 +30,10 @@ BOOLEAN_QUERY_PARAM_KEYS = frozenset(
         "evaluated_only",
         "hide_dismissed",
         "hide_muted",
+        "hide_reposts",
         "untracked_only",
     }
 )
-
-
-def _normalize_language_query_param(raw_lang: Any) -> str:
-    if not isinstance(raw_lang, str):
-        raise serializers.ValidationError(
-            "Filter parameter 'language' must be a string."
-        )
-    tokens = [part.strip() for part in raw_lang.split(",") if part.strip()]
-    normalized_tokens: list[str] = []
-    for token in tokens:
-        try:
-            code = normalize_language_code(token, strict=True)
-        except ValueError as exc:
-            raise serializers.ValidationError(
-                f"Invalid language filter value: {token!r}."
-            ) from exc
-        if code not in normalized_tokens:
-            normalized_tokens.append(code)
-    return ",".join(normalized_tokens)
 
 
 def _normalize_language_query_param(raw_lang: Any) -> str:

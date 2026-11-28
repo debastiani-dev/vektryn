@@ -4,6 +4,7 @@ from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
+from django.utils import timezone
 from pgvector.django import HnswIndex, VectorField
 
 from apps.base.models.base_model import BaseModel, enum_choices
@@ -113,6 +114,29 @@ class JobPosting(BaseModel):
     posted_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
 
+    company_name_normalized = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_default="",
+        db_index=True,
+    )
+    title_normalized = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_default="",
+    )
+    description_fingerprint = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        db_default="",
+        db_index=True,
+    )
+    repost_count = models.PositiveSmallIntegerField(default=0, db_default=0)
+    last_reposted_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
         constraints = [
@@ -146,7 +170,70 @@ class JobPosting(BaseModel):
                 ef_construction=64,
                 opclasses=["vector_cosine_ops"],
             ),
+            models.Index(
+                fields=["company_name_normalized", "is_deleted", "-modified_at"],
+                name="idx_job_dedup_company_active",
+            ),
+            models.Index(
+                fields=["company_name_normalized", "description_fingerprint"],
+                condition=Q(is_deleted=False) & ~Q(description_fingerprint=""),
+                name="idx_job_dedup_company_fp",
+            ),
         ]
 
     def __str__(self) -> str:
         return f"{self.title} @ {self.company_name} ({self.ats_source})"
+
+
+class JobPostingSource(BaseModel):
+    job_posting = models.ForeignKey(
+        JobPosting,
+        on_delete=models.CASCADE,
+        related_name="sources",
+    )
+    ats_source = models.CharField(
+        max_length=32,
+        choices=enum_choices(ATSSource),
+    )
+    external_id = models.CharField(max_length=255)
+    apply_url = models.CharField(
+        max_length=512,
+        validators=[validate_apply_url_field],
+    )
+    raw_html_gcs_uri = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        db_default="",
+    )
+    is_primary = models.BooleanField(default=False, db_default=False)
+    is_active = models.BooleanField(default=True, db_default=True)
+    first_seen_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-is_primary", "first_seen_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["ats_source", "external_id"],
+                condition=Q(is_deleted=False),
+                name="uq_job_source_ats_ext",
+            ),
+            models.UniqueConstraint(
+                fields=["job_posting"],
+                condition=Q(is_primary=True, is_deleted=False),
+                name="uq_job_source_single_primary",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["job_posting", "is_primary", "is_active"],
+                name="idx_job_source_primary_active",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.ats_source}:{self.external_id} -> {self.job_posting_id}"
+            f" ({'primary' if self.is_primary else 'secondary'})"
+        )

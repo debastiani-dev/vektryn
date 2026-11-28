@@ -1,9 +1,51 @@
 from rest_framework import serializers
 
-from apps.jobs.models.jobs import JobPosting
+from apps.jobs.models.jobs import JobPosting, JobPostingSource
+from vektryn_contracts import get_source_priority_rank
+
+
+def get_prefetched_job_sources(job: JobPosting) -> list[JobPostingSource]:
+    prefetched = getattr(job, "prefetched_sources", None)
+    if prefetched is not None:
+        return list(prefetched)
+    return list(
+        job.sources.filter(is_deleted=False).order_by("-is_primary", "first_seen_at")
+    )
+
+
+def resolve_primary_source(
+    job: JobPosting,
+    sources: list[JobPostingSource] | None = None,
+) -> str:
+    rows = get_prefetched_job_sources(job) if sources is None else sources
+    for source in rows:
+        if source.is_primary:
+            return source.ats_source
+    for source in rows:
+        if source.is_active:
+            return source.ats_source
+    return job.ats_source
+
+
+class JobPostingSourceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = JobPostingSource
+        fields = [
+            "uuid",
+            "ats_source",
+            "apply_url",
+            "is_primary",
+            "is_active",
+            "first_seen_at",
+            "last_seen_at",
+        ]
 
 
 class JobPostingSummarySerializer(serializers.ModelSerializer):
+    sources_count = serializers.SerializerMethodField()
+    primary_source = serializers.SerializerMethodField()
+    observed_sources = serializers.SerializerMethodField()
+
     class Meta:
         model = JobPosting
         fields = [
@@ -27,10 +69,47 @@ class JobPostingSummarySerializer(serializers.ModelSerializer):
             "is_active",
             "posted_at",
             "created_at",
+            "repost_count",
+            "last_reposted_at",
+            "sources_count",
+            "primary_source",
+            "observed_sources",
         ]
+
+    def get_sources_count(self, obj: JobPosting) -> int:
+        rows = get_prefetched_job_sources(obj)
+        if not rows:
+            return 1 if obj.is_active else 0
+        return sum(1 for row in rows if row.is_active)
+
+    def get_primary_source(self, obj: JobPosting) -> str:
+        return resolve_primary_source(obj)
+
+    def get_observed_sources(self, obj: JobPosting) -> list[str]:
+        rows = get_prefetched_job_sources(obj)
+        active_rows = [row for row in rows if row.is_active]
+        if not active_rows:
+            return [obj.ats_source] if not rows and obj.is_active else []
+        ordered = sorted(
+            active_rows,
+            key=lambda row: (
+                0 if row.is_primary else 1,
+                get_source_priority_rank(row.ats_source),
+                row.first_seen_at,
+            ),
+        )
+        seen: set[str] = set()
+        result: list[str] = []
+        for row in ordered:
+            if row.ats_source not in seen:
+                seen.add(row.ats_source)
+                result.append(row.ats_source)
+        return result
 
 
 class JobPostingDetailSerializer(JobPostingSummarySerializer):
+    sources = serializers.SerializerMethodField()
+
     class Meta(JobPostingSummarySerializer.Meta):
         fields = [
             *JobPostingSummarySerializer.Meta.fields,
@@ -38,7 +117,12 @@ class JobPostingDetailSerializer(JobPostingSummarySerializer):
             "description_clean",
             "closed_at",
             "modified_at",
+            "sources",
         ]
+
+    def get_sources(self, obj: JobPosting) -> list[dict]:
+        rows = get_prefetched_job_sources(obj)
+        return JobPostingSourceSerializer(rows, many=True).data
 
 
 class ManualJobImportSerializer(serializers.Serializer):

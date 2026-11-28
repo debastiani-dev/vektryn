@@ -16,19 +16,32 @@ from uuid import UUID
 
 from bs4 import BeautifulSoup
 from django.conf import settings
+from django.db import connection, transaction
+from django.utils import timezone
 import httpx
 import redis
 
-from apps.jobs.models.jobs import JobPosting
+from apps.jobs.models.jobs import JobPosting, JobPostingSource
+from apps.matching.models.matching import MatchScore
 from apps.resumes.models.resumes import ResumeProfile
 from apps.resumes.services.rescore_publisher import (
     current_trace_id,
+    publish_enriched_event,
     publish_rescore_event,
 )
 from vektryn_contracts import (
     ATSSource,
+    ContractType,
+    JobEnrichedEvent,
     JobRescoreEvent,
+    RegionEligibility,
+    SalaryPeriod,
+    SeniorityLevel,
+    WorkMode,
+    compute_description_fingerprint,
     compute_job_content_hash,
+    is_generic_company_name,
+    normalize_company_for_dedup,
     validate_apply_url,
 )
 
@@ -190,6 +203,7 @@ class ManualImportResult:
     apply_url: str
     event_id: str | None = None
     job_posting_uuid: UUID | None = None
+    merged_into_existing: bool = False
 
 
 def _unwrap_ip(raw_ip: IPAddress) -> IPAddress:
@@ -1018,6 +1032,316 @@ class ManualJobImportService:
             posted_at=None,
         )
 
+    def _user_needs_scoring(self, canonical: JobPosting) -> bool:
+        active_profiles = list(
+            ResumeProfile.objects.filter(
+                user=self.user,
+                is_active=True,
+                embedding__isnull=False,
+            ).only("uuid", "content_hash")
+        )
+        if not active_profiles:
+            return False
+        existing_hashes = dict(
+            MatchScore.objects.filter(
+                job_posting=canonical,
+                resume_profile_id__in=[profile.uuid for profile in active_profiles],
+            ).values_list("resume_profile_id", "resume_content_hash")
+        )
+        return any(
+            existing_hashes.get(profile.uuid) != profile.content_hash
+            for profile in active_profiles
+        )
+
+    def _publish_enriched_for_canonical(
+        self,
+        canonical: JobPosting,
+        *,
+        external_id: str,
+        apply_url: str,
+    ) -> None:
+        if canonical.embedding is None:
+            return
+        embedding_list = [float(val) for val in canonical.embedding]
+        regions: list[RegionEligibility] = []
+        for raw_region in canonical.region_eligibility or []:
+            try:
+                regions.append(RegionEligibility(str(raw_region)))
+            except ValueError:
+                continue
+
+        salary_period: SalaryPeriod | None = None
+        if canonical.salary_period:
+            try:
+                salary_period = SalaryPeriod(str(canonical.salary_period))
+            except ValueError:
+                salary_period = None
+
+        event = JobEnrichedEvent(
+            trace_id=current_trace_id(),
+            ats_source=ATSSource.MANUAL,
+            external_id=external_id,
+            content_hash=canonical.content_hash,
+            title=canonical.title,
+            company_name=canonical.company_name,
+            apply_url=apply_url,
+            raw_html_gcs_uri=canonical.raw_html_gcs_uri or "local://manual-merged",
+            location_raw=canonical.location_raw,
+            description_clean=canonical.description_clean,
+            posted_at=canonical.posted_at,
+            submitted_by_user_id=self.user.pk,
+            seniority=SeniorityLevel(canonical.seniority),
+            contract_type=ContractType(canonical.contract_type),
+            work_mode=WorkMode(canonical.work_mode),
+            language=canonical.language,
+            region_eligibility=regions,
+            salary_min=canonical.salary_min,
+            salary_max=canonical.salary_max,
+            salary_currency=canonical.salary_currency,
+            salary_period=salary_period,
+            tech_stack=list(canonical.tech_stack or []),
+            embedding=embedding_list,
+        )
+        try:
+            publish_enriched_event(event, require_broker=False)
+        except Exception as exc:
+            logger.warning(
+                "Best-effort jobs.enriched publish after manual merge failed: %s", exc
+            )
+
+    @staticmethod
+    def _acquire_company_lock(company_norm: str) -> None:
+        if is_generic_company_name(company_norm):
+            return
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                [f"vektryn:job_dedup:{company_norm}"],
+            )
+
+    @staticmethod
+    def _upsert_manual_source_row(
+        canonical: JobPosting,
+        *,
+        external_id: str,
+        apply_url: str,
+        now: datetime,
+    ) -> JobPostingSource:
+        existing_source = JobPostingSource.objects.filter(
+            ats_source=ATSSource.MANUAL.value,
+            external_id=external_id,
+        ).first()
+        if existing_source is None:
+            return JobPostingSource.objects.create(
+                job_posting=canonical,
+                ats_source=ATSSource.MANUAL.value,
+                external_id=external_id,
+                apply_url=apply_url,
+                raw_html_gcs_uri=canonical.raw_html_gcs_uri,
+                is_primary=False,
+                is_active=True,
+                first_seen_at=now,
+                last_seen_at=now,
+            )
+        if existing_source.job_posting_id == canonical.uuid:
+            existing_source.apply_url = apply_url
+            existing_source.is_active = True
+            existing_source.last_seen_at = now
+            existing_source.save(
+                update_fields=["apply_url", "is_active", "last_seen_at", "modified_at"]
+            )
+        return existing_source
+
+    @staticmethod
+    def _should_promote_manual_source(
+        canonical: JobPosting,
+        source_row: JobPostingSource,
+        *,
+        external_id: str,
+    ) -> bool:
+        if source_row.job_posting_id != canonical.uuid or source_row.is_primary:
+            return False
+        has_other_active_source = (
+            JobPostingSource.objects.filter(job_posting=canonical, is_active=True)
+            .exclude(ats_source=ATSSource.MANUAL.value, external_id=external_id)
+            .exists()
+        )
+        has_active_primary = JobPostingSource.objects.filter(
+            job_posting=canonical,
+            is_primary=True,
+            is_active=True,
+        ).exists()
+        return (not has_other_active_source) and (not has_active_primary)
+
+    def _trigger_post_merge_scoring(
+        self,
+        canonical: JobPosting,
+        *,
+        external_id: str,
+        apply_url: str,
+        was_inactive: bool,
+    ) -> None:
+        if canonical.embedding is not None:
+            if was_inactive or self._user_needs_scoring(canonical):
+                self._publish_enriched_for_canonical(
+                    canonical,
+                    external_id=external_id,
+                    apply_url=apply_url,
+                )
+            return
+        if was_inactive:
+            self._enqueue_rescore_for_reactivated_job()
+
+    def _attach_manual_source_and_handle_canonical(
+        self,
+        canonical: JobPosting,
+        *,
+        external_id: str,
+        apply_url: str,
+        merged_into_existing: bool,
+    ) -> ManualImportResult:
+        now = timezone.now()
+        company_norm = canonical.company_name_normalized or normalize_company_for_dedup(
+            canonical.company_name
+        )
+        with transaction.atomic():
+            self._acquire_company_lock(company_norm)
+            canonical = JobPosting.objects.select_for_update().get(pk=canonical.pk)
+            was_inactive = not canonical.is_active
+            source_row = self._upsert_manual_source_row(
+                canonical,
+                external_id=external_id,
+                apply_url=apply_url,
+                now=now,
+            )
+
+            update_fields: list[str] = []
+            if self._should_promote_manual_source(
+                canonical, source_row, external_id=external_id
+            ):
+                JobPostingSource.objects.filter(
+                    job_posting=canonical, is_primary=True
+                ).update(is_primary=False, modified_at=now)
+                source_row.is_primary = True
+                source_row.save(update_fields=["is_primary", "modified_at"])
+                if canonical.apply_url != apply_url:
+                    canonical.apply_url = apply_url
+                    update_fields.append("apply_url")
+
+            status_value = "already_exists"
+            if was_inactive:
+                canonical.is_active = True
+                canonical.closed_at = None
+                canonical.repost_count += 1
+                canonical.last_reposted_at = now
+                update_fields.extend(
+                    ["is_active", "closed_at", "repost_count", "last_reposted_at"]
+                )
+                status_value = "reactivated"
+
+            if update_fields:
+                canonical.save(
+                    update_fields=[*dict.fromkeys(update_fields), "modified_at"]
+                )
+
+        self._trigger_post_merge_scoring(
+            canonical,
+            external_id=external_id,
+            apply_url=apply_url,
+            was_inactive=was_inactive,
+        )
+        return ManualImportResult(
+            status=status_value,
+            ats_source=canonical.ats_source,
+            external_id=canonical.external_id,
+            content_hash=canonical.content_hash,
+            title=canonical.title,
+            company_name=canonical.company_name,
+            apply_url=canonical.apply_url,
+            job_posting_uuid=canonical.uuid,
+            merged_into_existing=merged_into_existing,
+        )
+
+    def _find_live_canonical_match(
+        self,
+        prepared: _PreparedImport,
+        *,
+        external_id: str,
+        content_hash: str,
+    ) -> JobPosting | None:
+        existing_source = (
+            JobPostingSource.objects.select_related("job_posting")
+            .filter(
+                ats_source=ATSSource.MANUAL.value,
+                external_id=external_id,
+                job_posting__is_deleted=False,
+            )
+            .first()
+        )
+        if existing_source is not None:
+            canonical = existing_source.job_posting
+            if (
+                canonical.embedding is not None
+                or canonical.content_hash == content_hash
+            ):
+                return canonical
+
+        existing_live_by_hash = JobPosting.objects.filter(
+            content_hash=content_hash
+        ).first()
+        if existing_live_by_hash is not None:
+            return existing_live_by_hash
+
+        company_norm = normalize_company_for_dedup(prepared.company_name)
+        desc_fp, _ = compute_description_fingerprint(prepared.description_clean)
+        if is_generic_company_name(company_norm) or not desc_fp:
+            return None
+
+        # Guard: only merge synchronously when canonical has an embedding; otherwise
+        # fall back to jobs.raw so enrichment-worker embeds it and Stage 0 merges cleanly.
+        return (
+            JobPosting.objects.filter(
+                is_active=True,
+                embedding__isnull=False,
+                company_name_normalized=company_norm,
+                description_fingerprint=desc_fp,
+            )
+            .order_by("created_at")
+            .first()
+        )
+
+    def _resolve_soft_deleted_hash_match(
+        self,
+        *,
+        content_hash: str,
+        external_id: str,
+        apply_url: str,
+    ) -> ManualImportResult | None:
+        soft_deleted = JobPosting.all_objects.filter(
+            content_hash=content_hash,
+            is_deleted=True,
+        ).first()
+        if soft_deleted is None:
+            return None
+
+        repointed_source = (
+            JobPostingSource.objects.select_related("job_posting")
+            .filter(
+                ats_source=soft_deleted.ats_source,
+                external_id=soft_deleted.external_id,
+                job_posting__is_deleted=False,
+            )
+            .first()
+        )
+        if repointed_source is not None:
+            return self._attach_manual_source_and_handle_canonical(
+                repointed_source.job_posting,
+                external_id=external_id,
+                apply_url=apply_url,
+                merged_into_existing=True,
+            )
+        return self._handle_existing_by_hash(soft_deleted)
+
     def _handle_existing_by_hash(self, existing: JobPosting) -> ManualImportResult:
         if existing.is_deleted or not existing.is_active:
             existing.is_deleted = False
@@ -1039,6 +1363,7 @@ class ManualJobImportService:
             company_name=existing.company_name,
             apply_url=existing.apply_url,
             job_posting_uuid=existing.uuid,
+            merged_into_existing=True,
         )
 
     def import_job(self, validated_data: dict[str, Any]) -> ManualImportResult:
@@ -1057,13 +1382,26 @@ class ManualJobImportService:
             description_clean=prepared.description_clean,
         )
 
-        # Inspect ALL rows (including closed & soft-deleted) to respect UNIQUE(content_hash)
-        # and avoid silent 7-day Redis dedup drops or matcher-worker DLQ collisions.
-        existing_by_hash = JobPosting.all_objects.filter(
-            content_hash=content_hash
-        ).first()
-        if existing_by_hash is not None:
-            return self._handle_existing_by_hash(existing_by_hash)
+        canonical = self._find_live_canonical_match(
+            prepared,
+            external_id=external_id,
+            content_hash=content_hash,
+        )
+        if canonical is not None:
+            return self._attach_manual_source_and_handle_canonical(
+                canonical,
+                external_id=external_id,
+                apply_url=prepared.apply_url,
+                merged_into_existing=True,
+            )
+
+        soft_deleted_result = self._resolve_soft_deleted_hash_match(
+            content_hash=content_hash,
+            external_id=external_id,
+            apply_url=prepared.apply_url,
+        )
+        if soft_deleted_result is not None:
+            return soft_deleted_result
 
         ingest_resp = self._forward_to_stream_edge(
             external_id=external_id,
@@ -1084,4 +1422,5 @@ class ManualJobImportService:
             company_name=prepared.company_name,
             apply_url=prepared.apply_url,
             event_id=str(ingest_resp.get("event_id") or "") or None,
+            merged_into_existing=False,
         )

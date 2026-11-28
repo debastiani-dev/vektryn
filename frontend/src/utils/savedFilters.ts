@@ -47,6 +47,7 @@ function applyMetadataParams(
     if (metadataFilters.language) params.language = metadataFilters.language;
     if (metadataFilters.region) params.region = metadataFilters.region;
     if (metadataFilters.atsSource) params.ats_source = metadataFilters.atsSource;
+    if (metadataFilters.hideReposts) params.hide_reposts = true;
 }
 
 function hydrateMetadataFilters(params: SavedFilterQueryParams): RadarMetadataFilters {
@@ -58,6 +59,7 @@ function hydrateMetadataFilters(params: SavedFilterQueryParams): RadarMetadataFi
         language: asString(params.language),
         region: asString(params.region),
         atsSource: asString(params.ats_source),
+        hideReposts: Boolean(params.hide_reposts),
     };
 }
 
@@ -122,6 +124,7 @@ export function isPresetActive(
         (normalizedCurrent.language ?? "") === (normalizedPreset.language ?? "") &&
         (normalizedCurrent.region ?? "") === (normalizedPreset.region ?? "") &&
         (normalizedCurrent.ats_source ?? "") === (normalizedPreset.ats_source ?? "") &&
+        Boolean(normalizedCurrent.hide_reposts) === Boolean(normalizedPreset.hide_reposts) &&
         (normalizedCurrent.sort_by ?? "best_match") === (normalizedPreset.sort_by ?? "best_match")
     );
 }

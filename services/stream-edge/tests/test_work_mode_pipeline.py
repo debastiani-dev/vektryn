@@ -403,6 +403,8 @@ def test_matcher_live_and_rescore_enforce_target_work_modes(
 
     cur.execute.side_effect = _live_execute
     cur.fetchone.side_effect = [
+        None,
+        None,
         (job_uuid,),
         (match_uuid, None),
         (match_uuid,),
@@ -461,7 +463,11 @@ def test_matcher_live_and_rescore_enforce_target_work_modes(
         )
 
     # Confirm work_mode was persisted in JobPosting UPSERT
-    upsert_sql, upsert_params = executed_sql[0]
+    upsert_sql, upsert_params = next(
+        (sql, params)
+        for sql, params in executed_sql
+        if "INSERT INTO jobs_jobposting" in sql
+    )
     assert "work_mode" in upsert_sql
     assert job_mode.value in upsert_params
 

@@ -6,7 +6,13 @@ from confluent_kafka import KafkaError, Producer
 from django.conf import settings
 import redis
 
-from vektryn_contracts import JobRescoreEvent, KafkaTopic, rescore_partition_key
+from vektryn_contracts import (
+    JobEnrichedEvent,
+    JobRescoreEvent,
+    KafkaTopic,
+    job_partition_key,
+    rescore_partition_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +114,56 @@ def publish_rescore_event(
             else f"{remaining} message(s) still queued after flush timeout"
         )
         raise RescoreBrokerError(f"Failed to deliver jobs.rescore event: {detail}")
+
+    return True
+
+
+def publish_enriched_event(
+    event: JobEnrichedEvent,
+    *,
+    require_broker: bool = False,
+) -> bool:
+    bootstrap_servers = (getattr(settings, "KAFKA_BOOTSTRAP_SERVERS", "") or "").strip()
+    if not bootstrap_servers:
+        if require_broker:
+            raise RescoreBrokerError("Kafka broker is not configured.")
+        logger.warning(
+            "Skipping jobs.enriched publish for %s:%s (KAFKA_BOOTSTRAP_SERVERS unset)",
+            event.ats_source.value,
+            event.external_id,
+        )
+        return False
+
+    delivery_errors: list[KafkaError] = []
+
+    def _on_delivery(err: KafkaError | None, _msg: Any) -> None:
+        if err is not None:
+            delivery_errors.append(err)
+
+    try:
+        producer = _get_producer(bootstrap_servers)
+        headers = [
+            ("traceparent", f"00-{event.trace_id}-0000000000000001-01".encode("utf-8")),
+            ("schema_version", event.schema_version.encode("utf-8")),
+        ]
+        producer.produce(
+            topic=KafkaTopic.JOBS_ENRICHED.value,
+            key=job_partition_key(event.ats_source, event.external_id).encode("utf-8"),
+            value=event.model_dump_json().encode("utf-8"),
+            headers=headers,
+            on_delivery=_on_delivery,
+        )
+        remaining = producer.flush(KAFKA_FLUSH_TIMEOUT_SECONDS)
+    except Exception as exc:
+        raise RescoreBrokerError(f"Kafka produce error: {exc}") from exc
+
+    if remaining != 0 or delivery_errors:
+        detail = (
+            str(delivery_errors[0])
+            if delivery_errors
+            else f"{remaining} message(s) still queued after flush timeout"
+        )
+        raise RescoreBrokerError(f"Failed to deliver jobs.enriched event: {detail}")
 
     return True
 

@@ -654,6 +654,8 @@ def test_matcher_always_scores_manual_jobs_even_outside_target_regions():
     fake_cursor = MagicMock()
     fake_cursor.__enter__.return_value = fake_cursor
     fake_cursor.fetchone.side_effect = [
+        None,
+        None,
         (job_uuid,),
         (uuid4(), None),
         (uuid4(),),

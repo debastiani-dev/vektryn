@@ -7,8 +7,25 @@ from stream_edge.config import settings
 
 class DedupRedisClient:
     KEY_PREFIX = "vektryn:job:hash:"
+    WAVE_FP_PREFIX = "vektryn:dedup:fp:"
     DAILY_ENRICHMENT_PREFIX = "vektryn:enrichment:daily:"
     DAILY_COUNTER_TTL_SECONDS = 60 * 60 * 48
+
+    _WAVE_CLAIM_LUA = """
+    local current = redis.call('GET', KEYS[1])
+    local incoming = tonumber(ARGV[1])
+    local ttl = tonumber(ARGV[2])
+    if not current then
+        redis.call('SET', KEYS[1], tostring(incoming), 'EX', ttl)
+        return {1, -1}
+    end
+    local cached = tonumber(current)
+    if incoming < cached then
+        redis.call('SET', KEYS[1], tostring(incoming), 'EX', ttl)
+        return {1, cached}
+    end
+    return {0, cached}
+    """
 
     def __init__(self, redis_url: str = settings.redis_url) -> None:
         self._client = aioredis.from_url(redis_url, decode_responses=True)
@@ -26,6 +43,39 @@ class DedupRedisClient:
     async def release_content_hash(self, content_hash: str) -> None:
         key = f"{self.KEY_PREFIX}{content_hash}"
         await self._client.delete(key)
+
+    async def claim_wave_fingerprint(
+        self,
+        company_norm: str,
+        description_fingerprint: str,
+        source_tier: int,
+        ttl_seconds: int = settings.wave_dedup_ttl_seconds,
+    ) -> tuple[bool, int | None]:
+        """Tier-aware wave guard: suppress equal/lower-tier duplicates, allow higher-tier Direct ATS."""
+        key = f"{self.WAVE_FP_PREFIX}{company_norm}:{description_fingerprint}"
+        result = await self._client.eval(
+            self._WAVE_CLAIM_LUA,
+            1,
+            key,
+            str(int(source_tier)),
+            str(int(ttl_seconds)),
+        )
+        allowed = bool(int(result[0]))
+        prev_raw = int(result[1])
+        return allowed, (None if prev_raw < 0 else prev_raw)
+
+    async def release_wave_fingerprint(
+        self,
+        company_norm: str,
+        description_fingerprint: str,
+        previous_tier: int | None = None,
+        ttl_seconds: int = settings.wave_dedup_ttl_seconds,
+    ) -> None:
+        key = f"{self.WAVE_FP_PREFIX}{company_norm}:{description_fingerprint}"
+        if previous_tier is None:
+            await self._client.delete(key)
+        else:
+            await self._client.set(key, str(int(previous_tier)), ex=ttl_seconds)
 
     async def try_consume_enrichment_daily_quota(
         self,

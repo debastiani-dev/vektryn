@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.jobs.serializers.jobs import resolve_primary_source
 from apps.tracker.models import ApplicationLead
 from apps.tracker.services.leads import create_lead, update_lead
 
@@ -11,8 +12,15 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
     )
     apply_url = serializers.CharField(source="job_posting.apply_url", read_only=True)
     ats_source = serializers.CharField(source="job_posting.ats_source", read_only=True)
+    primary_source = serializers.SerializerMethodField()
     work_mode = serializers.CharField(source="job_posting.work_mode", read_only=True)
     language = serializers.CharField(source="job_posting.language", read_only=True)
+    repost_count = serializers.IntegerField(
+        source="job_posting.repost_count", read_only=True
+    )
+    last_reposted_at = serializers.DateTimeField(
+        source="job_posting.last_reposted_at", read_only=True
+    )
     resume_profile_summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -26,8 +34,11 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "company_name",
             "apply_url",
             "ats_source",
+            "primary_source",
             "work_mode",
             "language",
+            "repost_count",
+            "last_reposted_at",
             "status",
             "priority",
             "notes",
@@ -44,6 +55,9 @@ class ApplicationLeadSerializer(serializers.ModelSerializer):
             "created_at",
             "modified_at",
         ]
+
+    def get_primary_source(self, obj: ApplicationLead) -> str:
+        return resolve_primary_source(obj.job_posting)
 
     def get_resume_profile_summary(self, obj: ApplicationLead) -> dict[str, str] | None:
         profile = obj.resume_profile

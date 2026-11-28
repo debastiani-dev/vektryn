@@ -12,12 +12,14 @@ import {
     Mail,
     MessageSquareQuote,
     RefreshCw,
+    Repeat,
     Sparkles,
     X,
     XCircle,
 } from "lucide-react";
-import { useState } from "react";
-import type { CopilotTone, MatchScore } from "../../types/models";
+import { useEffect, useState } from "react";
+import { vektrynApi } from "../../api/client";
+import type { CopilotTone, JobPostingDetail, MatchScore } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
     formatApplyLinkLabel,
@@ -42,9 +44,11 @@ import {
     getLanguageName,
     languageBadgeStyle,
 } from "../../utils/languages";
+import { formatRepostLabel, formatRepostTooltip } from "../../utils/radarFilters";
 import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
 import { CopilotPanel } from "./CopilotPanel";
+import { ObservedSourcesSection } from "./ObservedSourcesSection";
 
 interface GapAnalysisDrawerProps {
     match: MatchScore | null;
@@ -215,6 +219,8 @@ type DrawerTab = "analysis" | "copilot";
 
 interface GapAnalysisTabContentProps {
     match: MatchScore;
+    jobDetail: JobPostingDetail | null;
+    loadingJobDetail: boolean;
     fitPct: number | null;
     vectorPct: number;
     scoreTheme: ReturnType<typeof scoreVisualTheme>;
@@ -224,6 +230,8 @@ interface GapAnalysisTabContentProps {
 
 function GapAnalysisTabContent({
     match,
+    jobDetail,
+    loadingJobDetail,
     fitPct,
     vectorPct,
     scoreTheme,
@@ -360,6 +368,15 @@ function GapAnalysisTabContent({
                     </p>
                 )}
             </section>
+            <ObservedSourcesSection
+                sources={jobDetail?.sources}
+                loading={loadingJobDetail}
+                repostCount={jobDetail?.repost_count ?? match.job_posting.repost_count ?? 0}
+                createdAt={jobDetail?.created_at ?? match.job_posting.created_at ?? null}
+                lastRepostedAt={
+                    jobDetail?.last_reposted_at ?? match.job_posting.last_reposted_at ?? null
+                }
+            />
         </>
     );
 }
@@ -386,8 +403,39 @@ function GapAnalysisDrawerContent({
     onSaveLead: (match: MatchScore) => void;
 }>) {
     const [activeTab, setActiveTab] = useState<DrawerTab>("analysis");
+    const [jobDetailState, setJobDetailState] = useState<{
+        uuid: string | null;
+        detail: JobPostingDetail | null;
+    }>({ uuid: null, detail: null });
 
     const job = match.job_posting;
+    const jobUuid = job.uuid;
+    const jobDetail = jobDetailState.uuid === jobUuid ? jobDetailState.detail : null;
+    const loadingJobDetail = jobDetailState.uuid !== jobUuid;
+
+    useEffect(() => {
+        let cancelled = false;
+        vektrynApi
+            .getJob(jobUuid)
+            .then((res) => {
+                if (!cancelled) {
+                    setJobDetailState({ uuid: jobUuid, detail: res });
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setJobDetailState({ uuid: jobUuid, detail: null });
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [jobUuid]);
+
+    const primarySource = jobDetail?.primary_source || job.primary_source || job.ats_source;
+    const repostCount = jobDetail?.repost_count ?? job.repost_count ?? 0;
+    const lastRepostedAt = jobDetail?.last_reposted_at ?? job.last_reposted_at ?? null;
+    const effectiveApplyUrl = jobDetail?.apply_url || job.apply_url;
     const rawFit = match.fit_score;
     const hasAiScore = rawFit !== null && rawFit !== undefined;
     const effectiveMinAlertScore =
@@ -529,13 +577,28 @@ function GapAnalysisDrawerContent({
                                 </Tooltip>
                             )}
 
-                            {job.ats_source && (
+                            {primarySource && (
                                 <Tooltip
-                                    content={`Collected from ${formatAtsSource(job.ats_source)} ATS`}
+                                    content={`Primary source: ${formatAtsSource(primarySource)}`}
                                     side="bottom"
                                 >
                                     <span className="text-xs font-medium text-zinc-500">
-                                        {formatAtsSource(job.ats_source)}
+                                        {formatAtsSource(primarySource)}
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {repostCount >= 1 && (
+                                <Tooltip
+                                    content={formatRepostTooltip(
+                                        jobDetail?.created_at ?? job.created_at,
+                                        lastRepostedAt,
+                                    )}
+                                    side="bottom"
+                                >
+                                    <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/12 px-2 py-1 text-xs font-medium text-amber-300 ring-1 ring-amber-500/30">
+                                        <Repeat className="h-3 w-3" />
+                                        {formatRepostLabel(repostCount)}
                                     </span>
                                 </Tooltip>
                             )}
@@ -632,6 +695,8 @@ function GapAnalysisDrawerContent({
                     ) : (
                         <GapAnalysisTabContent
                             match={match}
+                            jobDetail={jobDetail}
+                            loadingJobDetail={loadingJobDetail}
                             fitPct={fitPct}
                             vectorPct={vectorPct}
                             scoreTheme={scoreTheme}
@@ -642,7 +707,7 @@ function GapAnalysisDrawerContent({
                 </div>
 
                 <GapDrawerFooter
-                    applyUrl={job.apply_url}
+                    applyUrl={effectiveApplyUrl}
                     saving={saving}
                     saved={saved}
                     onSaveLead={() => onSaveLead(match)}

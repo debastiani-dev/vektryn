@@ -33,6 +33,13 @@ class StreamEdgeSettings(BaseSettings):
     # Redis (SHA-256 deduplication locks)
     redis_url: str = "redis://localhost:6379/0"
     dedup_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+    wave_dedup_ttl_seconds: int = 60 * 60 * 6  # 6 hours
+
+    # Cross-source near-duplicate & repost merging (Spec #22)
+    near_dup_cosine_threshold: float = 0.94
+    near_dup_lookback_days: int = 90
+    repost_min_age_days: int = 14
+    min_dedup_desc_chars: int = 150
 
     # Apache Kafka (KRaft in dev; optional SASL_SSL for managed Redpanda/Confluent in prod)
     kafka_bootstrap_servers: str = "localhost:29092"

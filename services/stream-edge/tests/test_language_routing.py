@@ -255,6 +255,8 @@ def test_matcher_single_byok_call_per_user_advisory_lock_and_manual_fallback() -
         (sql, params)
     )
     cur.fetchone.side_effect = [
+        None,
+        None,
         (job_uuid,),
         (match_uuid, None),
         (match_uuid,),
@@ -379,6 +381,8 @@ def test_matcher_single_byok_call_per_user_advisory_lock_and_manual_fallback() -
 
     cur_manual = MagicMock()
     cur_manual.fetchone.side_effect = [
+        None,
+        None,
         (job_uuid,),
         (match_uuid, None),
         (match_uuid,),

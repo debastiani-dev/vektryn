@@ -76,6 +76,41 @@ def test_enrichment_client_uses_thinking_config_without_temperature():
     assert seen[-1][1].temperature is None
 
 
+def test_extracted_job_metadata_coerces_empty_and_null_salary_strings():
+    raw_empty = json.dumps(
+        {
+            "seniority": "senior",
+            "contract_type": "b2b_contractor",
+            "work_mode": "remote",
+            "language": "en",
+            "region_eligibility": ["worldwide"],
+            "salary_min": "",
+            "salary_max": "  ",
+            "salary_currency": None,
+            "salary_period": "",
+            "tech_stack": ["python"],
+        }
+    )
+    parsed = ExtractedJobMetadata.model_validate_json(raw_empty)
+    assert parsed.salary_min is None
+    assert parsed.salary_max is None
+    assert parsed.salary_currency == ""
+    assert parsed.salary_period is None
+
+    raw_formatted = json.dumps(
+        {
+            "salary_min": "120,000",
+            "salary_max": "N/A",
+            "salary_currency": "USD",
+            "salary_period": "ANNUAL",
+        }
+    )
+    parsed_formatted = ExtractedJobMetadata.model_validate_json(raw_formatted)
+    assert str(parsed_formatted.salary_min) == "120000"
+    assert parsed_formatted.salary_max is None
+    assert parsed_formatted.salary_period == "annual"
+
+
 async def test_enrichment_daily_cap_skips_automated_releases_lock_and_exempts_manual(
     monkeypatch,
 ):
@@ -216,7 +251,7 @@ def test_matcher_skips_keyless_stage2_and_skips_keyless_rescore_silently():
     )
     fake_cursor = MagicMock()
     fake_cursor.__enter__.return_value = fake_cursor
-    fake_cursor.fetchone.side_effect = [(job_uuid,), (uuid4(), None)]
+    fake_cursor.fetchone.side_effect = [None, None, (job_uuid,), (uuid4(), None)]
     fake_cursor.fetchall.return_value = [
         (
             resume_uuid,

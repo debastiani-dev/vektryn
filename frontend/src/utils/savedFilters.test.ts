@@ -25,6 +25,7 @@ describe("savedFilters helpers", () => {
                 region: "brazil",
                 atsSource: "",
                 language: "pt",
+                hideReposts: true,
             },
             sortBy: "posted_at",
         });
@@ -41,6 +42,7 @@ describe("savedFilters helpers", () => {
             work_mode: "remote",
             region: "brazil",
             language: "pt",
+            hide_reposts: true,
             sort_by: "posted_at",
         });
     });

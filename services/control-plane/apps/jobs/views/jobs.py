@@ -1,3 +1,4 @@
+from django.db.models import Prefetch
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -5,7 +6,7 @@ from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
 from apps.jobs.filters.jobs import JobPostingFilter
-from apps.jobs.models.jobs import JobPosting
+from apps.jobs.models.jobs import JobPosting, JobPostingSource
 from apps.jobs.serializers.jobs import (
     JobPostingDetailSerializer,
     JobPostingSummarySerializer,
@@ -33,6 +34,17 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["created_at", "posted_at", "salary_max"]
     ordering = ["-created_at"]
     lookup_field = "uuid"
+
+    def get_queryset(self):
+        return JobPosting.objects.prefetch_related(
+            Prefetch(
+                "sources",
+                queryset=JobPostingSource.objects.filter(is_deleted=False).order_by(
+                    "-is_primary", "first_seen_at"
+                ),
+                to_attr="prefetched_sources",
+            )
+        )
 
     def get_serializer_class(self):
         if self.action == "retrieve":
@@ -125,6 +137,7 @@ class JobPostingViewSet(viewsets.ReadOnlyModelViewSet):
             "job_posting_uuid": (
                 str(result.job_posting_uuid) if result.job_posting_uuid else None
             ),
+            "merged_into_existing": result.merged_into_existing,
         }
         http_status = (
             status.HTTP_202_ACCEPTED

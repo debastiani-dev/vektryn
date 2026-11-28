@@ -1,7 +1,8 @@
 import django_filters
-from django.db.models import F
+from django.db.models import Exists, F, OuterRef, Q
 
 from apps.jobs.filters.jobs import parse_language_filter_values
+from apps.jobs.models.jobs import JobPostingSource
 from apps.matching.models.matching import MatchScore
 
 
@@ -20,7 +21,8 @@ class MatchScoreFilter(django_filters.FilterSet):
     contract_type = django_filters.CharFilter(field_name="job_posting__contract_type")
     work_mode = django_filters.CharFilter(method="filter_work_mode")
     language = django_filters.CharFilter(method="filter_language")
-    ats_source = django_filters.CharFilter(field_name="job_posting__ats_source")
+    ats_source = django_filters.CharFilter(method="filter_ats_source")
+    hide_reposts = django_filters.BooleanFilter(method="filter_hide_reposts")
     region = django_filters.CharFilter(method="filter_region")
     tech = django_filters.CharFilter(method="filter_tech")
     is_active = django_filters.BooleanFilter(field_name="job_posting__is_active")
@@ -64,3 +66,21 @@ class MatchScoreFilter(django_filters.FilterSet):
         if not languages:
             return queryset
         return queryset.filter(job_posting__language__in=languages)
+
+    def filter_ats_source(self, queryset, _name: str, value: str):
+        sources = [s.strip().lower() for s in value.split(",") if s.strip()]
+        if not sources:
+            return queryset
+        linked_source = JobPostingSource.objects.filter(
+            job_posting_id=OuterRef("job_posting_id"),
+            ats_source__in=sources,
+            is_deleted=False,
+        )
+        return queryset.filter(
+            Exists(linked_source) | Q(job_posting__ats_source__in=sources)
+        )
+
+    def filter_hide_reposts(self, queryset, _name: str, value: bool):
+        if value:
+            return queryset.filter(job_posting__repost_count=0)
+        return queryset

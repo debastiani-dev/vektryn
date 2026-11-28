@@ -1,17 +1,17 @@
 import asyncio
 from collections import OrderedDict
 from contextlib import suppress
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import hashlib
 import logging
 import time
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import redis
 
 from stream_edge.clients.notifications import persist_user_ai_notification
@@ -85,6 +85,9 @@ def normalize_salary_currency(raw: str | None) -> str:
     return ""
 
 
+_EMPTY_LLM_VALUES = {"", "null", "none", "n/a", "na", "unknown"}
+
+
 class ExtractedJobMetadata(BaseModel):
     seniority: SeniorityLevel = SeniorityLevel.UNKNOWN
     contract_type: ContractType = ContractType.UNKNOWN
@@ -96,6 +99,39 @@ class ExtractedJobMetadata(BaseModel):
     salary_currency: str = ""
     salary_period: SalaryPeriod | None = None
     tech_stack: list[str] = Field(default_factory=list)
+
+    @field_validator("salary_min", "salary_max", mode="before")
+    @classmethod
+    def _coerce_optional_salary_decimal(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned.lower() in _EMPTY_LLM_VALUES:
+                return None
+            try:
+                return Decimal(cleaned.replace(",", ""))
+            except InvalidOperation:
+                return None
+        return value
+
+    @field_validator("salary_period", mode="before")
+    @classmethod
+    def _coerce_optional_salary_period(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip().lower()
+            valid = {period.value for period in SalaryPeriod}
+            return cleaned if cleaned in valid else None
+        return value
+
+    @field_validator("salary_currency", mode="before")
+    @classmethod
+    def _coerce_salary_currency(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value)
 
 
 class ResumeGapEvaluation(BaseModel):
@@ -284,7 +320,9 @@ class GeminiStreamClient:
             "(any standard ISO 639-1 code such as en, pt, es, de, fr, it, nl, ja, zh, ko, pl, uk, etc.; never return 'other' — "
             "return 'unknown' only if the posting language is genuinely undetermined).\n"
             "- Identify all eligible regions in region_eligibility (e.g., brazil, latam, worldwide, north_america, europe, emea, apac, restricted).\n"
-            "- Extract salary_min, salary_max, 3-letter ISO 4217 salary_currency (or empty string '' if not stated; never 'unknown'), and salary_period only if explicitly stated.\n"
+            "- Extract salary_min and salary_max as numbers (or null if not stated; never empty string ''), "
+            "3-letter ISO 4217 salary_currency (or empty string '' if not stated; never 'unknown'), "
+            "and salary_period (or null if not stated) only if explicitly stated.\n"
             "- Extract normalized lowercase tech_stack tags (languages, frameworks, databases, brokers, cloud, DevOps, "
             "and UI/UX tools such as figma, storybook, framer, sketch, tailwind, css, design systems, wcag, accessibility).\n\n"
             f"Title: {title}\n"
