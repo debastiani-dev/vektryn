@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import logging
 import signal
 
@@ -25,8 +26,12 @@ from vektryn_contracts import (
     JobEnrichedEvent,
     JobRawEvent,
     KafkaTopic,
+    compute_description_fingerprint,
     detect_content_language,
+    get_source_priority_rank,
+    is_generic_company_name,
     job_partition_key,
+    normalize_company_for_dedup,
     normalize_language_code,
 )
 
@@ -37,6 +42,121 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _WaveGuardClaim:
+    allowed: bool
+    claimed: bool = False
+    company_norm: str = ""
+    desc_fp: str = ""
+    previous_tier: int | None = None
+
+
+async def _try_claim_wave_guard(
+    raw_event: JobRawEvent,
+    redis_client: DedupRedisClient,
+) -> _WaveGuardClaim:
+    if raw_event.ats_source == ATSSource.MANUAL:
+        return _WaveGuardClaim(allowed=True)
+
+    company_norm = normalize_company_for_dedup(raw_event.company_name)
+    if is_generic_company_name(company_norm):
+        return _WaveGuardClaim(allowed=True)
+
+    desc_fp, fp_len = compute_description_fingerprint(
+        raw_event.description_clean,
+        min_chars=settings.min_dedup_desc_chars,
+    )
+    if not desc_fp or fp_len < settings.min_dedup_desc_chars:
+        return _WaveGuardClaim(allowed=True)
+
+    incoming_tier = get_source_priority_rank(raw_event.ats_source)
+    allowed, previous_tier = await redis_client.claim_wave_fingerprint(
+        company_norm,
+        desc_fp,
+        incoming_tier,
+    )
+    if not allowed:
+        logger.info(
+            "Suppressed equal/lower-tier wave duplicate: %s:%s (tier=%d >= cached=%s)",
+            raw_event.ats_source.value,
+            raw_event.external_id,
+            incoming_tier,
+            previous_tier,
+        )
+        return _WaveGuardClaim(allowed=False)
+
+    return _WaveGuardClaim(
+        allowed=True,
+        claimed=True,
+        company_norm=company_norm,
+        desc_fp=desc_fp,
+        previous_tier=previous_tier,
+    )
+
+
+async def _release_enrichment_locks(
+    *,
+    redis_client: DedupRedisClient,
+    content_hash: str,
+    wave_claim: _WaveGuardClaim,
+    consumed_daily_quota: bool,
+) -> None:
+    await redis_client.release_content_hash(content_hash)
+    if wave_claim.claimed:
+        await redis_client.release_wave_fingerprint(
+            wave_claim.company_norm,
+            wave_claim.desc_fp,
+            previous_tier=wave_claim.previous_tier,
+        )
+    if consumed_daily_quota:
+        await redis_client.release_enrichment_daily_quota()
+
+
+async def _consume_daily_quota_or_notify(
+    *,
+    raw_event: JobRawEvent,
+    redis_client: DedupRedisClient,
+    wave_claim: _WaveGuardClaim,
+) -> tuple[bool, bool]:
+    """Return (proceed, consumed_quota)."""
+    daily_cap = max(0, int(settings.enrichment_daily_cap))
+    if raw_event.ats_source == ATSSource.MANUAL or daily_cap <= 0:
+        return True, False
+
+    allowed, current_count = await redis_client.try_consume_enrichment_daily_quota(
+        daily_cap=daily_cap
+    )
+    if allowed:
+        return True, True
+
+    await _release_enrichment_locks(
+        redis_client=redis_client,
+        content_hash=raw_event.content_hash,
+        wave_claim=wave_claim,
+        consumed_daily_quota=False,
+    )
+    logger.warning(
+        "Enrichment daily cap reached (%d/%d); skipping automated job %s:%s for tomorrow's run",
+        current_count,
+        daily_cap,
+        raw_event.ats_source.value,
+        raw_event.external_id,
+    )
+    await asyncio.to_thread(
+        persist_pipeline_error_notifications,
+        source="enrichment-worker",
+        error_type="EnrichmentDailyCapReached",
+        error_message=(
+            f"Automated enrichment daily cap ({daily_cap} jobs/day) was reached. "
+            "Excess automated postings were skipped (dedup locks released for next run). "
+            "Manual imports remain unaffected."
+        ),
+        extra_payload={"daily_cap": daily_cap},
+        throttle_seconds=DAILY_CAP_ALERT_THROTTLE_SECONDS,
+    )
+    return False, False
 
 
 async def process_raw_message(
@@ -58,36 +178,17 @@ async def process_raw_message(
         )
         return
 
-    consumed_daily_quota = False
-    is_automated = raw_event.ats_source != ATSSource.MANUAL
-    daily_cap = max(0, int(settings.enrichment_daily_cap))
-    if is_automated and daily_cap > 0:
-        allowed, current_count = await redis_client.try_consume_enrichment_daily_quota(
-            daily_cap=daily_cap
-        )
-        if not allowed:
-            await redis_client.release_content_hash(raw_event.content_hash)
-            logger.warning(
-                "Enrichment daily cap reached (%d/%d); skipping automated job %s:%s for tomorrow's run",
-                current_count,
-                daily_cap,
-                raw_event.ats_source.value,
-                raw_event.external_id,
-            )
-            await asyncio.to_thread(
-                persist_pipeline_error_notifications,
-                source="enrichment-worker",
-                error_type="EnrichmentDailyCapReached",
-                error_message=(
-                    f"Automated enrichment daily cap ({daily_cap} jobs/day) was reached. "
-                    "Excess automated postings were skipped (dedup locks released for next run). "
-                    "Manual imports remain unaffected."
-                ),
-                extra_payload={"daily_cap": daily_cap},
-                throttle_seconds=DAILY_CAP_ALERT_THROTTLE_SECONDS,
-            )
-            return
-        consumed_daily_quota = True
+    wave_claim = await _try_claim_wave_guard(raw_event, redis_client)
+    if not wave_claim.allowed:
+        return
+
+    proceed, consumed_daily_quota = await _consume_daily_quota_or_notify(
+        raw_event=raw_event,
+        redis_client=redis_client,
+        wave_claim=wave_claim,
+    )
+    if not proceed:
+        return
 
     try:
         metadata = await gemini.extract_job_metadata(
@@ -104,9 +205,12 @@ async def process_raw_message(
         )
     except Exception:
         # Release locks so transient failures can be retried/replayed cleanly
-        await redis_client.release_content_hash(raw_event.content_hash)
-        if consumed_daily_quota:
-            await redis_client.release_enrichment_daily_quota()
+        await _release_enrichment_locks(
+            redis_client=redis_client,
+            content_hash=raw_event.content_hash,
+            wave_claim=wave_claim,
+            consumed_daily_quota=consumed_daily_quota,
+        )
         raise
 
     resolved_language = normalize_language_code(

@@ -171,6 +171,28 @@ export function MetadataFiltersPanel({
                 options={REGION_OPTIONS}
                 onChange={(region) => onUpdateMetadata({ region })}
             />
+            <div className="min-w-0 space-y-1.5">
+                <span className="block text-[11px] font-medium uppercase tracking-wider text-zinc-400">
+                    Reposts
+                </span>
+                <label
+                    htmlFor="radar-filter-hide-reposts"
+                    className={`flex h-10 w-full cursor-pointer items-center justify-between gap-3 rounded-xl border px-3 text-sm transition ${
+                        filters.hideReposts
+                            ? "border-amber-500/45 bg-amber-500/10 text-amber-200"
+                            : "border-zinc-800 bg-zinc-950/80 text-zinc-200 hover:border-zinc-700"
+                    }`}
+                >
+                    <span className="truncate text-xs font-medium">Hide Reposts</span>
+                    <input
+                        id="radar-filter-hide-reposts"
+                        type="checkbox"
+                        checked={filters.hideReposts}
+                        onChange={(e) => onUpdateMetadata({ hideReposts: e.target.checked })}
+                        className="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-violet-500 focus:ring-violet-500/40"
+                    />
+                </label>
+            </div>
         </div>
     );
 }

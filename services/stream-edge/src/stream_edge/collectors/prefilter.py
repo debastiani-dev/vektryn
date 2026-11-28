@@ -161,18 +161,6 @@ def _finalize_gate_union(target: set[str], unrestricted: bool) -> set[str]:
     return set() if unrestricted else target
 
 
-def _merge_gate_union(target: set[str], unrestricted: bool, raw_values: object) -> bool:
-    parsed = _parse_str_list(raw_values)
-    if not parsed:
-        return True
-    target.update(parsed)
-    return unrestricted
-
-
-def _finalize_gate_union(target: set[str], unrestricted: bool) -> set[str]:
-    return set() if unrestricted else target
-
-
 def _collect_profile_rows(
     rows: list[tuple[object, ...]],
 ) -> tuple[list[str], set[str], set[str], set[str], set[str], set[str], list[str]]:
@@ -489,14 +477,14 @@ def _score_job(job: CollectedJob, ctx: _CompiledFilterContext) -> int | None:
     return overlap * 10 + remote_bonus
 
 
-def filter_and_rank_jobs(
+def filter_and_score_jobs(
     jobs: list[CollectedJob],
     criteria: ResumeFilterCriteria | None,
     *,
     dynamic_stacks: frozenset[str] = frozenset(),
     min_skill_matches: int = 1,
-) -> list[CollectedJob]:
-    """Filter collected ATS postings dynamically against resume profile and rank by skill overlap."""
+) -> list[tuple[int, CollectedJob]]:
+    """Filter collected ATS postings dynamically and return (relevance_score, job) pairs."""
     taxonomy = load_taxonomy(dynamic_stacks)
     role_jobs = [
         job
@@ -505,7 +493,7 @@ def filter_and_rank_jobs(
         or _is_software_role(job.title.lower(), taxonomy)
     ]
     if criteria is None:
-        return role_jobs
+        return [(0, job) for job in role_jobs]
 
     user_core_skills = criteria.skills & taxonomy.primary_stacks
     competing_core_skills = taxonomy.primary_stacks - criteria.skills
@@ -526,4 +514,21 @@ def filter_and_rank_jobs(
         (score, job) for job in role_jobs if (score := _score_job(job, ctx)) is not None
     ]
     scored.sort(key=lambda item: item[0], reverse=True)
+    return scored
+
+
+def filter_and_rank_jobs(
+    jobs: list[CollectedJob],
+    criteria: ResumeFilterCriteria | None,
+    *,
+    dynamic_stacks: frozenset[str] = frozenset(),
+    min_skill_matches: int = 1,
+) -> list[CollectedJob]:
+    """Filter collected ATS postings dynamically against resume profile and rank by skill overlap."""
+    scored = filter_and_score_jobs(
+        jobs,
+        criteria,
+        dynamic_stacks=dynamic_stacks,
+        min_skill_matches=min_skill_matches,
+    )
     return [job for _, job in scored]

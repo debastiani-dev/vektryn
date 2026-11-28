@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Prefetch, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -14,7 +14,7 @@ from apps.base.services.byok import (
     BYOKQuotaExhaustedError,
     BYOKStorageUnavailableError,
 )
-from apps.jobs.models.jobs import JobPosting
+from apps.jobs.models.jobs import JobPosting, JobPostingSource
 from apps.jobs.services.hybrid_search import (
     annotate_rrf_score,
     execute_hybrid_search,
@@ -80,10 +80,22 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return MatchScore.objects.none()
-        qs = MatchScore.objects.select_related("job_posting", "resume_profile").filter(
-            resume_profile__user=self.request.user,
-            resume_profile__is_deleted=False,
-            job_posting__is_deleted=False,
+        qs = (
+            MatchScore.objects.select_related("job_posting", "resume_profile")
+            .prefetch_related(
+                Prefetch(
+                    "job_posting__sources",
+                    queryset=JobPostingSource.objects.filter(is_deleted=False).order_by(
+                        "-is_primary", "first_seen_at"
+                    ),
+                    to_attr="prefetched_sources",
+                )
+            )
+            .filter(
+                resume_profile__user=self.request.user,
+                resume_profile__is_deleted=False,
+                job_posting__is_deleted=False,
+            )
         )
         if self.action == "list":
             raw_resume_param = (

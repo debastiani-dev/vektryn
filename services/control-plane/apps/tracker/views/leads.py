@@ -3,6 +3,7 @@ from io import StringIO
 import json
 from typing import Any
 
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -10,6 +11,7 @@ from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.jobs.models.jobs import JobPostingSource
 from apps.tracker.models import ApplicationLead
 from apps.tracker.serializers.leads import ApplicationLeadSerializer
 
@@ -105,8 +107,18 @@ class ApplicationLeadViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
             return ApplicationLead.objects.none()
-        return ApplicationLead.objects.filter(user=self.request.user).select_related(
-            "job_posting", "resume_profile"
+        return (
+            ApplicationLead.objects.filter(user=self.request.user)
+            .select_related("job_posting", "resume_profile")
+            .prefetch_related(
+                Prefetch(
+                    "job_posting__sources",
+                    queryset=JobPostingSource.objects.filter(is_deleted=False).order_by(
+                        "-is_primary", "first_seen_at"
+                    ),
+                    to_attr="prefetched_sources",
+                )
+            )
         )
 
     @action(

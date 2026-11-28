@@ -17,6 +17,7 @@ import {
     MapPin,
     Plus,
     RefreshCw,
+    Repeat,
     RotateCcw,
     Search,
     Sparkles,
@@ -66,6 +67,9 @@ import {
     type ActiveFilterChipKey,
     countActivePanelFilters,
     EMPTY_METADATA_FILTERS,
+    formatAdditionalSourcesTooltip,
+    formatRepostLabel,
+    formatRepostTooltip,
     type RadarMetadataFilters,
     type RadarSortOption,
     resolveRadarOrdering,
@@ -196,6 +200,11 @@ function RadarMatchCard({
     const postedAge = formatRelativeTime(job.posted_at);
     const postedExact = formatExactDate(job.posted_at);
     const postedTooltip = postedExact ? `Posted on ${postedExact}` : "Posting date";
+    const primarySource = job.primary_source || job.ats_source;
+    const sourcesCount = job.sources_count ?? 1;
+    const extraSourcesCount = Math.max(0, sourcesCount - 1);
+    const observedSources = job.observed_sources ?? [];
+    const repostCount = job.repost_count ?? 0;
     const matchedSet = new Set(match.matched_skills.map((skill) => skill.toLowerCase()));
     const visibleStack = job.tech_stack.slice(0, 8);
     const hiddenStack = job.tech_stack.slice(8);
@@ -357,13 +366,56 @@ function RadarMatchCard({
                                 </Tooltip>
                             )}
 
-                            {job.ats_source && (
+                            {primarySource && (
+                                <span className="pointer-events-auto inline-flex items-center gap-1.5">
+                                    <Tooltip
+                                        content={`Primary source: ${formatAtsSource(primarySource)}`}
+                                        className="inline-flex"
+                                    >
+                                        <span className="px-1 text-xs font-medium text-zinc-400">
+                                            {formatAtsSource(primarySource)}
+                                        </span>
+                                    </Tooltip>
+                                    {extraSourcesCount > 0 && (
+                                        <Tooltip
+                                            content={formatAdditionalSourcesTooltip(
+                                                primarySource,
+                                                observedSources,
+                                            )}
+                                            className="inline-flex"
+                                        >
+                                            <span
+                                                title={formatAdditionalSourcesTooltip(
+                                                    primarySource,
+                                                    observedSources,
+                                                )}
+                                                className="rounded-md border border-zinc-700/80 bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[11px] font-medium text-zinc-300"
+                                            >
+                                                +{extraSourcesCount}{" "}
+                                                {extraSourcesCount === 1 ? "source" : "sources"}
+                                            </span>
+                                        </Tooltip>
+                                    )}
+                                </span>
+                            )}
+
+                            {repostCount >= 1 && (
                                 <Tooltip
-                                    content={`Collected from ${formatAtsSource(job.ats_source)} ATS`}
+                                    content={formatRepostTooltip(
+                                        job.created_at,
+                                        job.last_reposted_at,
+                                    )}
                                     className="pointer-events-auto inline-flex"
                                 >
-                                    <span className="px-1 text-xs font-medium text-zinc-500">
-                                        {formatAtsSource(job.ats_source)}
+                                    <span
+                                        title={formatRepostTooltip(
+                                            job.created_at,
+                                            job.last_reposted_at,
+                                        )}
+                                        className="inline-flex items-center gap-1 rounded-lg bg-amber-500/12 px-2 py-0.5 text-xs font-medium text-amber-300 ring-1 ring-amber-500/30"
+                                    >
+                                        <Repeat className="h-3 w-3" />
+                                        {formatRepostLabel(repostCount)}
                                     </span>
                                 </Tooltip>
                             )}
@@ -992,9 +1044,74 @@ function buildMatchesQueryParams(opts: {
     if (opts.metadataFilters.region) params.set("region", opts.metadataFilters.region);
     if (opts.metadataFilters.atsSource) params.set("ats_source", opts.metadataFilters.atsSource);
     if (opts.metadataFilters.language) params.set("language", opts.metadataFilters.language);
+    if (opts.metadataFilters.hideReposts) params.set("hide_reposts", "true");
     const orderingParam = resolveRadarOrdering(opts.sortBy);
     if (orderingParam) params.set("ordering", orderingParam);
     return `?${params.toString()}`;
+}
+
+function formatExistingImportMessage(res: ManualJobImportResponse): string {
+    if (res.status === "reactivated") {
+        return "Previously closed role reactivated and refreshed in Job Radar.";
+    }
+    if (res.merged_into_existing) {
+        return "Matched an existing active role — source linked without creating a duplicate card.";
+    }
+    return "This role is already active in Vektryn.";
+}
+
+function buildAlertThresholdMeta(
+    resumes: ReadonlyArray<ResumeProfile>,
+    resumeFilter: string,
+): {
+    minAlertByResumeId: Record<string, number>;
+    activeResumeMinAlertScore: number;
+    alertThresholdDisplay: number | null;
+} {
+    const minAlertByResumeId: Record<string, number> = {};
+    for (const resume of resumes) {
+        minAlertByResumeId[resume.uuid] = resume.min_alert_score;
+    }
+    const activeResumeMinAlertScore =
+        resumes.find((r) => r.is_active)?.min_alert_score ?? DEFAULT_MIN_ALERT_SCORE;
+
+    let alertThresholdDisplay: number | null = null;
+    if (resumeFilter && minAlertByResumeId[resumeFilter] !== undefined) {
+        alertThresholdDisplay = minAlertByResumeId[resumeFilter];
+    } else if (resumes.length === 0) {
+        alertThresholdDisplay = DEFAULT_MIN_ALERT_SCORE;
+    } else {
+        const distinctThresholds = new Set(resumes.map((r) => r.min_alert_score));
+        if (distinctThresholds.size === 1) {
+            alertThresholdDisplay = resumes[0].min_alert_score;
+        }
+    }
+
+    return {
+        minAlertByResumeId,
+        activeResumeMinAlertScore,
+        alertThresholdDisplay,
+    };
+}
+
+function extractErrorMessage(err: unknown): string {
+    if (err instanceof Error) {
+        return err.message;
+    }
+    if (typeof err === "string") {
+        return err;
+    }
+    return "";
+}
+
+function isDuplicateLeadConflict(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return (
+        message.includes("API 400") ||
+        message.includes("API 409") ||
+        normalized.includes("already exists") ||
+        normalized.includes("unique")
+    );
 }
 
 interface JobRadarViewProps {
@@ -1337,11 +1454,48 @@ export function JobRadarView({
             externalId: res.external_id,
             job: existingJob,
             match: existingMatch,
-            message:
-                res.status === "reactivated"
-                    ? "Previously closed role reactivated and refreshed in Job Radar."
-                    : "This role is already active in Vektryn.",
+            message: formatExistingImportMessage(res),
         });
+    }
+
+    function removeSavedLeadLocally(jobId: string) {
+        setSavedLeadsByJobId((prev) => {
+            const copy = { ...prev };
+            delete copy[jobId];
+            return copy;
+        });
+        setSavedTotalCount((prev) => Math.max(0, prev - 1));
+    }
+
+    function pruneUntrackedMatch(jobId: string) {
+        const remaining = matches.filter((m) => m.job_posting.uuid !== jobId);
+        setMatches(remaining);
+        setTotalCount((prev) => Math.max(0, prev - 1));
+        if (remaining.length > 0) {
+            return;
+        }
+        if (page > 1) {
+            setPage((prev) => Math.max(1, prev - 1));
+        } else if (hasNext) {
+            setReloadTick((prev) => prev + 1);
+        }
+    }
+
+    async function handleSaveLeadError(
+        err: unknown,
+        jobId: string,
+        existingLeadUuid: string | undefined,
+    ) {
+        const message = extractErrorMessage(err);
+        if (!existingLeadUuid && isDuplicateLeadConflict(message)) {
+            await refreshSavedLeads();
+            return;
+        }
+        if (existingLeadUuid && message.includes("API 404")) {
+            removeSavedLeadLocally(jobId);
+            return;
+        }
+        setError(message || "Failed to update saved lead");
     }
 
     async function handleToggleSaveLead(match: MatchScore) {
@@ -1353,67 +1507,31 @@ export function JobRadarView({
         try {
             if (existingLeadUuid) {
                 await vektrynApi.deleteLead(existingLeadUuid);
-                setSavedLeadsByJobId((prev) => {
-                    const copy = { ...prev };
-                    delete copy[jobId];
-                    return copy;
-                });
-                setSavedTotalCount((prev) => Math.max(0, prev - 1));
-            } else {
-                const created = await vektrynApi.createLead({
-                    job_posting: jobId,
-                    resume_profile: match.resume_profile_uuid,
-                    status: "saved",
-                });
-                setSavedLeadsByJobId((prev) => ({
-                    ...prev,
-                    [jobId]: created.uuid,
-                }));
-                setSavedTotalCount((prev) => prev + 1);
-                if (untrackedOnly) {
-                    const remaining = matches.filter((m) => m.job_posting.uuid !== jobId);
-                    setMatches(remaining);
-                    setTotalCount((prev) => Math.max(0, prev - 1));
-                    if (remaining.length === 0 && page > 1) {
-                        setPage((prev) => Math.max(1, prev - 1));
-                    } else if (remaining.length === 0 && hasNext) {
-                        setReloadTick((prev) => prev + 1);
-                    }
-                }
+                removeSavedLeadLocally(jobId);
+                return;
+            }
+            const created = await vektrynApi.createLead({
+                job_posting: jobId,
+                resume_profile: match.resume_profile_uuid,
+                status: "saved",
+            });
+            setSavedLeadsByJobId((prev) => ({
+                ...prev,
+                [jobId]: created.uuid,
+            }));
+            setSavedTotalCount((prev) => prev + 1);
+            if (untrackedOnly) {
+                pruneUntrackedMatch(jobId);
             }
         } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const normalized = message.toLowerCase();
-
-            if (
-                !existingLeadUuid &&
-                (message.includes("API 400") ||
-                    message.includes("API 409") ||
-                    normalized.includes("already exists") ||
-                    normalized.includes("unique"))
-            ) {
-                await refreshSavedLeads();
-            } else if (existingLeadUuid && message.includes("API 404")) {
-                setSavedLeadsByJobId((prev) => {
-                    const copy = { ...prev };
-                    delete copy[jobId];
-                    return copy;
-                });
-                setSavedTotalCount((prev) => Math.max(0, prev - 1));
-            } else {
-                setError(message || "Failed to update saved lead");
-            }
+            await handleSaveLeadError(err, jobId, existingLeadUuid);
         } finally {
             setSavingJobId(null);
         }
     }
 
-    const minAlertByResumeId: Record<string, number> = {};
-    for (const resume of resumes) {
-        minAlertByResumeId[resume.uuid] = resume.min_alert_score;
-    }
-    const activeResumeMinAlertScore =
-        resumes.find((r) => r.is_active)?.min_alert_score ?? DEFAULT_MIN_ALERT_SCORE;
+    const { minAlertByResumeId, activeResumeMinAlertScore, alertThresholdDisplay } =
+        buildAlertThresholdMeta(resumes, resumeFilter);
 
     function resolveMinAlertScore(match: MatchScore | null): number {
         if (!match) return activeResumeMinAlertScore;
@@ -1422,18 +1540,6 @@ export function JobRadarView({
             minAlertByResumeId[match.resume_profile_uuid] ??
             activeResumeMinAlertScore
         );
-    }
-
-    let alertThresholdDisplay: number | null = null;
-    if (resumeFilter && minAlertByResumeId[resumeFilter] !== undefined) {
-        alertThresholdDisplay = minAlertByResumeId[resumeFilter];
-    } else if (resumes.length > 0) {
-        const distinctThresholds = new Set(resumes.map((r) => r.min_alert_score));
-        if (distinctThresholds.size === 1) {
-            alertThresholdDisplay = resumes[0].min_alert_score;
-        }
-    } else {
-        alertThresholdDisplay = DEFAULT_MIN_ALERT_SCORE;
     }
 
     function showTriageUndo(next: TriageUndoState) {
@@ -1606,6 +1712,8 @@ export function JobRadarView({
             setResumeFilter("");
         } else if (key === "minScore") {
             setMinScore(0);
+        } else if (key === "hideReposts") {
+            setMetadataFilters((prev) => ({ ...prev, hideReposts: false }));
         } else {
             setMetadataFilters((prev) => ({ ...prev, [key]: "" }));
         }

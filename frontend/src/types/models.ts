@@ -42,6 +42,16 @@ export type TechCategory =
     | "ai_ml"
     | "other";
 
+export interface JobPostingSource {
+    uuid: string;
+    ats_source: string;
+    apply_url: string;
+    is_primary: boolean;
+    is_active: boolean;
+    first_seen_at: string;
+    last_seen_at: string;
+}
+
 export interface JobPostingSummary {
     uuid: string;
     ats_source: string;
@@ -63,6 +73,11 @@ export interface JobPostingSummary {
     is_active: boolean;
     posted_at: string | null;
     created_at?: string;
+    repost_count?: number;
+    last_reposted_at?: string | null;
+    sources_count?: number;
+    primary_source?: string;
+    observed_sources?: string[];
 }
 
 export interface JobPostingDetail extends JobPostingSummary {
@@ -72,6 +87,7 @@ export interface JobPostingDetail extends JobPostingSummary {
     closed_at: string | null;
     created_at: string;
     modified_at: string;
+    sources?: JobPostingSource[];
 }
 
 export interface ResumeProfileSummary {
@@ -111,8 +127,11 @@ export interface ApplicationLead {
     company_name?: string;
     apply_url?: string;
     ats_source?: string;
+    primary_source?: string;
     work_mode?: WorkMode;
     language?: string;
+    repost_count?: number;
+    last_reposted_at?: string | null;
     status: LeadStatus;
     priority: LeadPriority;
     applied_at: string | null;
@@ -137,6 +156,7 @@ export interface SavedFilterQueryParams {
     sort_by?: string;
     hide_dismissed?: boolean;
     hide_muted?: boolean;
+    hide_reposts?: boolean;
     untracked_only?: boolean;
 }
 
@@ -440,6 +460,7 @@ export interface ManualJobImportResponse {
     apply_url: string;
     event_id: string | null;
     job_posting_uuid: string | null;
+    merged_into_existing?: boolean;
 }
 
 export type PipelineOverallStatus = "healthy" | "warning" | "degraded";

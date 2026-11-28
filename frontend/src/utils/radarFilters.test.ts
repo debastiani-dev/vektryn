@@ -34,9 +34,10 @@ describe("radarFilters", () => {
                     region: "",
                     atsSource: "manual",
                     language: "pt",
+                    hideReposts: true,
                 },
             }),
-        ).toBe(7);
+        ).toBe(8);
     });
 
     it("builds removable active chips with readable labels", () => {
@@ -51,6 +52,7 @@ describe("radarFilters", () => {
                 region: "brazil",
                 atsSource: "manual",
                 language: "pt",
+                hideReposts: true,
             },
         });
 
@@ -63,6 +65,7 @@ describe("radarFilters", () => {
             { key: "language", prefix: "Language", label: "Portuguese (PT)" },
             { key: "region", prefix: "Region", label: "Brazil" },
             { key: "atsSource", prefix: "Source", label: "Manual Import" },
+            { key: "hideReposts", prefix: "Reposts", label: "Hidden" },
         ]);
     });
 });

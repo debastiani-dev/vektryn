@@ -11,6 +11,7 @@ import {
     Layers,
     Mail,
     MapPin,
+    Repeat,
     Sparkles,
     X,
 } from "lucide-react";
@@ -42,8 +43,10 @@ import {
     getLanguageName,
     languageBadgeStyle,
 } from "../../utils/languages";
+import { formatRepostLabel, formatRepostTooltip } from "../../utils/radarFilters";
 import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
+import { ObservedSourcesSection } from "./ObservedSourcesSection";
 
 export interface JobListingPreview {
     uuid: string;
@@ -51,6 +54,11 @@ export interface JobListingPreview {
     company_name: string;
     apply_url: string;
     ats_source?: string;
+    primary_source?: string;
+    sources_count?: number;
+    observed_sources?: string[];
+    repost_count?: number;
+    last_reposted_at?: string | null;
     external_id?: string;
     location_raw?: string;
     seniority?: SeniorityLevel;
@@ -326,7 +334,9 @@ export function JobPostingDrawer({
     const contractLabel = job.contract_type ? formatContractType(job.contract_type) : "";
     const jobLanguageBadge = formatKnownLanguageBadge(job.language);
     const jobLanguageName = getLanguageName(job.language);
-    const atsSource = job.ats_source ?? "";
+    const atsSource = job.primary_source || job.ats_source || "";
+    const repostCount = detail?.repost_count ?? job.repost_count ?? 0;
+    const lastRepostedAt = detail?.last_reposted_at ?? job.last_reposted_at ?? null;
     const regionList = job.region_eligibility ?? [];
     const techStack = job.tech_stack ?? [];
     const salaryLabel = formatSalaryRange(
@@ -415,11 +425,26 @@ export function JobPostingDrawer({
 
                             {atsSource && (
                                 <Tooltip
-                                    content={`Collected from ${formatAtsSource(atsSource)} ATS`}
+                                    content={`Primary source: ${formatAtsSource(atsSource)}`}
                                     side="bottom"
                                 >
                                     <span className="text-xs font-medium text-zinc-500">
                                         {formatAtsSource(atsSource)}
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {repostCount >= 1 && (
+                                <Tooltip
+                                    content={formatRepostTooltip(
+                                        detail?.created_at ?? job.created_at,
+                                        lastRepostedAt,
+                                    )}
+                                    side="bottom"
+                                >
+                                    <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/12 px-2 py-1 text-xs font-medium text-amber-300 ring-1 ring-amber-500/30">
+                                        <Repeat className="h-3 w-3" />
+                                        {formatRepostLabel(repostCount)}
                                     </span>
                                 </Tooltip>
                             )}
@@ -544,6 +569,14 @@ export function JobPostingDrawer({
                             </div>
                         </div>
                     </section>
+
+                    <ObservedSourcesSection
+                        sources={detail?.sources}
+                        loading={loadingDetail}
+                        repostCount={repostCount}
+                        createdAt={detail?.created_at ?? job.created_at ?? null}
+                        lastRepostedAt={lastRepostedAt}
+                    />
 
                     <JobTechStackSection techStack={techStack} matchedSet={matchedSet} />
 

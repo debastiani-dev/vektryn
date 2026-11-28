@@ -2,7 +2,7 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import logging
 import math
@@ -47,9 +47,17 @@ from vektryn_contracts import (
     KafkaTopic,
     NotificationKind,
     alert_partition_key,
+    are_regions_compatible,
     build_fernet,
+    compute_description_fingerprint,
     decrypt_api_key,
+    get_source_priority_rank,
+    is_direct_ats_source,
+    is_generic_company_name,
+    normalize_company_for_dedup,
     normalize_language_code,
+    normalize_title_for_dedup,
+    token_jaccard_similarity,
 )
 
 logging.basicConfig(
@@ -89,6 +97,8 @@ class _JobCandidate:
     language: str = UNKNOWN_LANGUAGE
     ats_source: str = ""
     submitted_by_user_id: int | uuid.UUID | None = None
+    incoming_ats_source: str = ""
+    merged_into_existing: bool = False
 
 
 @dataclass(frozen=True)
@@ -447,12 +457,594 @@ def _run_llm_evaluation(
         return _EvaluationOutcome()
 
 
-def _upsert_job_posting(
+STAGE0_TITLE_JACCARD_THRESHOLD = 0.75
+
+_CANONICAL_SELECT_COLUMNS = """
+    j.uuid,
+    j.ats_source,
+    j.external_id,
+    j.title,
+    j.company_name,
+    j.apply_url,
+    j.description_clean,
+    j.seniority,
+    j.contract_type,
+    j.work_mode,
+    j.language,
+    j.region_eligibility,
+    j.salary_min,
+    j.salary_max,
+    j.salary_currency,
+    j.salary_period,
+    j.tech_stack,
+    j.is_active,
+    j.repost_count,
+    j.last_reposted_at,
+    j.created_at,
+    j.company_name_normalized,
+    j.title_normalized,
+    j.description_fingerprint
+"""
+
+
+def _acquire_company_dedup_lock(cur: psycopg.Cursor, company_norm: str) -> None:
+    if not is_generic_company_name(company_norm):
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended('vektryn:job_dedup:' || %s, 0))",
+            (company_norm,),
+        )
+
+
+def _upsert_canonical_source_row(
+    cur: psycopg.Cursor,
+    *,
+    canonical_uuid: uuid.UUID,
+    enriched: JobEnrichedEvent,
+    incoming_apply_url: str,
+    now: datetime,
+) -> tuple[uuid.UUID, bool]:
+    cur.execute(
+        """
+        SELECT uuid, job_posting_id, is_primary
+        FROM jobs_jobpostingsource
+        WHERE ats_source = %s
+          AND external_id = %s
+          AND is_deleted = FALSE
+        LIMIT 1
+        """,
+        (enriched.ats_source.value, enriched.external_id),
+    )
+    existing_source = cur.fetchone()
+    if existing_source is not None:
+        source_uuid = existing_source[0]
+        source_already_linked = existing_source[1] == canonical_uuid
+        cur.execute(
+            """
+            UPDATE jobs_jobpostingsource
+            SET job_posting_id = %s,
+                apply_url = %s,
+                raw_html_gcs_uri = CASE
+                    WHEN %s <> '' THEN %s
+                    ELSE raw_html_gcs_uri
+                END,
+                is_active = TRUE,
+                last_seen_at = %s,
+                modified_at = %s
+            WHERE uuid = %s
+            """,
+            (
+                canonical_uuid,
+                incoming_apply_url,
+                enriched.raw_html_gcs_uri,
+                enriched.raw_html_gcs_uri,
+                now,
+                now,
+                source_uuid,
+            ),
+        )
+        return source_uuid, source_already_linked
+
+    source_uuid = uuid.uuid4()
+    cur.execute(
+        """
+        INSERT INTO jobs_jobpostingsource (
+            uuid, created_at, modified_at, is_deleted,
+            job_posting_id, ats_source, external_id,
+            apply_url, raw_html_gcs_uri,
+            is_primary, is_active, first_seen_at, last_seen_at
+        )
+        VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, FALSE, TRUE, %s, %s)
+        """,
+        (
+            source_uuid,
+            now,
+            now,
+            canonical_uuid,
+            enriched.ats_source.value,
+            enriched.external_id,
+            incoming_apply_url,
+            enriched.raw_html_gcs_uri,
+            now,
+            now,
+        ),
+    )
+    return source_uuid, False
+
+
+def _resolve_effective_primary_url(
+    cur: psycopg.Cursor,
+    *,
+    canonical_uuid: uuid.UUID,
+    canonical_apply_url: str,
+    source_uuid: uuid.UUID,
+    incoming_source: ATSSource,
+    incoming_apply_url: str,
+    now: datetime,
+) -> str:
+    cur.execute(
+        """
+        SELECT uuid, ats_source, is_active
+        FROM jobs_jobpostingsource
+        WHERE job_posting_id = %s
+          AND is_primary = TRUE
+          AND is_deleted = FALSE
+        LIMIT 1
+        """,
+        (canonical_uuid,),
+    )
+    current_primary = cur.fetchone()
+    incoming_rank = get_source_priority_rank(incoming_source)
+    should_promote = (
+        current_primary is None
+        or not bool(current_primary[2])
+        or incoming_rank < get_source_priority_rank(current_primary[1])
+    )
+    if should_promote:
+        if current_primary is None or current_primary[0] != source_uuid:
+            cur.execute(
+                """
+                UPDATE jobs_jobpostingsource
+                SET is_primary = FALSE, modified_at = %s
+                WHERE job_posting_id = %s
+                  AND is_primary = TRUE
+                  AND is_deleted = FALSE
+                """,
+                (now, canonical_uuid),
+            )
+            cur.execute(
+                """
+                UPDATE jobs_jobpostingsource
+                SET is_primary = TRUE, is_active = TRUE, modified_at = %s
+                WHERE uuid = %s
+                """,
+                (now, source_uuid),
+            )
+        return incoming_apply_url
+    if current_primary is not None and current_primary[0] == source_uuid:
+        return incoming_apply_url
+    return canonical_apply_url
+
+
+def _backfill_unknown(
+    current: str, incoming: str, unknown_value: str = "unknown"
+) -> str:
+    if current == unknown_value and incoming != unknown_value:
+        return incoming
+    return current
+
+
+def _compute_repost_state(
+    cur: psycopg.Cursor,
+    *,
+    canonical_uuid: uuid.UUID,
+    canonical_is_active: bool,
+    canonical_repost_count: int,
+    canonical_last_reposted_at: object,
+    canonical_created_at: object,
+    source_already_linked: bool,
+    enriched: JobEnrichedEvent,
+    now: datetime,
+) -> tuple[bool, int, object]:
+    was_inactive = not bool(canonical_is_active)
+    same_source_repost = False
+    if not source_already_linked:
+        cur.execute(
+            """
+            SELECT 1
+            FROM jobs_jobpostingsource
+            WHERE job_posting_id = %s
+              AND ats_source = %s
+              AND external_id <> %s
+              AND is_deleted = FALSE
+            LIMIT 1
+            """,
+            (canonical_uuid, enriched.ats_source.value, enriched.external_id),
+        )
+        has_prior_same_source = cur.fetchone() is not None
+        anchor_ts = _coerce_datetime(canonical_last_reposted_at or canonical_created_at)
+        same_source_repost = has_prior_same_source and (now - anchor_ts) >= timedelta(
+            days=settings.repost_min_age_days
+        )
+
+    if was_inactive or same_source_repost:
+        return was_inactive, int(canonical_repost_count or 0) + 1, now
+    return was_inactive, int(canonical_repost_count or 0), canonical_last_reposted_at
+
+
+def _merge_into_canonical_job(
+    cur: psycopg.Cursor,
+    *,
+    canonical_row: tuple,
+    enriched: JobEnrichedEvent,
+    company_norm: str,
+    title_norm: str,
+    desc_fp: str,
+    now: datetime,
+) -> _JobCandidate:
+    (
+        canonical_uuid,
+        canonical_ats_source,
+        _canonical_ext_id,
+        canonical_title,
+        canonical_company,
+        canonical_apply_url,
+        canonical_desc,
+        canonical_seniority,
+        canonical_contract,
+        canonical_work_mode,
+        canonical_language,
+        canonical_regions_raw,
+        canonical_salary_min,
+        canonical_salary_max,
+        canonical_salary_currency,
+        canonical_salary_period,
+        canonical_tech_stack_raw,
+        canonical_is_active,
+        canonical_repost_count,
+        canonical_last_reposted_at,
+        canonical_created_at,
+        canonical_company_norm,
+        canonical_title_norm,
+        canonical_desc_fp,
+    ) = canonical_row[:24]
+
+    incoming_apply_url = str(enriched.apply_url)
+    source_uuid, source_already_linked = _upsert_canonical_source_row(
+        cur,
+        canonical_uuid=canonical_uuid,
+        enriched=enriched,
+        incoming_apply_url=incoming_apply_url,
+        now=now,
+    )
+    effective_apply_url = _resolve_effective_primary_url(
+        cur,
+        canonical_uuid=canonical_uuid,
+        canonical_apply_url=canonical_apply_url,
+        source_uuid=source_uuid,
+        incoming_source=enriched.ats_source,
+        incoming_apply_url=incoming_apply_url,
+        now=now,
+    )
+
+    backfill_salary = canonical_salary_min is None and enriched.salary_min is not None
+    merged_salary_min = enriched.salary_min if backfill_salary else canonical_salary_min
+    merged_salary_max = (
+        enriched.salary_max
+        if backfill_salary or canonical_salary_max is None
+        else canonical_salary_max
+    )
+    merged_salary_currency = canonical_salary_currency or enriched.salary_currency
+    incoming_period = enriched.salary_period.value if enriched.salary_period else None
+    merged_salary_period = (
+        incoming_period if canonical_salary_period is None else canonical_salary_period
+    )
+    merged_work_mode = _backfill_unknown(canonical_work_mode, enriched.work_mode.value)
+    merged_language = _backfill_unknown(
+        canonical_language, enriched.language, UNKNOWN_LANGUAGE
+    )
+    merged_seniority = _backfill_unknown(canonical_seniority, enriched.seniority.value)
+    merged_contract = _backfill_unknown(
+        canonical_contract, enriched.contract_type.value
+    )
+    merged_stack = list(
+        dict.fromkeys(
+            [*_parse_json_list(canonical_tech_stack_raw), *enriched.tech_stack]
+        )
+    )
+    merged_regions = list(
+        dict.fromkeys(
+            [
+                *list(canonical_regions_raw or []),
+                *[r.value for r in enriched.region_eligibility],
+            ]
+        )
+    )
+
+    was_inactive, new_repost_count, new_last_reposted_at = _compute_repost_state(
+        cur,
+        canonical_uuid=canonical_uuid,
+        canonical_is_active=bool(canonical_is_active),
+        canonical_repost_count=int(canonical_repost_count or 0),
+        canonical_last_reposted_at=canonical_last_reposted_at,
+        canonical_created_at=canonical_created_at,
+        source_already_linked=source_already_linked,
+        enriched=enriched,
+        now=now,
+    )
+    effective_desc = enriched.description_clean if was_inactive else canonical_desc
+
+    common_params = (
+        merged_seniority,
+        merged_contract,
+        merged_work_mode,
+        merged_language,
+        merged_regions,
+        merged_salary_min,
+        merged_salary_max,
+        merged_salary_currency,
+        merged_salary_period,
+        json.dumps(merged_stack),
+        canonical_company_norm or company_norm,
+        canonical_title_norm or title_norm,
+        canonical_desc_fp or desc_fp,
+        new_repost_count,
+        new_last_reposted_at,
+        canonical_uuid,
+    )
+    if was_inactive:
+        cur.execute(
+            """
+            UPDATE jobs_jobposting
+            SET modified_at = %s,
+                apply_url = %s,
+                description_clean = %s,
+                embedding = %s::vector,
+                seniority = %s,
+                contract_type = %s,
+                work_mode = %s,
+                language = %s,
+                region_eligibility = %s,
+                salary_min = %s,
+                salary_max = %s,
+                salary_currency = %s,
+                salary_period = %s,
+                tech_stack = %s::jsonb,
+                company_name_normalized = %s,
+                title_normalized = %s,
+                description_fingerprint = %s,
+                repost_count = %s,
+                last_reposted_at = %s,
+                is_active = TRUE,
+                closed_at = NULL
+            WHERE uuid = %s
+            """,
+            (
+                now,
+                effective_apply_url,
+                effective_desc,
+                enriched.embedding,
+                *common_params,
+            ),
+        )
+    else:
+        cur.execute(
+            """
+            UPDATE jobs_jobposting
+            SET modified_at = %s,
+                apply_url = %s,
+                seniority = %s,
+                contract_type = %s,
+                work_mode = %s,
+                language = %s,
+                region_eligibility = %s,
+                salary_min = %s,
+                salary_max = %s,
+                salary_currency = %s,
+                salary_period = %s,
+                tech_stack = %s::jsonb,
+                company_name_normalized = %s,
+                title_normalized = %s,
+                description_fingerprint = %s,
+                repost_count = %s,
+                last_reposted_at = %s
+            WHERE uuid = %s
+            """,
+            (now, effective_apply_url, *common_params),
+        )
+
+    return _JobCandidate(
+        uuid=canonical_uuid,
+        title=canonical_title,
+        company_name=canonical_company,
+        apply_url=effective_apply_url,
+        description_clean=effective_desc,
+        seniority=merged_seniority,
+        contract_type=merged_contract,
+        region_eligibility=merged_regions,
+        tech_stack=merged_stack,
+        work_mode=merged_work_mode,
+        language=merged_language,
+        ats_source=canonical_ats_source,
+        submitted_by_user_id=enriched.submitted_by_user_id,
+        incoming_ats_source=enriched.ats_source.value,
+        merged_into_existing=True,
+    )
+
+
+def _find_fast_path_canonical(
+    cur: psycopg.Cursor,
+    enriched: JobEnrichedEvent,
+) -> tuple | None:
+    cur.execute(
+        f"""
+        SELECT {_CANONICAL_SELECT_COLUMNS}
+        FROM jobs_jobpostingsource s
+        INNER JOIN jobs_jobposting j ON j.uuid = s.job_posting_id
+        WHERE s.ats_source = %s
+          AND s.external_id = %s
+          AND s.is_deleted = FALSE
+          AND j.is_deleted = FALSE
+        LIMIT 1
+        """,
+        (enriched.ats_source.value, enriched.external_id),
+    )
+    row = cur.fetchone()
+    if row is not None and len(row) >= 24:
+        return row
+
+    cur.execute(
+        f"""
+        SELECT {_CANONICAL_SELECT_COLUMNS}
+        FROM jobs_jobposting j
+        WHERE j.is_deleted = FALSE
+          AND (
+              (j.ats_source = %s AND j.external_id = %s)
+              OR j.content_hash = %s
+          )
+        ORDER BY j.created_at ASC
+        LIMIT 1
+        """,
+        (enriched.ats_source.value, enriched.external_id, enriched.content_hash),
+    )
+    row = cur.fetchone()
+    return row if row is not None and len(row) >= 24 else None
+
+
+def _known_values_conflict(
+    val_a: str,
+    val_b: str,
+    unknown_value: str = "unknown",
+) -> bool:
+    return val_a != unknown_value and val_b != unknown_value and val_a != val_b
+
+
+def _candidate_passes_stage0_guardrails(
+    row: tuple,
+    *,
+    enriched: JobEnrichedEvent,
+    title_norm: str,
+    incoming_regions: list[str],
+) -> tuple[float, int, float] | None:
+    if len(row) < 26:
+        return None
+    cand_seniority = str(row[7] or "unknown")
+    cand_work_mode = str(row[9] or "unknown")
+    cand_language = normalize_language_code(str(row[10] or ""), strict=False)
+    cand_regions = list(row[11] or [])
+    cand_title_norm = str(row[22] or "") or normalize_title_for_dedup(str(row[3] or ""))
+    cosine_sim = float(row[24])
+
+    has_conflict = (
+        _known_values_conflict(cand_language, enriched.language, UNKNOWN_LANGUAGE)
+        or _known_values_conflict(cand_seniority, enriched.seniority.value)
+        or _known_values_conflict(cand_work_mode, enriched.work_mode.value)
+        or not are_regions_compatible(incoming_regions, cand_regions)
+    )
+    if has_conflict:
+        return None
+    if (
+        token_jaccard_similarity(title_norm, cand_title_norm)
+        < STAGE0_TITLE_JACCARD_THRESHOLD
+        or cosine_sim < settings.near_dup_cosine_threshold
+    ):
+        return None
+
+    primary_source = str(row[25] or row[1])
+    return (
+        cosine_sim,
+        1 if is_direct_ats_source(primary_source) else 0,
+        -_coerce_datetime(row[20]).timestamp(),
+    )
+
+
+def _find_semantic_canonical(
+    cur: psycopg.Cursor,
+    *,
+    enriched: JobEnrichedEvent,
+    company_norm: str,
+    title_norm: str,
+    now: datetime,
+) -> tuple | None:
+    lookback_cutoff = now - timedelta(days=settings.near_dup_lookback_days)
+    incoming_regions = [r.value for r in enriched.region_eligibility]
+    cur.execute(
+        f"""
+        SELECT
+            {_CANONICAL_SELECT_COLUMNS},
+            GREATEST(0.0, LEAST(1.0, 1 - (j.embedding <=> %s::vector))) AS cosine_sim,
+            COALESCE(
+                (
+                    SELECT s.ats_source
+                    FROM jobs_jobpostingsource s
+                    WHERE s.job_posting_id = j.uuid
+                      AND s.is_primary = TRUE
+                      AND s.is_deleted = FALSE
+                    LIMIT 1
+                ),
+                j.ats_source
+            ) AS primary_ats_source
+        FROM jobs_jobposting j
+        WHERE j.embedding IS NOT NULL
+          AND j.is_deleted = FALSE
+          AND j.company_name_normalized = %s
+          AND COALESCE(j.modified_at, j.created_at) >= %s
+        """,
+        (enriched.embedding, company_norm, lookback_cutoff),
+    )
+    best_row: tuple | None = None
+    best_rank: tuple[float, int, float] | None = None
+    for row in cur.fetchall():
+        rank_key = _candidate_passes_stage0_guardrails(
+            row,
+            enriched=enriched,
+            title_norm=title_norm,
+            incoming_regions=incoming_regions,
+        )
+        if rank_key is not None and (best_rank is None or rank_key > best_rank):
+            best_row = row
+            best_rank = rank_key
+    return best_row
+
+
+def _upsert_or_merge_canonical_job(
     cur: psycopg.Cursor,
     enriched: JobEnrichedEvent,
     now: datetime,
-) -> uuid.UUID:
+) -> _JobCandidate:
+    company_norm = normalize_company_for_dedup(enriched.company_name)[:255]
+    title_norm = normalize_title_for_dedup(enriched.title)[:255]
+    desc_fp, _ = compute_description_fingerprint(
+        enriched.description_clean,
+        min_chars=settings.min_dedup_desc_chars,
+    )
+    generic_company = is_generic_company_name(company_norm)
+    if not generic_company:
+        _acquire_company_dedup_lock(cur, company_norm)
+
+    canonical_row = _find_fast_path_canonical(cur, enriched)
+    if canonical_row is None and not generic_company:
+        canonical_row = _find_semantic_canonical(
+            cur,
+            enriched=enriched,
+            company_norm=company_norm,
+            title_norm=title_norm,
+            now=now,
+        )
+
+    if canonical_row is not None:
+        return _merge_into_canonical_job(
+            cur,
+            canonical_row=canonical_row,
+            enriched=enriched,
+            company_norm=company_norm,
+            title_norm=title_norm,
+            desc_fp=desc_fp,
+            now=now,
+        )
+
+    # No canonical match: insert brand-new JobPosting + primary JobPostingSource
     region_list = [r.value for r in enriched.region_eligibility]
+    new_job_uuid = uuid.uuid4()
     cur.execute(
         """
         INSERT INTO jobs_jobposting (
@@ -462,7 +1054,9 @@ def _upsert_job_posting(
             location_raw, description_clean,
             seniority, contract_type, work_mode, language, region_eligibility,
             salary_min, salary_max, salary_currency, salary_period,
-            tech_stack, embedding, is_active, posted_at
+            tech_stack, embedding, is_active, posted_at,
+            company_name_normalized, title_normalized, description_fingerprint,
+            repost_count
         )
         VALUES (
             %s, %s, %s, FALSE,
@@ -471,7 +1065,9 @@ def _upsert_job_posting(
             %s, %s,
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
-            %s::jsonb, %s::vector, TRUE, %s
+            %s::jsonb, %s::vector, TRUE, %s,
+            %s, %s, %s,
+            0
         )
         ON CONFLICT (ats_source, external_id) DO UPDATE SET
             modified_at = EXCLUDED.modified_at,
@@ -496,11 +1092,14 @@ def _upsert_job_posting(
             embedding = EXCLUDED.embedding,
             is_active = TRUE,
             closed_at = NULL,
-            posted_at = COALESCE(EXCLUDED.posted_at, jobs_jobposting.posted_at)
+            posted_at = COALESCE(EXCLUDED.posted_at, jobs_jobposting.posted_at),
+            company_name_normalized = EXCLUDED.company_name_normalized,
+            title_normalized = EXCLUDED.title_normalized,
+            description_fingerprint = EXCLUDED.description_fingerprint
         RETURNING uuid
         """,
         (
-            uuid.uuid4(),
+            new_job_uuid,
             now,
             now,
             enriched.ats_source.value,
@@ -524,9 +1123,68 @@ def _upsert_job_posting(
             json.dumps(enriched.tech_stack),
             enriched.embedding,
             enriched.posted_at,
+            company_norm,
+            title_norm,
+            desc_fp,
         ),
     )
-    return cur.fetchone()[0]
+    job_uuid = cur.fetchone()[0]
+
+    cur.execute(
+        """
+        INSERT INTO jobs_jobpostingsource (
+            uuid, created_at, modified_at, is_deleted,
+            job_posting_id, ats_source, external_id,
+            apply_url, raw_html_gcs_uri,
+            is_primary, is_active, first_seen_at, last_seen_at
+        )
+        VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, TRUE, TRUE, %s, %s)
+        ON CONFLICT (ats_source, external_id) WHERE is_deleted = FALSE DO UPDATE SET
+            apply_url = EXCLUDED.apply_url,
+            raw_html_gcs_uri = EXCLUDED.raw_html_gcs_uri,
+            is_active = TRUE,
+            last_seen_at = EXCLUDED.last_seen_at,
+            modified_at = EXCLUDED.modified_at
+        """,
+        (
+            uuid.uuid4(),
+            now,
+            now,
+            job_uuid,
+            enriched.ats_source.value,
+            enriched.external_id,
+            str(enriched.apply_url),
+            enriched.raw_html_gcs_uri,
+            now,
+            now,
+        ),
+    )
+
+    return _JobCandidate(
+        uuid=job_uuid,
+        title=enriched.title,
+        company_name=enriched.company_name,
+        apply_url=str(enriched.apply_url),
+        description_clean=enriched.description_clean,
+        seniority=enriched.seniority.value,
+        contract_type=enriched.contract_type.value,
+        region_eligibility=region_list,
+        tech_stack=enriched.tech_stack,
+        work_mode=enriched.work_mode.value,
+        language=enriched.language,
+        ats_source=enriched.ats_source.value,
+        submitted_by_user_id=enriched.submitted_by_user_id,
+        incoming_ats_source=enriched.ats_source.value,
+        merged_into_existing=False,
+    )
+
+
+def _upsert_job_posting(
+    cur: psycopg.Cursor,
+    enriched: JobEnrichedEvent,
+    now: datetime,
+) -> _JobCandidate:
+    return _upsert_or_merge_canonical_job(cur, enriched, now)
 
 
 def _upsert_match_score(
@@ -786,6 +1444,7 @@ def _persist_manual_import_ready(
             "matched_skills": outcome.matched_skills or [],
             "missing_keywords": outcome.missing_keywords or [],
             "apply_url": job.apply_url,
+            "merged_into_existing": job.merged_into_existing,
         },
         now=now,
     )
@@ -901,7 +1560,7 @@ def _score_and_persist_winner(
         )
     elif (
         bypass_threshold
-        and job.ats_source == ATSSource.MANUAL.value
+        and (job.incoming_ats_source or job.ats_source) == ATSSource.MANUAL.value
         and notify_manual_import
         and outcome.fit_score is not None
     ):
@@ -988,7 +1647,8 @@ def _row_to_active_profile(row: tuple) -> _ActiveProfile:
 
 
 def _is_manual_bypass_user(job: _JobCandidate, user_id: int | uuid.UUID) -> bool:
-    if job.ats_source != ATSSource.MANUAL.value:
+    effective_source = job.incoming_ats_source or job.ats_source
+    if effective_source != ATSSource.MANUAL.value:
         return False
     if job.submitted_by_user_id is None:
         return True
@@ -1012,6 +1672,51 @@ def _route_job_for_user(
         winner = select_winning_profile(user_profiles, job, ignore_gates=True)
     if winner is None:
         return None
+
+    # BYOK & Alert Cost Protection: skip Stage 2 if user already has a fresh MatchScore on canonical job
+    if job.merged_into_existing:
+        cur.execute(
+            """
+            SELECT uuid, resume_content_hash, fit_score, cosine_similarity,
+                   matched_skills, missing_keywords
+            FROM matching_matchscore
+            WHERE job_posting_id = %s
+              AND resume_profile_id = %s
+              AND is_deleted = FALSE
+            LIMIT 1
+            """,
+            (job.uuid, winner.uuid),
+        )
+        existing_row = cur.fetchone()
+        if (
+            existing_row is not None
+            and existing_row[1] == winner.content_hash
+            and existing_row[2] is not None
+        ):
+            logger.info(
+                "Skipping Stage 2 BYOK for already-scored user=%s canonical job=%s resume=%s",
+                user_id,
+                job.uuid,
+                winner.uuid,
+            )
+            if is_manual_bypass:
+                _persist_manual_import_ready(
+                    cur,
+                    now=now,
+                    job=job,
+                    resume_uuid=winner.uuid,
+                    resume_label=winner.label,
+                    resume_language=winner.language,
+                    user_id=user_id,
+                    match_score_uuid=existing_row[0],
+                    cosine_val=float(existing_row[3]),
+                    outcome=_EvaluationOutcome(
+                        fit_score=int(existing_row[2]),
+                        matched_skills=_parse_json_list(existing_row[4]),
+                        missing_keywords=_parse_json_list(existing_row[5]),
+                    ),
+                )
+            return None
 
     user_api_key = _decrypt_user_byok_key(
         user_id=int(user_id),
@@ -1051,22 +1756,27 @@ def _upsert_job_and_score_sync(
     with psycopg.connect(settings.postgres_dsn, autocommit=False) as conn:
         register_vector(conn)
         with conn.cursor() as cur:
-            job_posting_uuid = _upsert_job_posting(cur, enriched, now)
-            candidate = _JobCandidate(
-                uuid=job_posting_uuid,
-                title=enriched.title,
-                company_name=enriched.company_name,
-                apply_url=str(enriched.apply_url),
-                description_clean=enriched.description_clean,
-                seniority=enriched.seniority.value,
-                contract_type=enriched.contract_type.value,
-                region_eligibility=[r.value for r in enriched.region_eligibility],
-                tech_stack=enriched.tech_stack,
-                work_mode=enriched.work_mode.value,
-                language=enriched.language,
-                ats_source=enriched.ats_source.value,
-                submitted_by_user_id=enriched.submitted_by_user_id,
-            )
+            upsert_result = _upsert_job_posting(cur, enriched, now)
+            if isinstance(upsert_result, _JobCandidate):
+                candidate = upsert_result
+            else:
+                candidate = _JobCandidate(
+                    uuid=upsert_result,
+                    title=enriched.title,
+                    company_name=enriched.company_name,
+                    apply_url=str(enriched.apply_url),
+                    description_clean=enriched.description_clean,
+                    seniority=enriched.seniority.value,
+                    contract_type=enriched.contract_type.value,
+                    region_eligibility=[r.value for r in enriched.region_eligibility],
+                    tech_stack=enriched.tech_stack,
+                    work_mode=enriched.work_mode.value,
+                    language=enriched.language,
+                    ats_source=enriched.ats_source.value,
+                    submitted_by_user_id=enriched.submitted_by_user_id,
+                    incoming_ats_source=enriched.ats_source.value,
+                )
+            job_posting_uuid = candidate.uuid
 
             cur.execute(
                 """
