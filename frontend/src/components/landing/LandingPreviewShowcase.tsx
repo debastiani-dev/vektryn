@@ -1587,9 +1587,7 @@ export function LandingPreviewShowcase() {
                         <div className="border-b border-zinc-800/80 bg-zinc-950/95 px-4 py-3 sm:px-5">
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 xl:gap-x-4">
                                 <div className="order-1 flex items-center gap-2.5">
-                                    <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-900 ring-1 ring-zinc-800">
-                                        <VektrynLogo className="h-6 w-6" />
-                                    </span>
+                                    <VektrynLogo className="h-6 w-6 shrink-0" />
                                     <span className="font-mono text-sm font-semibold tracking-tight text-zinc-100">
                                         vektryn
                                     </span>

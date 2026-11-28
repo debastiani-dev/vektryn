@@ -1,9 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7" fill="#09090b" stroke="#27272a" stroke-width="1.5" />
-  <path d="M4.2 16A11.8 11.8 0 0 1 16 4.2" stroke="#f4f4f5" stroke-width="2.6" stroke-linecap="round" />
-  <path d="M27.8 16A11.8 11.8 0 0 1 16 27.8" stroke="#f4f4f5" stroke-width="2.6" stroke-linecap="round" />
-  <path d="M9.6 16A6.4 6.4 0 0 1 16 9.6" stroke="#f4f4f5" stroke-opacity="0.45" stroke-width="2.2" stroke-linecap="round" />
-  <path d="M22.4 16A6.4 6.4 0 0 1 16 22.4" stroke="#f4f4f5" stroke-opacity="0.45" stroke-width="2.2" stroke-linecap="round" />
-  <circle cx="16" cy="16" r="2.3" fill="#f4f4f5" />
-  <circle cx="24.35" cy="7.65" r="2.75" fill="#a78bfa" />
+  <style>
+    .vk-mark-stroke { stroke: #f4f4f5; }
+    .vk-mark-fill { fill: #f4f4f5; }
+    @media (prefers-color-scheme: light) {
+      .vk-mark-stroke { stroke: #18181b; }
+      .vk-mark-fill { fill: #18181b; }
+    }
+  </style>
+  <path class="vk-mark-stroke" d="M2.5 16A13.5 13.5 0 0 1 16 2.5" stroke-width="2.8" stroke-linecap="round" />
+  <path class="vk-mark-stroke" d="M29.5 16A13.5 13.5 0 0 1 16 29.5" stroke-width="2.8" stroke-linecap="round" />
+  <path class="vk-mark-stroke" d="M8.6 16A7.4 7.4 0 0 1 16 8.6" stroke-opacity="0.45" stroke-width="2.4" stroke-linecap="round" />
+  <path class="vk-mark-stroke" d="M23.4 16A7.4 7.4 0 0 1 16 23.4" stroke-opacity="0.45" stroke-width="2.4" stroke-linecap="round" />
+  <circle class="vk-mark-fill" cx="16" cy="16" r="2.6" />
+  <circle cx="25.55" cy="6.45" r="3.1" fill="#a78bfa" />
 </svg>
