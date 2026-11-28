@@ -12,6 +12,7 @@ class MatchScoreSerializer(serializers.ModelSerializer):
     resume_profile_label = serializers.CharField(
         source="resume_profile.label", read_only=True
     )
+    resume_profile_summary = serializers.SerializerMethodField()
     resume_min_alert_score = serializers.IntegerField(
         source="resume_profile.min_alert_score", read_only=True
     )
@@ -24,7 +25,9 @@ class MatchScoreSerializer(serializers.ModelSerializer):
             "job_posting",
             "resume_profile_uuid",
             "resume_profile_label",
+            "resume_profile_summary",
             "resume_min_alert_score",
+            "is_routed_winner",
             "cosine_similarity",
             "fit_score",
             "matched_skills",
@@ -38,6 +41,13 @@ class MatchScoreSerializer(serializers.ModelSerializer):
             "alert_sent_at",
             "created_at",
         ]
+
+    def get_resume_profile_summary(self, obj: MatchScore) -> dict[str, str]:
+        return {
+            "uuid": str(obj.resume_profile.uuid),
+            "label": obj.resume_profile.label,
+            "language": obj.resume_profile.language,
+        }
 
     def get_is_stale(self, obj: MatchScore) -> bool:
         return obj.resume_content_hash != obj.resume_profile.content_hash

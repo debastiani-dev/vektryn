@@ -646,7 +646,8 @@ resource "google_cloud_run_v2_job" "migrate" {
 
       containers {
         image   = var.control_plane_image
-        command = ["python", "manage.py", "migrate", "--noinput"]
+        command = ["python", "manage.py"]
+        args    = ["migrate", "--noinput"]
 
         resources {
           limits = {

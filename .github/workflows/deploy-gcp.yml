@@ -435,7 +435,8 @@ jobs:
           sudo DOCKER_CONFIG="${DOCKER_CFG}" docker compose pull enrichment-worker matcher-worker
           EXPECTED_IMG="$(sudo docker image inspect --format='{{.Id}}' "${IMAGE_REF}")"
 
-          sudo docker compose up -d --no-deps enrichment-worker matcher-worker
+          sudo docker compose up -d --no-deps matcher-worker
+          sudo docker compose up -d --no-deps enrichment-worker
           sleep 5
 
           for ctr in vektryn-enrichment-worker vektryn-matcher-worker; do

@@ -1,7 +1,11 @@
 from rest_framework import serializers
 
 from apps.resumes.models.resumes import ResumeProfile
-from apps.resumes.services.resume_service import ResumeService
+from apps.resumes.services.resume_service import (
+    ActiveResumeLimitError,
+    ResumeService,
+)
+from vektryn_contracts.language import normalize_language_code
 
 
 def _as_list(value: object) -> list:
@@ -32,6 +36,9 @@ class ResumeRescoreRequestSerializer(serializers.Serializer):
 class ResumeProfileSerializer(serializers.ModelSerializer):
     file = serializers.FileField(write_only=True, required=False, allow_null=True)
     raw_text = serializers.CharField(required=False, allow_blank=True)
+    language = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=16
+    )
     min_alert_score = serializers.IntegerField(min_value=0, max_value=100, default=70)
     has_embedding = serializers.SerializerMethodField()
 
@@ -44,6 +51,8 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
             "target_contract_types",
             "target_regions",
             "target_work_modes",
+            "language",
+            "strict_language_match",
             "min_alert_score",
             "raw_text",
             "file",
@@ -114,6 +123,12 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_language(self, value: str | None) -> str:
+        try:
+            return normalize_language_code(value, strict=True)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
     def create(self, validated_data: dict) -> ResumeProfile:
         uploaded_file = validated_data.pop("file", None)
         service = ResumeService(user=self.context["request"].user)
@@ -122,6 +137,8 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
                 validated_data=validated_data,
                 uploaded_file=uploaded_file,
             )
+        except ActiveResumeLimitError as exc:
+            raise serializers.ValidationError({"is_active": str(exc)}) from exc
         except ValueError as exc:
             raise serializers.ValidationError({"file": str(exc)}) from exc
 
@@ -134,5 +151,7 @@ class ResumeProfileSerializer(serializers.ModelSerializer):
                 validated_data=validated_data,
                 uploaded_file=uploaded_file,
             )
+        except ActiveResumeLimitError as exc:
+            raise serializers.ValidationError({"is_active": str(exc)}) from exc
         except ValueError as exc:
             raise serializers.ValidationError({"file": str(exc)}) from exc

@@ -4,7 +4,7 @@ import signal
 
 from confluent_kafka import KafkaError
 
-from stream_edge.clients.gemini import GeminiStreamClient
+from stream_edge.clients.gemini import GeminiStreamClient, normalize_salary_currency
 from stream_edge.clients.heartbeat import WorkerHeartbeat
 from stream_edge.clients.kafka import (
     KafkaEventProducer,
@@ -20,11 +20,14 @@ from stream_edge.telemetry import (
     flush_sentry,
 )
 from vektryn_contracts import (
+    UNKNOWN_LANGUAGE,
     ATSSource,
     JobEnrichedEvent,
     JobRawEvent,
     KafkaTopic,
+    detect_content_language,
     job_partition_key,
+    normalize_language_code,
 )
 
 DAILY_CAP_ALERT_THROTTLE_SECONDS = 60 * 60 * 24
@@ -106,6 +109,15 @@ async def process_raw_message(
             await redis_client.release_enrichment_daily_quota()
         raise
 
+    resolved_language = normalize_language_code(
+        getattr(metadata, "language", UNKNOWN_LANGUAGE),
+        strict=False,
+    )
+    if resolved_language == UNKNOWN_LANGUAGE:
+        resolved_language = detect_content_language(
+            f"{raw_event.title}\n\n{raw_event.description_clean}"
+        )
+
     enriched = JobEnrichedEvent(
         trace_id=raw_event.trace_id,
         ats_source=raw_event.ats_source,
@@ -122,10 +134,11 @@ async def process_raw_message(
         seniority=metadata.seniority,
         contract_type=metadata.contract_type,
         work_mode=metadata.work_mode,
+        language=resolved_language,
         region_eligibility=metadata.region_eligibility,
         salary_min=metadata.salary_min,
         salary_max=metadata.salary_max,
-        salary_currency=metadata.salary_currency,
+        salary_currency=normalize_salary_currency(metadata.salary_currency),
         salary_period=metadata.salary_period,
         tech_stack=metadata.tech_stack,
         embedding=embedding,
@@ -137,10 +150,11 @@ async def process_raw_message(
         event=enriched,
     )
     logger.info(
-        "Enriched %s:%s -> work_mode=%s stack=%s",
+        "Enriched %s:%s -> work_mode=%s language=%s stack=%s",
         enriched.ats_source.value,
         enriched.external_id,
         enriched.work_mode.value,
+        enriched.language,
         enriched.tech_stack,
     )
 

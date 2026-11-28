@@ -1,22 +1,30 @@
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 from pgvector.django import VectorField
-from django.core.validators import MaxValueValidator, MinValueValidator
 
 from apps.base.models.base_model import BaseModel, enum_choices
 from vektryn_contracts.enums import (
+    UNKNOWN_LANGUAGE,
     ContractType,
     RegionEligibility,
     SeniorityLevel,
     WorkMode,
 )
 from vektryn_contracts.events import EMBEDDING_DIMENSIONS
+from vektryn_contracts.language import is_valid_language_code
 
 
 def default_target_work_modes() -> list[str]:
     return [WorkMode.REMOTE.value]
+
+
+def validate_resume_language_code(value: str) -> None:
+    if not is_valid_language_code(value, allow_unknown=True):
+        raise ValidationError(f"Invalid ISO 639-1 language code: {value!r}")
 
 
 class ResumeProfile(BaseModel):
@@ -58,6 +66,17 @@ class ResumeProfile(BaseModel):
         ),
         default=default_target_work_modes,
         blank=True,
+    )
+    language = models.CharField(
+        max_length=16,
+        default=UNKNOWN_LANGUAGE,
+        db_default=UNKNOWN_LANGUAGE,
+        db_index=True,
+        validators=[validate_resume_language_code],
+    )
+    strict_language_match = models.BooleanField(
+        default=False,
+        db_default=False,
     )
     min_alert_score = models.PositiveSmallIntegerField(
         default=70,

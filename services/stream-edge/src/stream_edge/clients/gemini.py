@@ -23,6 +23,7 @@ from vektryn_contracts import (
     GEMINI_EMBEDDING_MODEL,
     PAUSE_INVALID_KEY_SECONDS,
     PAUSE_PAYMENT_REQUIRED_SECONDS,
+    UNKNOWN_LANGUAGE,
     ContractType,
     GeminiErrorAction,
     GeminiModelAttempt,
@@ -37,6 +38,7 @@ from vektryn_contracts import (
     gemini_invalid_key_pause_key,
     gemini_model_cooldown_key,
     gemini_payment_pause_key,
+    normalize_language_code,
     resolve_model_chain,
 )
 
@@ -63,10 +65,31 @@ def build_thinking_config(level: ThinkingLevelName) -> types.ThinkingConfig:
     return types.ThinkingConfig(thinking_level=_THINKING_LEVEL_ENUM[level])
 
 
+_CURRENCY_SYMBOL_MAP: dict[str, str] = {
+    "R$": "BRL",
+    "€": "EUR",
+    "£": "GBP",
+}
+
+
+def normalize_salary_currency(raw: str | None) -> str:
+    """Normalize an extracted currency to a 3-letter uppercase ISO 4217 code or ''."""
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return ""
+    if cleaned in _CURRENCY_SYMBOL_MAP:
+        return _CURRENCY_SYMBOL_MAP[cleaned]
+    upper = cleaned.upper()
+    if len(upper) == 3 and upper.isalpha():
+        return upper
+    return ""
+
+
 class ExtractedJobMetadata(BaseModel):
     seniority: SeniorityLevel = SeniorityLevel.UNKNOWN
     contract_type: ContractType = ContractType.UNKNOWN
     work_mode: WorkMode = WorkMode.UNKNOWN
+    language: str = UNKNOWN_LANGUAGE
     region_eligibility: list[RegionEligibility] = Field(default_factory=list)
     salary_min: Decimal | None = None
     salary_max: Decimal | None = None
@@ -93,6 +116,16 @@ class UserScoringPausedError(RuntimeError):
         super().__init__(message)
 
 
+def _resolve_fit_output_language(job_language: str, resume_language: str) -> str:
+    norm_job = normalize_language_code(job_language, strict=False)
+    if norm_job != UNKNOWN_LANGUAGE:
+        return norm_job
+    norm_resume = normalize_language_code(resume_language, strict=False)
+    if norm_resume != UNKNOWN_LANGUAGE:
+        return norm_resume
+    return "en"
+
+
 def build_resume_fit_prompt(
     *,
     resume_text: str,
@@ -101,7 +134,10 @@ def build_resume_fit_prompt(
     company_name: str,
     job_description: str,
     job_stack: list[str],
+    job_language: str = UNKNOWN_LANGUAGE,
+    resume_language: str = UNKNOWN_LANGUAGE,
 ) -> str:
+    target_language = _resolve_fit_output_language(job_language, resume_language)
     return (
         "Evaluate how well this candidate's resume matches the target software or UI/UX role, "
         "focusing on giving the candidate a clear, practical assessment of why this role is "
@@ -111,7 +147,10 @@ def build_resume_fit_prompt(
         "Never fabricate experience, tools, or metrics.\n"
         "- Calibrate against the role's actual discipline "
         "(backend, fullstack, frontend, ui_ux, design engineering, product design, data, platform, infra, ML, mobile, etc.) "
-        "rather than assuming a backend-only role.\n\n"
+        "rather than assuming a backend-only role.\n"
+        f"- Output language: write gap_summary, fit_highlights, watchout_note, and talking_points "
+        f"naturally in ISO 639-1 language '{target_language}', while keeping canonical technical stack "
+        "tags in matched_skills and missing_keywords.\n\n"
         "Return:\n"
         "- fit_score: integer 0-100 calibrated objectively on core technical/design stack overlap, "
         "system/product/design scope, seniority alignment, and domain fit "
@@ -133,9 +172,11 @@ def build_resume_fit_prompt(
         "- watchout_note: 1-2 brief sentences concisely summarizing the most relevant material "
         "gap(s) or positioning watch-out(s) to address when applying (or empty string '' if none "
         "are material, since missing_keywords is displayed separately).\n\n"
+        f"CANDIDATE RESUME LANGUAGE: {normalize_language_code(resume_language, strict=False)}\n"
         f"CANDIDATE RESUME SKILLS: {', '.join(resume_skills)}\n"
         f"CANDIDATE RESUME:\n{resume_text[:10000]}\n\n"
         f"TARGET ROLE: {job_title} @ {company_name}\n"
+        f"TARGET ROLE LANGUAGE: {normalize_language_code(job_language, strict=False)}\n"
         f"TARGET STACK: {', '.join(job_stack)}\n"
         f"JOB DESCRIPTION:\n{job_description[:10000]}"
     )
@@ -239,8 +280,11 @@ class GeminiStreamClient:
             "Pay special attention to postings whose Location is vague (e.g., 'Brazil' or 'São Paulo, SP') while the body specifies "
             "'modelo híbrido 3x/semana', '100% presencial', 'on-site', 'in-office', '100% remoto', 'home office', or 'fully remote'. "
             "Return 'unknown' strictly when workplace arrangement is missing or genuinely ambiguous rather than guessing.\n"
+            "- Classify language as the lowercase 2-letter ISO 639-1 code of the primary language used in the Title and Description "
+            "(any standard ISO 639-1 code such as en, pt, es, de, fr, it, nl, ja, zh, ko, pl, uk, etc.; never return 'other' — "
+            "return 'unknown' only if the posting language is genuinely undetermined).\n"
             "- Identify all eligible regions in region_eligibility (e.g., brazil, latam, worldwide, north_america, europe, emea, apac, restricted).\n"
-            "- Extract salary_min, salary_max, 3-letter ISO salary_currency, and salary_period only if explicitly stated.\n"
+            "- Extract salary_min, salary_max, 3-letter ISO 4217 salary_currency (or empty string '' if not stated; never 'unknown'), and salary_period only if explicitly stated.\n"
             "- Extract normalized lowercase tech_stack tags (languages, frameworks, databases, brokers, cloud, DevOps, "
             "and UI/UX tools such as figma, storybook, framer, sketch, tailwind, css, design systems, wcag, accessibility).\n\n"
             f"Title: {title}\n"
@@ -253,7 +297,10 @@ class GeminiStreamClient:
             prompt=prompt,
             schema=ExtractedJobMetadata,
         )
-        return ExtractedJobMetadata.model_validate_json(raw_json)
+        parsed = ExtractedJobMetadata.model_validate_json(raw_json)
+        parsed.language = normalize_language_code(parsed.language, strict=False)
+        parsed.salary_currency = normalize_salary_currency(parsed.salary_currency)
+        return parsed
 
     def _embed_sync(self, text: str) -> list[float]:
         model = (
@@ -603,6 +650,8 @@ class UserGeminiScoringManager:
         company_name: str,
         job_description: str,
         job_stack: list[str],
+        job_language: str = UNKNOWN_LANGUAGE,
+        resume_language: str = UNKNOWN_LANGUAGE,
     ) -> tuple[ResumeGapEvaluation, str]:
         chain, eligible = self._resolve_eligible_scoring_chain(
             user_id=user_id,
@@ -616,6 +665,8 @@ class UserGeminiScoringManager:
             company_name=company_name,
             job_description=job_description,
             job_stack=job_stack,
+            job_language=job_language,
+            resume_language=resume_language,
         )
         client = self._get_client(user_id, api_key)
         saw_quota_or_tier = False

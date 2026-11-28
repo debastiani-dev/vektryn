@@ -7,14 +7,17 @@ export function getAlertDedupeKey(alert: LiveMatchAlert): string {
 export function alertToNotification(alert: LiveMatchAlert): NotificationItem {
     const nowIso = new Date().toISOString();
     const simPct = Math.round(alert.cosine_similarity * 100);
+    const matchedTarget = alert.resume_profile_label?.trim() || "your resume";
     return {
         uuid: getAlertDedupeKey(alert),
         kind: "match_alert",
         title: `${alert.fit_score}% Fit: ${alert.title}`,
-        body: `${alert.company_name} matched your resume (${simPct}% vector similarity).`,
+        body: `${alert.company_name} matched ${matchedTarget} (${simPct}% vector similarity).`,
         payload: {
             job_posting_uuid: alert.job_posting_uuid,
             resume_profile_uuid: alert.resume_profile_uuid,
+            resume_profile_label: alert.resume_profile_label,
+            resume_language: alert.resume_language,
             match_score_uuid: alert.match_score_uuid,
             title: alert.title,
             company_name: alert.company_name,
@@ -67,7 +70,13 @@ export function formatUnreadBadge(count: number): string {
 
 export function extractPayloadString(
     item: NotificationItem,
-    key: "match_score_uuid" | "job_posting_uuid" | "resume_profile_uuid" | "apply_url",
+    key:
+        | "match_score_uuid"
+        | "job_posting_uuid"
+        | "resume_profile_uuid"
+        | "resume_profile_label"
+        | "resume_language"
+        | "apply_url",
 ): string | null {
     const value = item.payload?.[key];
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;

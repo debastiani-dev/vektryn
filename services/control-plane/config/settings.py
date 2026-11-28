@@ -59,6 +59,7 @@ class ControlPlaneSettings(BaseSettings):
     auth_login_lockout_window_seconds: int = 900
     auth_login_trusted_proxy_count: int = 1
     hybrid_search_min_similarity: float = 0.60
+    max_active_resumes_per_user: int = Field(default=5, ge=1, le=20)
 
     stream_auth_secret: str = Field(
         default="",
@@ -257,6 +258,7 @@ AUTH_LOGIN_IP_MAX_FAILURES = max(1, int(env.auth_login_ip_max_failures))
 AUTH_LOGIN_LOCKOUT_WINDOW_SECONDS = max(1, int(env.auth_login_lockout_window_seconds))
 AUTH_LOGIN_TRUSTED_PROXY_COUNT = max(0, int(env.auth_login_trusted_proxy_count))
 HYBRID_SEARCH_MIN_SIMILARITY = env.hybrid_search_min_similarity
+MAX_ACTIVE_RESUMES_PER_USER = max(1, int(env.max_active_resumes_per_user))
 
 STREAM_AUTH_SECRET = env.stream_auth_secret.strip() or SECRET_KEY
 STREAM_EDGE_URL = env.stream_edge_url.strip().rstrip("/")

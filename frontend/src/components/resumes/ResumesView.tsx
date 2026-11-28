@@ -2,6 +2,7 @@ import {
     CheckCircle2,
     FileText,
     FileUp,
+    Globe,
     KeyRound,
     Loader2,
     PauseCircle,
@@ -9,6 +10,7 @@ import {
     PlayCircle,
     Plus,
     RefreshCw,
+    ShieldCheck,
     Sparkles,
     Trash2,
     UserCog,
@@ -25,6 +27,14 @@ import {
     formatWorkMode,
     workModeBadgeStyle,
 } from "../../utils/format";
+import {
+    formatLanguageBadge,
+    getLanguageName,
+    languageBadgeStyle,
+    MAX_ACTIVE_RESUMES_LIMIT,
+    UNKNOWN_LANGUAGE,
+} from "../../utils/languages";
+import { LanguageCombobox } from "../ui/LanguageCombobox";
 import { Tooltip } from "../ui/Tooltip";
 
 const SENIORITY_OPTIONS: SeniorityLevel[] = [
@@ -180,6 +190,26 @@ function ResumeStatusBadges({ profile }: Readonly<{ profile: ResumeProfile }>) {
                     Alert &ge; {profile.min_alert_score}%
                 </span>
             </Tooltip>
+
+            <Tooltip
+                content={`Resume language: ${getLanguageName(profile.language)} (${formatLanguageBadge(profile.language)})`}
+            >
+                <span
+                    className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 font-mono text-xs font-semibold ${languageBadgeStyle(profile.language)}`}
+                >
+                    <Globe className="h-3 w-3" aria-hidden="true" />
+                    <span>{formatLanguageBadge(profile.language)}</span>
+                </span>
+            </Tooltip>
+
+            {profile.strict_language_match && (
+                <Tooltip content="Strict language match enabled: skips postings in other known languages">
+                    <span className="inline-flex items-center gap-1 rounded-lg bg-violet-500/12 px-2.5 py-1 text-xs font-medium text-violet-300 ring-1 ring-violet-500/30">
+                        <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                        <span>Strict lang</span>
+                    </span>
+                </Tooltip>
+            )}
         </div>
     );
 }
@@ -187,6 +217,7 @@ function ResumeStatusBadges({ profile }: Readonly<{ profile: ResumeProfile }>) {
 interface ResumeCardActionsProps {
     profile: ResumeProfile;
     hasGeminiApiKey: boolean;
+    atActiveCap: boolean;
     busy: boolean;
     embedding: boolean;
     rescoring: boolean;
@@ -200,6 +231,7 @@ interface ResumeCardActionsProps {
 function ResumeCardActions({
     profile,
     hasGeminiApiKey,
+    atActiveCap,
     busy,
     embedding,
     rescoring,
@@ -209,9 +241,13 @@ function ResumeCardActions({
     onToggleActive,
     onDelete,
 }: Readonly<ResumeCardActionsProps>) {
-    const activeToggleTooltip = profile.is_active
-        ? "Pause scoring incoming jobs against this resume"
-        : "Activate scoring incoming jobs against this resume";
+    const activateBlockedByCap = !profile.is_active && atActiveCap;
+    let activeToggleTooltip = "Activate scoring incoming jobs against this resume";
+    if (profile.is_active) {
+        activeToggleTooltip = "Pause scoring incoming jobs against this resume";
+    } else if (activateBlockedByCap) {
+        activeToggleTooltip = `Active resume limit reached (${MAX_ACTIVE_RESUMES_LIMIT} / ${MAX_ACTIVE_RESUMES_LIMIT}). Pause another profile first.`;
+    }
     const canRescore = hasGeminiApiKey && profile.is_active && profile.has_embedding;
     const rescoreTooltip = getRescoreTooltip(hasGeminiApiKey, profile);
 
@@ -253,10 +289,10 @@ function ResumeCardActions({
             <Tooltip content={activeToggleTooltip}>
                 <button
                     type="button"
-                    disabled={busy || rescoring}
+                    disabled={busy || rescoring || activateBlockedByCap}
                     onClick={() => onToggleActive(profile)}
                     aria-label={profile.is_active ? "Pause profile" : "Activate profile"}
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/70 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     {profile.is_active ? (
                         <>
@@ -302,6 +338,7 @@ function ResumeCardActions({
 function ResumeProfileCard({
     profile,
     hasGeminiApiKey,
+    atActiveCap,
     busy,
     embedding,
     rescoring,
@@ -311,7 +348,7 @@ function ResumeProfileCard({
     onEdit,
     onToggleActive,
     onDelete,
-}: Readonly<ResumeCardProps>) {
+}: Readonly<ResumeCardProps & { atActiveCap: boolean }>) {
     const updatedDate = formatExactDate(profile.modified_at);
 
     return (
@@ -338,6 +375,7 @@ function ResumeProfileCard({
                 <ResumeCardActions
                     profile={profile}
                     hasGeminiApiKey={hasGeminiApiKey}
+                    atActiveCap={atActiveCap}
                     busy={busy}
                     embedding={embedding}
                     rescoring={rescoring}
@@ -515,6 +553,8 @@ export function ResumesView({
     const [targetContracts, setTargetContracts] = useState<ContractType[]>([]);
     const [targetRegions, setTargetRegions] = useState<string[]>([]);
     const [targetWorkModes, setTargetWorkModes] = useState<WorkMode[]>(["remote"]);
+    const [language, setLanguage] = useState<string>(UNKNOWN_LANGUAGE);
+    const [strictLanguageMatch, setStrictLanguageMatch] = useState(false);
     const [isActive, setIsActive] = useState(true);
 
     useEffect(() => {
@@ -552,7 +592,9 @@ export function ResumesView({
         setTargetContracts([]);
         setTargetRegions([]);
         setTargetWorkModes(["remote"]);
-        setIsActive(true);
+        setLanguage(UNKNOWN_LANGUAGE);
+        setStrictLanguageMatch(false);
+        setIsActive(activeCount < MAX_ACTIVE_RESUMES_LIMIT);
         clearError();
         setFormOpen(true);
     }
@@ -567,6 +609,8 @@ export function ResumesView({
         setTargetContracts(profile.target_contract_types);
         setTargetRegions(profile.target_regions);
         setTargetWorkModes(profile.target_work_modes ?? ["remote"]);
+        setLanguage(profile.language || UNKNOWN_LANGUAGE);
+        setStrictLanguageMatch(Boolean(profile.strict_language_match));
         setIsActive(profile.is_active);
         clearError();
         setFormOpen(true);
@@ -597,6 +641,8 @@ export function ResumesView({
                 target_contract_types: targetContracts,
                 target_regions: targetRegions,
                 target_work_modes: targetWorkModes,
+                language,
+                strict_language_match: strictLanguageMatch,
                 is_active: isActive,
             };
 
@@ -695,6 +741,7 @@ export function ResumesView({
     }
 
     const activeCount = profiles.filter((p) => p.is_active).length;
+    const atActiveCap = activeCount >= MAX_ACTIVE_RESUMES_LIMIT;
     const embeddedCount = profiles.filter((p) => p.has_embedding).length;
     const uniqueSkillsCount = new Set(profiles.flatMap((p) => p.extracted_skills)).size;
     let submitLabel = "Create Profile";
@@ -747,6 +794,7 @@ export function ResumesView({
                         key={profile.uuid}
                         profile={profile}
                         hasGeminiApiKey={hasGeminiApiKey}
+                        atActiveCap={atActiveCap}
                         busy={busyId === profile.uuid}
                         embedding={embeddingId === profile.uuid}
                         rescoring={rescoringId === profile.uuid}
@@ -766,12 +814,27 @@ export function ResumesView({
         <div className="space-y-8">
             <header className="space-y-6">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                        <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
-                            Resume Profiles
-                        </h1>
+                    <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                            <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
+                                Resume Profiles
+                            </h1>
+                            {!loading && (
+                                <span
+                                    className={`inline-flex items-center rounded-lg px-2.5 py-0.5 font-mono text-xs font-semibold tabular-nums ring-1 ${
+                                        atActiveCap
+                                            ? "bg-amber-500/12 text-amber-300 ring-amber-500/30"
+                                            : "bg-emerald-500/12 text-emerald-300 ring-emerald-500/30"
+                                    }`}
+                                >
+                                    {activeCount} / {MAX_ACTIVE_RESUMES_LIMIT} Active
+                                </span>
+                            )}
+                        </div>
                         <p className="text-sm text-zinc-400">
-                            Manage target search profiles, upload PDF/DOCX resumes, and tune alert thresholds.
+                            Keep up to {MAX_ACTIVE_RESUMES_LIMIT} active resumes live simultaneously
+                            — Vektryn automatically routes each job to the single best-fitting
+                            resume by language and vector similarity with zero duplicate AI cost.
                         </p>
                     </div>
 
@@ -922,6 +985,51 @@ export function ResumesView({
                                 onChange={(e) => setMinAlertScore(Number(e.target.value))}
                                 className="mt-2 w-full accent-violet-500"
                             />
+                        </div>
+                    </div>
+
+                    <div className="grid gap-5 sm:grid-cols-2">
+                        <LanguageCombobox
+                            id="resume-language-combobox"
+                            label="Resume Language"
+                            value={language}
+                            onChange={setLanguage}
+                            specialOptions={[
+                                {
+                                    code: UNKNOWN_LANGUAGE,
+                                    label: "Auto-detect",
+                                    hint: "Detect ISO 639-1 from resume text",
+                                },
+                            ]}
+                            placeholder="Search any ISO 639-1 language (e.g. Portuguese, pt, de)..."
+                        />
+
+                        <div className="flex flex-col justify-end pb-1">
+                            <div className="inline-flex items-start gap-2.5 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5 text-xs text-zinc-300 transition hover:border-zinc-700">
+                                <input
+                                    id="resume-strict-language-checkbox"
+                                    type="checkbox"
+                                    checked={strictLanguageMatch}
+                                    aria-describedby="resume-strict-language-hint"
+                                    onChange={(e) => setStrictLanguageMatch(e.target.checked)}
+                                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-zinc-700 bg-zinc-900 accent-violet-500"
+                                />
+                                <div>
+                                    <label
+                                        htmlFor="resume-strict-language-checkbox"
+                                        className="block cursor-pointer font-medium text-zinc-100"
+                                    >
+                                        Strict language match only
+                                    </label>
+                                    <p
+                                        id="resume-strict-language-hint"
+                                        className="mt-0.5 text-[11px] text-zinc-500"
+                                    >
+                                        Skip postings whose known language differs from this
+                                        resume&apos;s language.
+                                    </p>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

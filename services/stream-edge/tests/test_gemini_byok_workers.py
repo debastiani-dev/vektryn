@@ -260,22 +260,24 @@ def test_matcher_skips_keyless_stage2_and_skips_keyless_rescore_silently():
     # Keyless jobs.rescore returns 0 immediately without touching existing MatchScore rows
     rescore_cursor = MagicMock()
     rescore_cursor.__enter__.return_value = rescore_cursor
-    rescore_cursor.fetchone.return_value = (
-        resume_uuid,
-        99,
-        "Python Engineer",
-        "h" * 64,
-        ["python"],
-        [],
-        [],
-        [],
-        70,
-        [0.01] * EMBEDDING_DIMENSIONS,
-        "Primary",
-        "",  # No BYOK key
-        "auto",
-        True,
-    )
+    rescore_cursor.fetchall.return_value = [
+        (
+            resume_uuid,
+            99,
+            "Python Engineer",
+            "h" * 64,
+            ["python"],
+            [],
+            [],
+            [],
+            70,
+            [0.01] * EMBEDDING_DIMENSIONS,
+            "Primary",
+            "",  # No BYOK key
+            "auto",
+            True,
+        )
+    ]
     rescore_conn = MagicMock()
     rescore_conn.__enter__.return_value = rescore_conn
     rescore_conn.cursor.return_value = rescore_cursor
@@ -307,49 +309,53 @@ def test_matcher_rescore_breaks_early_on_pause_without_dlq_or_null_overwrite():
 
     fake_cursor = MagicMock()
     fake_cursor.__enter__.return_value = fake_cursor
-    fake_cursor.fetchone.return_value = (
-        resume_uuid,
-        55,
-        "Python Engineer",
-        "h" * 64,
-        ["python"],
-        [],
-        [],
-        [],
-        70,
-        [0.01] * EMBEDDING_DIMENSIONS,
-        "Primary",
-        encrypted,
-        "auto",
-        True,
-    )
-    fake_cursor.fetchall.return_value = [
-        (
-            uuid4(),
-            "Job 1",
-            "Acme",
-            "https://example.com/1",
-            "Python",
-            "senior",
-            "pj",
-            ["worldwide"],
-            ["python"],
-            0.9,
-            "greenhouse",
-        ),
-        (
-            uuid4(),
-            "Job 2",
-            "Beta",
-            "https://example.com/2",
-            "Python",
-            "senior",
-            "pj",
-            ["worldwide"],
-            ["python"],
-            0.88,
-            "greenhouse",
-        ),
+    fake_cursor.fetchall.side_effect = [
+        [
+            (
+                resume_uuid,
+                55,
+                "Python Engineer",
+                "h" * 64,
+                ["python"],
+                [],
+                [],
+                [],
+                70,
+                [0.01] * EMBEDDING_DIMENSIONS,
+                "Primary",
+                encrypted,
+                "auto",
+                True,
+            )
+        ],
+        [
+            (
+                uuid4(),
+                "Job 1",
+                "Acme",
+                "https://example.com/1",
+                "Python",
+                "senior",
+                "pj",
+                ["worldwide"],
+                ["python"],
+                0.9,
+                "greenhouse",
+            ),
+            (
+                uuid4(),
+                "Job 2",
+                "Beta",
+                "https://example.com/2",
+                "Python",
+                "senior",
+                "pj",
+                ["worldwide"],
+                ["python"],
+                0.88,
+                "greenhouse",
+            ),
+        ],
     ]
     fake_conn = MagicMock()
     fake_conn.__enter__.return_value = fake_conn

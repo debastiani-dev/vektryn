@@ -11,6 +11,8 @@ import {
     ExternalLink,
     Eye,
     EyeOff,
+    FileText,
+    Globe2,
     Mail,
     MapPin,
     Sparkles,
@@ -26,6 +28,7 @@ import type {
     LeadPriority,
     LeadStatus,
     MatchScore,
+    ResumeProfile,
 } from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
@@ -42,6 +45,11 @@ import {
     scoreBadgeStyle,
     workModeBadgeStyle,
 } from "../../utils/format";
+import {
+    formatKnownLanguageBadge,
+    getLanguageName,
+    languageBadgeStyle,
+} from "../../utils/languages";
 import {
     formatFollowupDate,
     formatFollowupExact,
@@ -134,16 +142,54 @@ function buildLeadJobPreview(
             "Unknown Company",
         apply_url: lead.apply_url || getNestedField(lead.job_posting, "apply_url") || "#",
         ats_source: lead.ats_source || getNestedField(lead.job_posting, "ats_source"),
+        language: lead.language,
     };
+}
+
+function buildLeadMatchLookup(matches: MatchScore[]): {
+    byJobAndResume: Record<string, MatchScore>;
+    winningByJob: Record<string, MatchScore>;
+} {
+    const byJobAndResume: Record<string, MatchScore> = {};
+    const winningByJob: Record<string, MatchScore> = {};
+    for (const match of matches) {
+        const jobUuid = match.job_posting.uuid;
+        byJobAndResume[`${jobUuid}:${match.resume_profile_uuid}`] = match;
+        const existing = winningByJob[jobUuid];
+        if (!existing || (match.is_routed_winner !== false && existing.is_routed_winner === false)) {
+            winningByJob[jobUuid] = match;
+        }
+    }
+    return { byJobAndResume, winningByJob };
+}
+
+function resolveLeadMatch(
+    lead: ApplicationLead,
+    byJobAndResume: Record<string, MatchScore>,
+    winningByJob: Record<string, MatchScore>,
+): MatchScore | null {
+    const jobId = extractJobPostingId(lead.job_posting);
+    if (!jobId) {
+        return null;
+    }
+    if (lead.resume_profile) {
+        const exact = byJobAndResume[`${jobId}:${lead.resume_profile}`];
+        if (exact) {
+            return exact;
+        }
+    }
+    return winningByJob[jobId] ?? null;
 }
 
 interface PipelineLeadCardProps {
     lead: ApplicationLead;
     match: MatchScore | null;
+    resumes: ResumeProfile[];
     isEditingNotes: boolean;
     isEditingFollowup: boolean;
     isDeleting: boolean;
     isUpdatingPriority: boolean;
+    isUpdatingResume: boolean;
     notesDraft: string;
     followupDraft: string;
     onNotesDraftChange: (next: string) => void;
@@ -152,6 +198,7 @@ interface PipelineLeadCardProps {
     onOpenGapDetails: (match: MatchScore) => void;
     onCyclePriority: (lead: ApplicationLead) => void;
     onStatusChange: (lead: ApplicationLead, nextStatus: LeadStatus) => void;
+    onResumeChange: (lead: ApplicationLead, nextResumeUuid: string | null) => void;
     onStartEditingNotes: (lead: ApplicationLead) => void;
     onCancelEditingNotes: () => void;
     onSaveNotes: (lead: ApplicationLead) => void;
@@ -173,7 +220,11 @@ function LeadScoreBadges({
     const overdue = isLeadFollowupOverdue(lead);
     const followupDate = formatFollowupDate(lead.next_action_at);
     const followupExact = formatFollowupExact(lead.next_action_at);
-    if (!match && !isClosed && !followupDate) {
+    const jobLanguage = match?.job_posting.language ?? lead.language;
+    const jobLanguageBadge = formatKnownLanguageBadge(jobLanguage);
+    const resumeSummary = lead.resume_profile_summary ?? match?.resume_profile_summary ?? null;
+    const resumeLangBadge = formatKnownLanguageBadge(resumeSummary?.language);
+    if (!match && !isClosed && !followupDate && !jobLanguageBadge && !resumeSummary) {
         return null;
     }
 
@@ -222,6 +273,35 @@ function LeadScoreBadges({
                         </span>
                     </Tooltip>
                 </>
+            )}
+
+            {jobLanguageBadge && (
+                <Tooltip content={`Detected job language: ${getLanguageName(jobLanguage)}`}>
+                    <span
+                        className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[11px] font-semibold ${languageBadgeStyle(jobLanguage)}`}
+                    >
+                        <Globe2 className="h-3 w-3" />
+                        {jobLanguageBadge}
+                    </span>
+                </Tooltip>
+            )}
+
+            {resumeSummary && (
+                <Tooltip
+                    content={`Submitted / matched resume: ${resumeSummary.label}${
+                        resumeLangBadge ? ` (${getLanguageName(resumeSummary.language)})` : ""
+                    }`}
+                >
+                    <span className="inline-flex max-w-[160px] items-center gap-1 rounded-md bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-200 ring-1 ring-violet-500/25">
+                        <FileText className="h-3 w-3 shrink-0 text-violet-400" />
+                        {resumeLangBadge && (
+                            <span className="shrink-0 whitespace-nowrap font-mono text-[10px] font-semibold text-violet-300">
+                                {resumeLangBadge}
+                            </span>
+                        )}
+                        <span className="min-w-0 truncate">{resumeSummary.label}</span>
+                    </span>
+                </Tooltip>
             )}
 
             {followupDate && (
@@ -296,10 +376,12 @@ function getFollowupButtonClass(overdue: boolean, hasFollowup: boolean): string 
 function PipelineLeadCard({
     lead,
     match,
+    resumes,
     isEditingNotes,
     isEditingFollowup,
     isDeleting,
     isUpdatingPriority,
+    isUpdatingResume,
     notesDraft,
     followupDraft,
     onNotesDraftChange,
@@ -308,6 +390,7 @@ function PipelineLeadCard({
     onOpenGapDetails,
     onCyclePriority,
     onStatusChange,
+    onResumeChange,
     onStartEditingNotes,
     onCancelEditingNotes,
     onSaveNotes,
@@ -532,6 +615,38 @@ function PipelineLeadCard({
                 </div>
             </div>
 
+            {resumes.length > 0 && (
+                <div className="flex items-center gap-2 border-t border-zinc-800/60 pt-2.5">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                    <label htmlFor={`resume-${lead.uuid}`} className="sr-only">
+                        Resume used for this lead
+                    </label>
+                    <div className="relative min-w-0 flex-1">
+                        <select
+                            id={`resume-${lead.uuid}`}
+                            value={lead.resume_profile ?? ""}
+                            disabled={isUpdatingResume}
+                            onChange={(e) => onResumeChange(lead, e.target.value || null)}
+                            className="w-full appearance-none rounded-lg border border-zinc-800/80 bg-zinc-900/70 py-1.5 pr-7 pl-2.5 text-[11px] font-medium text-zinc-300 transition hover:border-zinc-700 focus:border-violet-500 focus:outline-none disabled:opacity-50"
+                        >
+                            <option value="">No resume linked</option>
+                            {resumes.map((resume) => {
+                                const langBadge = formatKnownLanguageBadge(resume.language);
+                                return (
+                                    <option key={resume.uuid} value={resume.uuid}>
+                                        {langBadge
+                                            ? `[${langBadge}] ${resume.label}`
+                                            : resume.label}
+                                        {resume.is_active ? "" : " (Paused)"}
+                                    </option>
+                                );
+                            })}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute top-2 right-2 h-3 w-3 text-zinc-500" />
+                    </div>
+                </div>
+            )}
+
             {isEditingFollowup && (
                 <div className="space-y-3 border-t border-zinc-800 pt-3.5">
                     <label
@@ -626,11 +741,14 @@ function PipelineLeadCard({
 interface PipelineStageColumnProps {
     stage: StageMeta;
     stageLeads: ApplicationLead[];
-    matchesByJobId: Record<string, MatchScore>;
+    matchesByJobAndResume: Record<string, MatchScore>;
+    winningMatchByJobId: Record<string, MatchScore>;
+    resumes: ResumeProfile[];
     editingNotesId: string | null;
     editingFollowupId: string | null;
     deletingId: string | null;
     updatingPriorityId: string | null;
+    updatingResumeId: string | null;
     notesDraft: string;
     followupDraft: string;
     onRegisterRef: (el: HTMLElement | null) => void;
@@ -640,6 +758,7 @@ interface PipelineStageColumnProps {
     onOpenGapDetails: (match: MatchScore) => void;
     onCyclePriority: (lead: ApplicationLead) => void;
     onStatusChange: (lead: ApplicationLead, nextStatus: LeadStatus) => void;
+    onResumeChange: (lead: ApplicationLead, nextResumeUuid: string | null) => void;
     onStartEditingNotes: (lead: ApplicationLead) => void;
     onCancelEditingNotes: () => void;
     onSaveNotes: (lead: ApplicationLead) => void;
@@ -652,11 +771,14 @@ interface PipelineStageColumnProps {
 function PipelineStageColumn({
     stage,
     stageLeads,
-    matchesByJobId,
+    matchesByJobAndResume,
+    winningMatchByJobId,
+    resumes,
     editingNotesId,
     editingFollowupId,
     deletingId,
     updatingPriorityId,
+    updatingResumeId,
     notesDraft,
     followupDraft,
     onRegisterRef,
@@ -666,6 +788,7 @@ function PipelineStageColumn({
     onOpenGapDetails,
     onCyclePriority,
     onStatusChange,
+    onResumeChange,
     onStartEditingNotes,
     onCancelEditingNotes,
     onSaveNotes,
@@ -701,17 +824,22 @@ function PipelineStageColumn({
                 )}
 
                 {stageLeads.map((lead) => {
-                    const jobId = extractJobPostingId(lead.job_posting);
-                    const match = jobId ? (matchesByJobId[jobId] ?? null) : null;
+                    const match = resolveLeadMatch(
+                        lead,
+                        matchesByJobAndResume,
+                        winningMatchByJobId,
+                    );
                     return (
                         <PipelineLeadCard
                             key={lead.uuid}
                             lead={lead}
                             match={match}
+                            resumes={resumes}
                             isEditingNotes={editingNotesId === lead.uuid}
                             isEditingFollowup={editingFollowupId === lead.uuid}
                             isDeleting={deletingId === lead.uuid}
                             isUpdatingPriority={updatingPriorityId === lead.uuid}
+                            isUpdatingResume={updatingResumeId === lead.uuid}
                             notesDraft={notesDraft}
                             followupDraft={followupDraft}
                             onNotesDraftChange={onNotesDraftChange}
@@ -720,6 +848,7 @@ function PipelineStageColumn({
                             onOpenGapDetails={onOpenGapDetails}
                             onCyclePriority={onCyclePriority}
                             onStatusChange={onStatusChange}
+                            onResumeChange={onResumeChange}
                             onStartEditingNotes={onStartEditingNotes}
                             onCancelEditingNotes={onCancelEditingNotes}
                             onSaveNotes={onSaveNotes}
@@ -780,7 +909,11 @@ export function PipelineTrackerView({
     onOpenAccountSettings,
 }: Readonly<PipelineTrackerViewProps> = {}) {
     const [leads, setLeads] = useState<ApplicationLead[]>([]);
-    const [matchesByJobId, setMatchesByJobId] = useState<Record<string, MatchScore>>({});
+    const [resumes, setResumes] = useState<ResumeProfile[]>([]);
+    const [matchesByJobAndResume, setMatchesByJobAndResume] = useState<Record<string, MatchScore>>(
+        {},
+    );
+    const [winningMatchByJobId, setWinningMatchByJobId] = useState<Record<string, MatchScore>>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [editingNotesId, setEditingNotesId] = useState<string | null>(null);
@@ -790,6 +923,7 @@ export function PipelineTrackerView({
     const [exportingFormat, setExportingFormat] = useState<"csv" | "json" | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
     const [updatingPriorityId, setUpdatingPriorityId] = useState<string | null>(null);
+    const [updatingResumeId, setUpdatingResumeId] = useState<string | null>(null);
     const [hideEmptyStages, setHideEmptyStages] = useState(false);
     const [selectedJobContext, setSelectedJobContext] = useState<{
         preview: JobListingPreview;
@@ -804,9 +938,10 @@ export function PipelineTrackerView({
             setLoading(true);
             setError(null);
             try {
-                const [leadsResult, matchesResult] = await Promise.allSettled([
+                const [leadsResult, matchesResult, resumesResult] = await Promise.allSettled([
                     fetchAllPages(vektrynApi.listLeads),
                     fetchAllPages(vektrynApi.listMatches),
+                    fetchAllPages(vektrynApi.listResumes),
                 ]);
                 if (cancelled) return;
 
@@ -816,11 +951,15 @@ export function PipelineTrackerView({
                 setLeads(leadsResult.value);
 
                 if (matchesResult.status === "fulfilled") {
-                    const nextMatchMap: Record<string, MatchScore> = {};
-                    for (const match of matchesResult.value) {
-                        nextMatchMap[match.job_posting.uuid] = match;
-                    }
-                    setMatchesByJobId(nextMatchMap);
+                    const { byJobAndResume, winningByJob } = buildLeadMatchLookup(
+                        matchesResult.value,
+                    );
+                    setMatchesByJobAndResume(byJobAndResume);
+                    setWinningMatchByJobId(winningByJob);
+                }
+
+                if (resumesResult.status === "fulfilled") {
+                    setResumes(resumesResult.value);
                 }
             } catch (err) {
                 if (!cancelled) {
@@ -856,6 +995,22 @@ export function PipelineTrackerView({
             setLeads((prev) => prev.map((item) => (item.uuid === lead.uuid ? updated : item)));
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to update lead status");
+        }
+    }
+
+    async function handleResumeChange(lead: ApplicationLead, nextResumeUuid: string | null) {
+        if ((lead.resume_profile ?? null) === nextResumeUuid) return;
+        setUpdatingResumeId(lead.uuid);
+        setError(null);
+        try {
+            const updated = await vektrynApi.updateLead(lead.uuid, {
+                resume_profile: nextResumeUuid,
+            });
+            setLeads((prev) => prev.map((item) => (item.uuid === lead.uuid ? updated : item)));
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to update linked resume");
+        } finally {
+            setUpdatingResumeId(null);
         }
     }
 
@@ -1007,11 +1162,14 @@ export function PipelineTrackerView({
                             key={stage.id}
                             stage={stage}
                             stageLeads={stageLeads}
-                            matchesByJobId={matchesByJobId}
+                            matchesByJobAndResume={matchesByJobAndResume}
+                            winningMatchByJobId={winningMatchByJobId}
+                            resumes={resumes}
                             editingNotesId={editingNotesId}
                             editingFollowupId={editingFollowupId}
                             deletingId={deletingId}
                             updatingPriorityId={updatingPriorityId}
+                            updatingResumeId={updatingResumeId}
                             notesDraft={notesDraft}
                             followupDraft={followupDraft}
                             onRegisterRef={(el) => {
@@ -1024,6 +1182,9 @@ export function PipelineTrackerView({
                             onCyclePriority={(lead) => void handleCyclePriority(lead)}
                             onStatusChange={(lead, nextStatus) =>
                                 void handleStatusChange(lead, nextStatus)
+                            }
+                            onResumeChange={(lead, nextResumeUuid) =>
+                                void handleResumeChange(lead, nextResumeUuid)
                             }
                             onStartEditingNotes={startEditingNotes}
                             onCancelEditingNotes={() => setEditingNotesId(null)}

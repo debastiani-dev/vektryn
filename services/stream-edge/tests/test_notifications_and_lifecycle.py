@@ -155,7 +155,7 @@ def test_matcher_commits_before_publishing_alerts(monkeypatch) -> None:
     monkeypatch.setattr(matcher, "_upsert_job_posting", lambda *_a, **_kw: job_uuid)
     monkeypatch.setattr(
         matcher,
-        "_score_and_persist_pair",
+        "_score_and_persist_winner",
         lambda *_a, **_kw: matcher._PairScoreResult(alert=alert_event, scored=True),
     )
 

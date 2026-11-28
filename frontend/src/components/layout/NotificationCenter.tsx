@@ -8,6 +8,7 @@ import {
     CheckCheck,
     Database,
     FileCheck2,
+    FileText,
     Kanban,
     KeyRound,
     Loader2,
@@ -22,6 +23,7 @@ import { useState } from "react";
 import type { NotificationFilter } from "../../hooks/useNotifications";
 import type { NotificationItem } from "../../types/models";
 import { formatExactDate, formatRelativeTime, scoreBadgeStyle } from "../../utils/format";
+import { formatKnownLanguageBadge, getLanguageName } from "../../utils/languages";
 import { extractPayloadString, formatUnreadBadge } from "../../utils/notifications";
 import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
@@ -166,7 +168,7 @@ function isJobMatchNotification(kind: NotificationItem["kind"]): boolean {
     return kind === "match_alert" || kind === "manual_import_ready";
 }
 
-function NotificationCard({
+export function NotificationCard({
     item,
     isOpeningGap,
     isSavingJob,
@@ -181,6 +183,9 @@ function NotificationCard({
 }: Readonly<NotificationCardProps>) {
     const matchScoreUuid = extractPayloadString(item, "match_score_uuid");
     const jobPostingUuid = extractPayloadString(item, "job_posting_uuid");
+    const resumeProfileLabel = extractPayloadString(item, "resume_profile_label");
+    const resumeLanguage = extractPayloadString(item, "resume_language");
+    const resumeLangBadge = formatKnownLanguageBadge(resumeLanguage);
     const isMatchItem = isJobMatchNotification(item.kind);
     const relativeTime = formatRelativeTime(item.created_at) ?? "Just now";
     const exactTime = formatExactDate(item.created_at) ?? item.created_at;
@@ -203,6 +208,24 @@ function NotificationCard({
                             />
                         )}
                         <NotificationKindBadge item={item} />
+                        {isMatchItem && resumeProfileLabel && (
+                            <Tooltip
+                                content={`Matched resume: ${resumeProfileLabel}${
+                                    resumeLangBadge ? ` (${getLanguageName(resumeLanguage)})` : ""
+                                }`}
+                                side="bottom"
+                            >
+                                <span className="inline-flex max-w-[180px] items-center gap-1 rounded-md bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-200 ring-1 ring-violet-500/25">
+                                    <FileText className="h-3 w-3 shrink-0 text-violet-400" />
+                                    {resumeLangBadge && (
+                                        <span className="shrink-0 whitespace-nowrap font-mono text-[10px] font-semibold text-violet-300">
+                                            {resumeLangBadge}
+                                        </span>
+                                    )}
+                                    <span className="min-w-0 truncate">{resumeProfileLabel}</span>
+                                </span>
+                            </Tooltip>
+                        )}
                         <Tooltip content={exactTime} side="bottom">
                             <span className="font-mono text-[11px] text-zinc-500">
                                 {relativeTime}

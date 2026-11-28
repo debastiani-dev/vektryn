@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { LiveMatchAlert } from "../types/models";
 import { getAlertDedupeKey } from "../utils/notifications";
 
+const INITIAL_RECONNECT_DELAY_MS = 1_500;
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
+export function computeReconnectDelayMs(attempt: number): number {
+    const safeAttempt = Math.max(0, Math.floor(attempt));
+    return Math.min(MAX_RECONNECT_DELAY_MS, INITIAL_RECONNECT_DELAY_MS * 2 ** safeAttempt);
+}
+
 interface UseAlertStreamOptions {
     onAlert?: (alert: LiveMatchAlert) => void;
     onOpen?: () => void;
@@ -38,13 +46,10 @@ export function useAlertStream(
         }
 
         const query = `?token=${encodeURIComponent(streamToken)}`;
-        const source = new EventSource(`/stream/alerts${query}`);
-
-        source.onopen = () => {
-            setStreamConnected(true);
-            onOpenRef.current?.();
-        };
-        source.onerror = () => setStreamConnected(false);
+        let disposed = false;
+        let reconnectAttempt = 0;
+        let reconnectTimer: number | null = null;
+        let source: EventSource | null = null;
 
         const handleMatchAlert = (event: MessageEvent) => {
             try {
@@ -55,11 +60,53 @@ export function useAlertStream(
                 // Ignore malformed SSE frames
             }
         };
-        source.addEventListener("match_alert", handleMatchAlert);
+
+        const scheduleReconnect = () => {
+            if (disposed || reconnectTimer !== null) {
+                return;
+            }
+            const delayMs = computeReconnectDelayMs(reconnectAttempt);
+            reconnectAttempt += 1;
+            reconnectTimer = window.setTimeout(() => {
+                reconnectTimer = null;
+                if (!disposed) {
+                    connect();
+                }
+            }, delayMs);
+        };
+
+        const connect = () => {
+            const nextSource = new EventSource(`/stream/alerts${query}`);
+            source = nextSource;
+
+            nextSource.onopen = () => {
+                reconnectAttempt = 0;
+                setStreamConnected(true);
+                onOpenRef.current?.();
+            };
+            nextSource.onerror = () => {
+                setStreamConnected(false);
+                if (!disposed && nextSource.readyState === EventSource.CLOSED) {
+                    nextSource.removeEventListener("match_alert", handleMatchAlert);
+                    nextSource.close();
+                    scheduleReconnect();
+                }
+            };
+            nextSource.addEventListener("match_alert", handleMatchAlert);
+        };
+
+        connect();
 
         return () => {
-            source.removeEventListener("match_alert", handleMatchAlert);
-            source.close();
+            disposed = true;
+            if (reconnectTimer !== null) {
+                window.clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            if (source) {
+                source.removeEventListener("match_alert", handleMatchAlert);
+                source.close();
+            }
             setStreamConnected(false);
         };
     }, [streamToken]);

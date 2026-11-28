@@ -1,5 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import type { ResumeProfile } from "../../types/models";
+import { formatLanguageBadge, UNKNOWN_LANGUAGE } from "../../utils/languages";
 import {
     CONTRACT_OPTIONS,
     type FilterChoice,
@@ -10,6 +11,7 @@ import {
     SOURCE_OPTIONS,
     WORK_MODE_OPTIONS,
 } from "../../utils/radarFilters";
+import { LanguageCombobox } from "../ui/LanguageCombobox";
 
 function FilterSelectField({
     id,
@@ -57,6 +59,7 @@ function FilterSelectField({
 export function MetadataFiltersPanel({
     resumes,
     resumeFilter,
+    hideResumeSelect = false,
     minScore,
     filters,
     onResumeChange,
@@ -65,16 +68,27 @@ export function MetadataFiltersPanel({
 }: Readonly<{
     resumes: ReadonlyArray<ResumeProfile>;
     resumeFilter: string;
+    hideResumeSelect?: boolean;
     minScore: number;
     filters: RadarMetadataFilters;
     onResumeChange: (value: string) => void;
     onMinScoreChange: (value: number) => void;
     onUpdateMetadata: (patch: Partial<RadarMetadataFilters>) => void;
 }>) {
-    const resumeOptions: FilterChoice[] = resumes.map((r) => ({
-        value: r.uuid,
-        label: r.label,
-    }));
+    const activeResumes = resumes.filter((r) => r.is_active);
+    const resumeOptions: FilterChoice[] = resumes.map((r) => {
+        const langSuffix =
+            r.language && r.language !== UNKNOWN_LANGUAGE
+                ? ` (${formatLanguageBadge(r.language)})`
+                : "";
+        return {
+            value: r.uuid,
+            label: `${r.label}${langSuffix}`,
+        };
+    });
+    const pinnedLanguageCodes = activeResumes
+        .map((r) => r.language)
+        .filter((code): code is string => Boolean(code && code !== UNKNOWN_LANGUAGE));
     const minFitOptions: FilterChoice[] = MIN_FIT_OPTIONS.filter((o) => o.value > 0).map((o) => ({
         value: String(o.value),
         label: o.label,
@@ -82,13 +96,32 @@ export function MetadataFiltersPanel({
 
     return (
         <div className="grid grid-cols-1 gap-3.5 border-t border-zinc-800/80 pt-4 sm:grid-cols-2 lg:grid-cols-3">
-            <FilterSelectField
-                id="radar-filter-resume"
-                label="Resume Profile"
-                allLabel="All resumes"
-                value={resumeFilter}
-                options={resumeOptions}
-                onChange={onResumeChange}
+            {!hideResumeSelect && (
+                <FilterSelectField
+                    id="radar-filter-resume"
+                    label="Resume Profile"
+                    allLabel={
+                        activeResumes.length >= 2
+                            ? "All Active Resumes (Auto-Matched)"
+                            : "All resumes"
+                    }
+                    value={resumeFilter}
+                    options={resumeOptions}
+                    onChange={onResumeChange}
+                />
+            )}
+            <LanguageCombobox
+                id="radar-filter-language"
+                label="Language"
+                value={filters.language}
+                onChange={(language) => onUpdateMetadata({ language })}
+                specialOptions={[
+                    { code: "", label: "All languages" },
+                    { code: UNKNOWN_LANGUAGE, label: "Unknown" },
+                ]}
+                pinnedCodes={pinnedLanguageCodes}
+                placeholder="Search any ISO 639-1 language..."
+                compact
             />
             <FilterSelectField
                 id="radar-filter-min-fit"

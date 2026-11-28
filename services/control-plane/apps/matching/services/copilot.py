@@ -19,6 +19,8 @@ from apps.base.services.byok import (
 )
 from apps.matching.models.artifacts import MatchArtifact, MatchArtifactKind
 from apps.matching.models.matching import MatchScore
+from vektryn_contracts.enums import UNKNOWN_LANGUAGE
+from vektryn_contracts.language import normalize_language_code
 
 logger = logging.getLogger(__name__)
 
@@ -105,8 +107,24 @@ _SYSTEM_INSTRUCTION = (
     "3. If a stronger bullet or letter would benefit from a metric not in the resume, insert a clear [add metric] placeholder.\n"
     "4. If the job requests a skill absent from the resume, do NOT claim mastery—frame genuine transferable experience honestly.\n"
     "5. Output clean Markdown only (no code-fence wrapper around the whole response). Keep prose crisp and ready to paste.\n"
-    "6. When verified candidate name or profile links are provided under CANDIDATE PROFILE & LINKS, use them naturally in cover letters and outreach instead of placeholders like [Your Name] or [LinkedIn]."
+    "6. When verified candidate name or profile links are provided under CANDIDATE PROFILE & LINKS, use them naturally in cover letters and outreach instead of placeholders like [Your Name] or [LinkedIn].\n"
+    "7. Output language alignment: write the entire response naturally in the ISO 639-1 Target Output Language specified in the prompt, unless the candidate's explicit style/focus guidance asks for a different language. Keep canonical technical terms and product names intact."
 )
+
+
+def resolve_copilot_output_language(match_score: MatchScore) -> str:
+    """Resolve ISO 639-1 output language from job_posting.language -> resume_profile.language -> 'en'."""
+    job_lang = normalize_language_code(
+        getattr(match_score.job_posting, "language", UNKNOWN_LANGUAGE), strict=False
+    )
+    if job_lang != UNKNOWN_LANGUAGE:
+        return job_lang
+    resume_lang = normalize_language_code(
+        getattr(match_score.resume_profile, "language", UNKNOWN_LANGUAGE), strict=False
+    )
+    if resume_lang != UNKNOWN_LANGUAGE:
+        return resume_lang
+    return "en"
 
 
 class CopilotRateLimitError(RuntimeError):
@@ -271,10 +289,18 @@ def build_copilot_prompt(
     _append_section_lines(gap_lines, "Talking Points", match_score.talking_points)
 
     job_tech_stack = _format_list(job.tech_stack)
+    job_language = normalize_language_code(
+        getattr(job, "language", UNKNOWN_LANGUAGE), strict=False
+    )
+    resume_language = normalize_language_code(
+        getattr(resume, "language", UNKNOWN_LANGUAGE), strict=False
+    )
+    output_language = resolve_copilot_output_language(match_score)
     job_meta = [
         f"Title: {job.title}",
         f"Company: {job.company_name}",
         f"Location: {job.location_raw or 'Remote / Unspecified'}",
+        f"Language (ISO 639-1): {job_language}",
         f"Seniority: {job.seniority}",
         f"Contract Type: {job.contract_type}",
     ]
@@ -288,7 +314,9 @@ def build_copilot_prompt(
     sections = [
         "=== TASK ===",
         template,
-        f"\nTone Preference ({tone}): {tone_desc}",
+        f"\nTarget Output Language (ISO 639-1): {output_language} "
+        "(match this language unless the candidate's explicit guidance below requests another language)",
+        f"Tone Preference ({tone}): {tone_desc}",
     ]
     clean_guidance = guidance.strip()[:MAX_GUIDANCE_CHARS]
     if clean_guidance:
@@ -316,6 +344,7 @@ def build_copilot_prompt(
             "\n".join(gap_lines),
             "\n=== CANDIDATE RESUME ===",
             f"Profile Label: {resume.label}",
+            f"Resume Language (ISO 639-1): {resume_language}",
             *([f"Extracted Skills: {resume_skills}"] if resume_skills else []),
             (resume.raw_text or "")[:MAX_RESUME_CONTEXT_CHARS],
         ]

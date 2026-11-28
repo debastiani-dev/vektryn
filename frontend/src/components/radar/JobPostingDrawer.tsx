@@ -37,6 +37,11 @@ import {
     isMailtoUrl,
     workModeBadgeStyle,
 } from "../../utils/format";
+import {
+    formatKnownLanguageBadge,
+    getLanguageName,
+    languageBadgeStyle,
+} from "../../utils/languages";
 import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -51,6 +56,7 @@ export interface JobListingPreview {
     seniority?: SeniorityLevel;
     contract_type?: ContractType;
     work_mode?: WorkMode;
+    language?: string;
     region_eligibility?: string[];
     salary_min?: string | null;
     salary_max?: string | null;
@@ -318,6 +324,8 @@ export function JobPostingDrawer({
     const isActive = job.is_active ?? true;
     const seniorityLabel = job.seniority ? formatSeniority(job.seniority) : "";
     const contractLabel = job.contract_type ? formatContractType(job.contract_type) : "";
+    const jobLanguageBadge = formatKnownLanguageBadge(job.language);
+    const jobLanguageName = getLanguageName(job.language);
     const atsSource = job.ats_source ?? "";
     const regionList = job.region_eligibility ?? [];
     const techStack = job.tech_stack ?? [];
@@ -387,6 +395,20 @@ export function JobPostingDrawer({
                                 <Tooltip content="Employment / contract type" side="bottom">
                                     <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-300">
                                         {contractLabel}
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {jobLanguageBadge && (
+                                <Tooltip
+                                    content={`Detected job language: ${jobLanguageName}`}
+                                    side="bottom"
+                                >
+                                    <span
+                                        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-mono text-xs font-semibold ${languageBadgeStyle(job.language)}`}
+                                    >
+                                        <Globe2 className="h-3 w-3" />
+                                        {jobLanguageBadge}
                                     </span>
                                 </Tooltip>
                             )}

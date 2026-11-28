@@ -1,7 +1,10 @@
+from uuid import UUID
+
 from django.db.models import Count, F, Q
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
@@ -31,6 +34,7 @@ from apps.matching.services.copilot import (
     CopilotUnavailableError,
     get_or_generate_match_artifact,
 )
+from apps.resumes.models.resumes import ResumeProfile
 
 
 class NullsLastOrderingFilter(OrderingFilter):
@@ -78,9 +82,30 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
             return MatchScore.objects.none()
         qs = MatchScore.objects.select_related("job_posting", "resume_profile").filter(
             resume_profile__user=self.request.user,
+            resume_profile__is_deleted=False,
             job_posting__is_deleted=False,
         )
         if self.action == "list":
+            raw_resume_param = (
+                self.request.query_params.get("resume_profile") or ""
+            ).strip()
+            if raw_resume_param:
+                try:
+                    resume_uuid = UUID(raw_resume_param)
+                except ValueError as exc:
+                    raise ValidationError(
+                        {"resume_profile": "Must be a valid UUID."}
+                    ) from exc
+                if not ResumeProfile.objects.filter(
+                    uuid=resume_uuid, user=self.request.user
+                ).exists():
+                    raise NotFound("Resume profile not found.")
+            else:
+                qs = qs.filter(
+                    resume_profile__is_active=True,
+                    is_routed_winner=True,
+                )
+
             include_inactive = self.request.query_params.get(
                 "include_inactive", ""
             ).lower() in {"1", "true", "yes"}

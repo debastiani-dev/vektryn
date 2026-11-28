@@ -196,6 +196,9 @@ def _build_match_filter_clauses(
     if resume_profile_uuid is not None:
         clauses.append("ms.resume_profile_id = %s")
         params.append(str(resume_profile_uuid))
+    else:
+        clauses.append("rp.is_active = TRUE")
+        clauses.append("ms.is_routed_winner = TRUE")
     return " AND ".join(clauses), params
 
 

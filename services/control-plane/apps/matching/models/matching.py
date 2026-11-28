@@ -29,6 +29,11 @@ class MatchScore(BaseModel):
     resume_content_hash = models.CharField(max_length=64)
     scoring_model = models.CharField(max_length=64, blank=True, default="")
     alert_sent_at = models.DateTimeField(null=True, blank=True)
+    is_routed_winner = models.BooleanField(
+        default=True,
+        db_default=True,
+        db_index=True,
+    )
 
     class Meta:
         ordering = ["-fit_score", "-cosine_similarity", "-created_at"]
@@ -51,6 +56,19 @@ class MatchScore(BaseModel):
             models.Index(
                 fields=["resume_profile", "-fit_score", "-created_at"],
                 name="idx_match_score_profile_rank",
+            ),
+            models.Index(
+                fields=[
+                    "resume_profile",
+                    "is_routed_winner",
+                    "-fit_score",
+                    "-created_at",
+                ],
+                name="idx_match_profile_winner_rank",
+            ),
+            models.Index(
+                fields=["job_posting", "is_routed_winner"],
+                name="idx_match_job_winner",
             ),
         ]
 

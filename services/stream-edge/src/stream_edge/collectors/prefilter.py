@@ -149,6 +149,30 @@ def _parse_str_list(raw_val: object) -> list[str]:
     return []
 
 
+def _merge_gate_union(target: set[str], unrestricted: bool, raw_values: object) -> bool:
+    parsed = _parse_str_list(raw_values)
+    if not parsed:
+        return True
+    target.update(parsed)
+    return unrestricted
+
+
+def _finalize_gate_union(target: set[str], unrestricted: bool) -> set[str]:
+    return set() if unrestricted else target
+
+
+def _merge_gate_union(target: set[str], unrestricted: bool, raw_values: object) -> bool:
+    parsed = _parse_str_list(raw_values)
+    if not parsed:
+        return True
+    target.update(parsed)
+    return unrestricted
+
+
+def _finalize_gate_union(target: set[str], unrestricted: bool) -> set[str]:
+    return set() if unrestricted else target
+
+
 def _collect_profile_rows(
     rows: list[tuple[object, ...]],
 ) -> tuple[list[str], set[str], set[str], set[str], set[str], set[str], list[str]]:
@@ -158,6 +182,9 @@ def _collect_profile_rows(
     contracts: set[str] = set()
     regions: set[str] = set()
     work_modes: set[str] = set()
+    has_unrestricted_seniority = False
+    has_unrestricted_contract = False
+    has_unrestricted_region = False
     has_unrestricted_work_mode = False
     discipline_blobs: list[str] = []
 
@@ -175,26 +202,32 @@ def _collect_profile_rows(
         resume_ids.append(str(row_uuid))
         clean_skills = _parse_str_list(raw_skills)
         skills.update(clean_skills)
-        seniorities.update(_parse_str_list(raw_sen))
-        contracts.update(_parse_str_list(raw_contract))
-        regions.update(_parse_str_list(raw_region))
-        row_work_modes = _parse_str_list(extra[0]) if extra else []
-        if not row_work_modes:
-            has_unrestricted_work_mode = True
-        else:
-            work_modes.update(row_work_modes)
+
+        has_unrestricted_seniority = _merge_gate_union(
+            seniorities, has_unrestricted_seniority, raw_sen
+        )
+        has_unrestricted_contract = _merge_gate_union(
+            contracts, has_unrestricted_contract, raw_contract
+        )
+        has_unrestricted_region = _merge_gate_union(
+            regions, has_unrestricted_region, raw_region
+        )
+        raw_work_modes = extra[0] if extra else None
+        has_unrestricted_work_mode = _merge_gate_union(
+            work_modes, has_unrestricted_work_mode, raw_work_modes
+        )
+
         discipline_blobs.append(
             f"{label or ''}\n{' '.join(clean_skills)}\n{(raw_text or '')[:1500]}"
         )
 
-    resolved_work_modes = set() if has_unrestricted_work_mode else work_modes
     return (
         resume_ids,
         skills,
-        seniorities,
-        contracts,
-        regions,
-        resolved_work_modes,
+        _finalize_gate_union(seniorities, has_unrestricted_seniority),
+        _finalize_gate_union(contracts, has_unrestricted_contract),
+        _finalize_gate_union(regions, has_unrestricted_region),
+        _finalize_gate_union(work_modes, has_unrestricted_work_mode),
         discipline_blobs,
     )
 

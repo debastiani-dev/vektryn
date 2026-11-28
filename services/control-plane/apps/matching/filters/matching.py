@@ -1,6 +1,7 @@
 import django_filters
 from django.db.models import F
 
+from apps.jobs.filters.jobs import parse_language_filter_values
 from apps.matching.models.matching import MatchScore
 
 
@@ -18,6 +19,7 @@ class MatchScoreFilter(django_filters.FilterSet):
     seniority = django_filters.CharFilter(field_name="job_posting__seniority")
     contract_type = django_filters.CharFilter(field_name="job_posting__contract_type")
     work_mode = django_filters.CharFilter(method="filter_work_mode")
+    language = django_filters.CharFilter(method="filter_language")
     ats_source = django_filters.CharFilter(field_name="job_posting__ats_source")
     region = django_filters.CharFilter(method="filter_region")
     tech = django_filters.CharFilter(method="filter_tech")
@@ -56,3 +58,9 @@ class MatchScoreFilter(django_filters.FilterSet):
         if not modes:
             return queryset
         return queryset.filter(job_posting__work_mode__in=modes)
+
+    def filter_language(self, queryset, _name: str, value: str):
+        languages = parse_language_filter_values(value)
+        if not languages:
+            return queryset
+        return queryset.filter(job_posting__language__in=languages)

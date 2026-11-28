@@ -25,6 +25,9 @@ class ResumeProfileViewSet(viewsets.ModelViewSet):
             return ResumeProfile.objects.none()
         return ResumeProfile.objects.filter(user=self.request.user)
 
+    def perform_destroy(self, instance: ResumeProfile) -> None:
+        ResumeService(user=self.request.user).soft_delete_profile(instance)
+
     def handle_exception(self, exc):
         if isinstance(exc, GeminiServiceError):
             payload: dict[str, object] = {

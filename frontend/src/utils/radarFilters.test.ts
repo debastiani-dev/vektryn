@@ -33,9 +33,10 @@ describe("radarFilters", () => {
                     workMode: "remote",
                     region: "",
                     atsSource: "manual",
+                    language: "pt",
                 },
             }),
-        ).toBe(6);
+        ).toBe(7);
     });
 
     it("builds removable active chips with readable labels", () => {
@@ -49,6 +50,7 @@ describe("radarFilters", () => {
                 workMode: "onsite",
                 region: "brazil",
                 atsSource: "manual",
+                language: "pt",
             },
         });
 
@@ -58,6 +60,7 @@ describe("radarFilters", () => {
             { key: "seniority", prefix: "Seniority", label: "Senior" },
             { key: "contractType", prefix: "Contract", label: "PJ" },
             { key: "workMode", prefix: "Work Mode", label: "On-site" },
+            { key: "language", prefix: "Language", label: "Portuguese (PT)" },
             { key: "region", prefix: "Region", label: "Brazil" },
             { key: "atsSource", prefix: "Source", label: "Manual Import" },
         ]);

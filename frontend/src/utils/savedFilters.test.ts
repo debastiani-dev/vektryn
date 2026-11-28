@@ -24,6 +24,7 @@ describe("savedFilters helpers", () => {
                 workMode: "remote",
                 region: "brazil",
                 atsSource: "",
+                language: "pt",
             },
             sortBy: "posted_at",
         });
@@ -39,6 +40,7 @@ describe("savedFilters helpers", () => {
             contract_type: "pj",
             work_mode: "remote",
             region: "brazil",
+            language: "pt",
             sort_by: "posted_at",
         });
     });

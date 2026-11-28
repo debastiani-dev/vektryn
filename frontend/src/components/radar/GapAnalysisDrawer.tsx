@@ -7,6 +7,8 @@ import {
     CheckCircle2,
     Clock,
     ExternalLink,
+    FileText,
+    Globe2,
     Mail,
     MessageSquareQuote,
     RefreshCw,
@@ -35,6 +37,11 @@ import {
     workModeBadgeStyle,
 } from "../../utils/format";
 import { splitLegacySummaryParagraphs } from "../../utils/fitSummary";
+import {
+    formatKnownLanguageBadge,
+    getLanguageName,
+    languageBadgeStyle,
+} from "../../utils/languages";
 import { SlideOverDrawer } from "../ui/SlideOverDrawer";
 import { Tooltip } from "../ui/Tooltip";
 import { CopilotPanel } from "./CopilotPanel";
@@ -401,8 +408,14 @@ function GapAnalysisDrawerContent({
     const postedTooltip = postedExact ? `Posted on ${postedExact}` : "Posting date";
 
     const aiFitTooltip = hasAiScore
-        ? "Stage 2 Gemini AI fit score (0–100%) evaluating tech stack, seniority, and experience alignment against your active resume."
-        : "Stage 1 vector match only. Automated roles below the similarity threshold or outside your resume's targeting filters (seniority, contract, or region) skip automatic Gemini scoring to save tokens.";
+        ? "Stage 2 Gemini AI fit score (0–100%) evaluating tech stack, seniority, and experience alignment against the matched resume."
+        : "Stage 1 vector match only. Automated roles below the similarity threshold or outside your resume's targeting filters (seniority, contract, region, or language) skip automatic Gemini scoring to save tokens.";
+    const matchedResumeLabel =
+        match.resume_profile_summary?.label || match.resume_profile_label || "";
+    const matchedResumeLang = match.resume_profile_summary?.language || "unknown";
+    const matchedResumeLangBadge = formatKnownLanguageBadge(matchedResumeLang);
+    const jobLanguageBadge = formatKnownLanguageBadge(job.language);
+    const jobLanguageName = getLanguageName(job.language);
     const vectorTooltip = `Stage 1 pgvector cosine similarity (${vectorPct}%) between your resume embedding and job description.`;
     const alertTooltip = `Meets or exceeds your ${effectiveMinAlertScore}% alert threshold for this resume profile.`;
 
@@ -469,6 +482,43 @@ function GapAnalysisDrawerContent({
                                     {formatContractType(job.contract_type)}
                                 </span>
                             </Tooltip>
+
+                            {jobLanguageBadge && (
+                                <Tooltip
+                                    content={`Detected job language: ${jobLanguageName}`}
+                                    side="bottom"
+                                >
+                                    <span
+                                        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 font-mono text-xs font-semibold ${languageBadgeStyle(job.language)}`}
+                                    >
+                                        <Globe2 className="h-3 w-3" />
+                                        {jobLanguageBadge}
+                                    </span>
+                                </Tooltip>
+                            )}
+
+                            {matchedResumeLabel && (
+                                <Tooltip
+                                    content={`Scored against resume "${matchedResumeLabel}"${
+                                        matchedResumeLangBadge
+                                            ? ` (${getLanguageName(matchedResumeLang)})`
+                                            : ""
+                                    }`}
+                                    side="bottom"
+                                >
+                                    <span className="inline-flex max-w-[280px] items-center gap-1.5 rounded-lg bg-violet-500/12 px-2.5 py-1 text-xs font-medium text-violet-200 ring-1 ring-violet-500/30 sm:max-w-[340px]">
+                                        <FileText className="h-3 w-3 shrink-0 text-violet-400" />
+                                        <span className="min-w-0 truncate">
+                                            Scored with {matchedResumeLabel}
+                                        </span>
+                                        {matchedResumeLangBadge && (
+                                            <span className="shrink-0 whitespace-nowrap font-mono text-[10px] font-semibold text-violet-300">
+                                                · {matchedResumeLangBadge}
+                                            </span>
+                                        )}
+                                    </span>
+                                </Tooltip>
+                            )}
 
                             {salaryLabel && (
                                 <Tooltip content="Reported compensation range" side="bottom">
