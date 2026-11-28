@@ -3,6 +3,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 import json
 import logging
 import math
@@ -13,6 +14,7 @@ from confluent_kafka import KafkaError
 from pgvector.psycopg import register_vector
 import psycopg
 
+from stream_edge.clients.fx_rates import get_cached_usd_rates
 from stream_edge.clients.gemini import (
     UserGeminiScoringManager,
     UserScoringPausedError,
@@ -55,7 +57,9 @@ from vektryn_contracts import (
     is_direct_ats_source,
     is_generic_company_name,
     normalize_company_for_dedup,
+    normalize_currency_code,
     normalize_language_code,
+    normalize_salary_to_annual_usd,
     normalize_title_for_dedup,
     token_jaccard_similarity,
 )
@@ -671,6 +675,86 @@ def _compute_repost_state(
     return was_inactive, int(canonical_repost_count or 0), canonical_last_reposted_at
 
 
+def _compute_normalized_salary_tuple(
+    cur: psycopg.Cursor,
+    salary_min: Decimal | None,
+    salary_max: Decimal | None,
+    salary_currency: str | None,
+    salary_period: str | None,
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    if salary_min is None and salary_max is None:
+        return None, None, None
+    usd_rates = get_cached_usd_rates(getattr(cur, "connection", None))
+    normalized = normalize_salary_to_annual_usd(
+        salary_min,
+        salary_max,
+        normalize_currency_code(salary_currency),
+        salary_period,
+        usd_rates,
+    )
+    if normalized is None:
+        return None, None, None
+    return (
+        normalized.annual_min_usd,
+        normalized.annual_max_usd,
+        normalized.annual_mid_usd,
+    )
+
+
+def _merge_canonical_salary_fields(
+    cur: psycopg.Cursor,
+    *,
+    canonical_salary_min: Decimal | None,
+    canonical_salary_max: Decimal | None,
+    canonical_salary_currency: str | None,
+    canonical_salary_period: str | None,
+    enriched: JobEnrichedEvent,
+) -> tuple[
+    Decimal | None,
+    Decimal | None,
+    str | None,
+    str | None,
+    Decimal | None,
+    Decimal | None,
+    Decimal | None,
+]:
+    """Non-destructively backfill salary fields and compute normalized annual USD."""
+    backfill_salary = (
+        canonical_salary_min is None
+        and canonical_salary_max is None
+        and (enriched.salary_min is not None or enriched.salary_max is not None)
+    )
+    merged_salary_min = enriched.salary_min if backfill_salary else canonical_salary_min
+    merged_salary_max = (
+        enriched.salary_max
+        if backfill_salary or canonical_salary_max is None
+        else canonical_salary_max
+    )
+    merged_salary_currency = normalize_currency_code(
+        canonical_salary_currency or enriched.salary_currency
+    )
+    incoming_period = enriched.salary_period.value if enriched.salary_period else None
+    merged_salary_period = (
+        incoming_period if canonical_salary_period is None else canonical_salary_period
+    )
+    annual_min_usd, annual_max_usd, annual_mid_usd = _compute_normalized_salary_tuple(
+        cur,
+        merged_salary_min,
+        merged_salary_max,
+        merged_salary_currency,
+        merged_salary_period,
+    )
+    return (
+        merged_salary_min,
+        merged_salary_max,
+        merged_salary_currency,
+        merged_salary_period,
+        annual_min_usd,
+        annual_max_usd,
+        annual_mid_usd,
+    )
+
+
 def _merge_into_canonical_job(
     cur: psycopg.Cursor,
     *,
@@ -726,17 +810,21 @@ def _merge_into_canonical_job(
         now=now,
     )
 
-    backfill_salary = canonical_salary_min is None and enriched.salary_min is not None
-    merged_salary_min = enriched.salary_min if backfill_salary else canonical_salary_min
-    merged_salary_max = (
-        enriched.salary_max
-        if backfill_salary or canonical_salary_max is None
-        else canonical_salary_max
-    )
-    merged_salary_currency = canonical_salary_currency or enriched.salary_currency
-    incoming_period = enriched.salary_period.value if enriched.salary_period else None
-    merged_salary_period = (
-        incoming_period if canonical_salary_period is None else canonical_salary_period
+    (
+        merged_salary_min,
+        merged_salary_max,
+        merged_salary_currency,
+        merged_salary_period,
+        merged_annual_min_usd,
+        merged_annual_max_usd,
+        merged_annual_mid_usd,
+    ) = _merge_canonical_salary_fields(
+        cur,
+        canonical_salary_min=canonical_salary_min,
+        canonical_salary_max=canonical_salary_max,
+        canonical_salary_currency=canonical_salary_currency,
+        canonical_salary_period=canonical_salary_period,
+        enriched=enriched,
     )
     merged_work_mode = _backfill_unknown(canonical_work_mode, enriched.work_mode.value)
     merged_language = _backfill_unknown(
@@ -783,6 +871,9 @@ def _merge_into_canonical_job(
         merged_salary_max,
         merged_salary_currency,
         merged_salary_period,
+        merged_annual_min_usd,
+        merged_annual_max_usd,
+        merged_annual_mid_usd,
         json.dumps(merged_stack),
         canonical_company_norm or company_norm,
         canonical_title_norm or title_norm,
@@ -808,6 +899,9 @@ def _merge_into_canonical_job(
                 salary_max = %s,
                 salary_currency = %s,
                 salary_period = %s,
+                salary_annual_min_usd = %s,
+                salary_annual_max_usd = %s,
+                salary_annual_mid_usd = %s,
                 tech_stack = %s::jsonb,
                 company_name_normalized = %s,
                 title_normalized = %s,
@@ -841,6 +935,9 @@ def _merge_into_canonical_job(
                 salary_max = %s,
                 salary_currency = %s,
                 salary_period = %s,
+                salary_annual_min_usd = %s,
+                salary_annual_max_usd = %s,
+                salary_annual_mid_usd = %s,
                 tech_stack = %s::jsonb,
                 company_name_normalized = %s,
                 title_normalized = %s,
@@ -1045,6 +1142,15 @@ def _upsert_or_merge_canonical_job(
     # No canonical match: insert brand-new JobPosting + primary JobPostingSource
     region_list = [r.value for r in enriched.region_eligibility]
     new_job_uuid = uuid.uuid4()
+    norm_salary_currency = normalize_currency_code(enriched.salary_currency)
+    salary_period_val = enriched.salary_period.value if enriched.salary_period else None
+    annual_min_usd, annual_max_usd, annual_mid_usd = _compute_normalized_salary_tuple(
+        cur,
+        enriched.salary_min,
+        enriched.salary_max,
+        norm_salary_currency,
+        salary_period_val,
+    )
     cur.execute(
         """
         INSERT INTO jobs_jobposting (
@@ -1054,6 +1160,7 @@ def _upsert_or_merge_canonical_job(
             location_raw, description_clean,
             seniority, contract_type, work_mode, language, region_eligibility,
             salary_min, salary_max, salary_currency, salary_period,
+            salary_annual_min_usd, salary_annual_max_usd, salary_annual_mid_usd,
             tech_stack, embedding, is_active, posted_at,
             company_name_normalized, title_normalized, description_fingerprint,
             repost_count
@@ -1065,6 +1172,7 @@ def _upsert_or_merge_canonical_job(
             %s, %s,
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
+            %s, %s, %s,
             %s::jsonb, %s::vector, TRUE, %s,
             %s, %s, %s,
             0
@@ -1088,6 +1196,9 @@ def _upsert_or_merge_canonical_job(
             salary_max = EXCLUDED.salary_max,
             salary_currency = EXCLUDED.salary_currency,
             salary_period = EXCLUDED.salary_period,
+            salary_annual_min_usd = EXCLUDED.salary_annual_min_usd,
+            salary_annual_max_usd = EXCLUDED.salary_annual_max_usd,
+            salary_annual_mid_usd = EXCLUDED.salary_annual_mid_usd,
             tech_stack = EXCLUDED.tech_stack,
             embedding = EXCLUDED.embedding,
             is_active = TRUE,
@@ -1118,8 +1229,11 @@ def _upsert_or_merge_canonical_job(
             region_list,
             enriched.salary_min,
             enriched.salary_max,
-            enriched.salary_currency,
-            enriched.salary_period.value if enriched.salary_period else None,
+            norm_salary_currency,
+            salary_period_val,
+            annual_min_usd,
+            annual_max_usd,
+            annual_mid_usd,
             json.dumps(enriched.tech_stack),
             enriched.embedding,
             enriched.posted_at,

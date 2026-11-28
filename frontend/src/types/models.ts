@@ -20,6 +20,26 @@ export type ContractType =
 
 export type WorkMode = "remote" | "hybrid" | "onsite" | "unknown";
 
+export type SalaryPeriod = "hourly" | "monthly" | "annual";
+export type SalaryDisplayCadence = "annual" | "monthly";
+
+export interface SalaryNormalizedPayload {
+    currency: string;
+    annual_min: number | null;
+    annual_max: number | null;
+    monthly_min: number | null;
+    monthly_max: number | null;
+    is_converted: boolean;
+    fx_as_of_date: string;
+}
+
+export interface FxRatesResponse {
+    base: string;
+    as_of_date: string;
+    source: string;
+    rates: Record<string, number>;
+}
+
 export type LeadStatus =
     | "discovered"
     | "saved"
@@ -69,6 +89,10 @@ export interface JobPostingSummary {
     salary_max: string | null;
     salary_currency: string | null;
     salary_period: string | null;
+    salary_annual_min_usd?: string | null;
+    salary_annual_max_usd?: string | null;
+    salary_annual_mid_usd?: string | null;
+    salary_normalized?: SalaryNormalizedPayload | null;
     tech_stack: string[];
     is_active: boolean;
     posted_at: string | null;
@@ -132,6 +156,14 @@ export interface ApplicationLead {
     language?: string;
     repost_count?: number;
     last_reposted_at?: string | null;
+    salary_min?: string | null;
+    salary_max?: string | null;
+    salary_currency?: string | null;
+    salary_period?: string | null;
+    salary_annual_min_usd?: string | null;
+    salary_annual_max_usd?: string | null;
+    salary_annual_mid_usd?: string | null;
+    salary_normalized?: SalaryNormalizedPayload | null;
     status: LeadStatus;
     priority: LeadPriority;
     applied_at: string | null;
@@ -158,6 +190,11 @@ export interface SavedFilterQueryParams {
     hide_muted?: boolean;
     hide_reposts?: boolean;
     untracked_only?: boolean;
+    min_salary?: number;
+    max_salary?: number;
+    salary_currency?: string;
+    salary_period?: SalaryPeriod;
+    disclosed_salary_only?: boolean;
 }
 
 export interface DismissedJob {

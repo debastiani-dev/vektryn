@@ -21,6 +21,8 @@ import type {
     ContractType,
     JobPostingDetail,
     MatchScore,
+    SalaryDisplayCadence,
+    SalaryNormalizedPayload,
     SeniorityLevel,
     WorkMode,
 } from "../../types/models";
@@ -30,12 +32,13 @@ import {
     formatAtsSource,
     formatContractType,
     formatExactDate,
+    formatNormalizedSalary,
     formatRegionEligibility,
     formatRelativeTime,
-    formatSalaryRange,
     formatSeniority,
     formatWorkMode,
     isMailtoUrl,
+    type FormattedSalaryDisplay,
     workModeBadgeStyle,
 } from "../../utils/format";
 import {
@@ -70,6 +73,10 @@ export interface JobListingPreview {
     salary_max?: string | null;
     salary_currency?: string | null;
     salary_period?: string | null;
+    salary_annual_min_usd?: string | null;
+    salary_annual_max_usd?: string | null;
+    salary_annual_mid_usd?: string | null;
+    salary_normalized?: SalaryNormalizedPayload | null;
     tech_stack?: string[];
     is_active?: boolean;
     posted_at?: string | null;
@@ -79,11 +86,74 @@ export interface JobListingPreview {
 interface JobPostingDrawerProps {
     jobPreview: JobListingPreview | null;
     match?: MatchScore | null;
+    salaryCadence?: SalaryDisplayCadence;
     saving?: boolean;
     saved?: boolean;
     onClose: () => void;
     onSaveLead?: () => void;
     onOpenGapDetails?: () => void;
+}
+
+function CompensationMetaCard({
+    salaryDisplay,
+    rawCurrency,
+}: Readonly<{
+    salaryDisplay: FormattedSalaryDisplay | null;
+    rawCurrency?: string | null;
+}>) {
+    return (
+        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                <Banknote className="h-4 w-4 text-emerald-400" />
+                Compensation
+            </div>
+            {salaryDisplay ? (
+                <>
+                    <Tooltip content={salaryDisplay.tooltip}>
+                        <p
+                            className={`mt-2 inline-block font-mono text-sm font-medium tabular-nums ${
+                                salaryDisplay.isUnverified ? "text-zinc-300" : "text-zinc-100"
+                            }`}
+                        >
+                            {salaryDisplay.label}
+                        </p>
+                    </Tooltip>
+                    {salaryDisplay.isUnverified && (
+                        <p className="mt-1 text-xs text-amber-300/85">Unverified range</p>
+                    )}
+                    {!salaryDisplay.isUnverified && salaryDisplay.isConverted && (
+                        <p className="mt-1 text-xs text-zinc-400">
+                            {salaryDisplay.originalLabel
+                                ? `Original: ${salaryDisplay.originalLabel}`
+                                : `Converted to ${salaryDisplay.displayCurrency ?? "USD"}`}
+                            {salaryDisplay.fxAsOf ? ` · FX ${salaryDisplay.fxAsOf}` : ""}
+                        </p>
+                    )}
+                    {!salaryDisplay.isUnverified &&
+                        !salaryDisplay.isConverted &&
+                        salaryDisplay.originalLabel &&
+                        salaryDisplay.originalLabel !== salaryDisplay.label && (
+                            <p className="mt-1 text-xs text-zinc-400">
+                                Original: {salaryDisplay.originalLabel}
+                            </p>
+                        )}
+                    {!salaryDisplay.isUnverified &&
+                        !salaryDisplay.isConverted &&
+                        (!salaryDisplay.originalLabel ||
+                            salaryDisplay.originalLabel === salaryDisplay.label) &&
+                        rawCurrency && (
+                            <p className="mt-1 text-xs text-zinc-500">
+                                Currency: {rawCurrency.toUpperCase()}
+                            </p>
+                        )}
+                </>
+            ) : (
+                <p className="mt-2 font-mono text-sm font-medium tabular-nums text-zinc-100">
+                    Not disclosed
+                </p>
+            )}
+        </div>
+    );
 }
 
 function DescriptionSkeleton() {
@@ -278,6 +348,7 @@ function JobDrawerFooter({
 export function JobPostingDrawer({
     jobPreview,
     match = null,
+    salaryCadence = "annual",
     saving = false,
     saved = false,
     onClose,
@@ -339,12 +410,7 @@ export function JobPostingDrawer({
     const lastRepostedAt = detail?.last_reposted_at ?? job.last_reposted_at ?? null;
     const regionList = job.region_eligibility ?? [];
     const techStack = job.tech_stack ?? [];
-    const salaryLabel = formatSalaryRange(
-        job.salary_min ?? null,
-        job.salary_max ?? null,
-        job.salary_currency ?? null,
-        job.salary_period ?? null,
-    );
+    const salaryDisplay = formatNormalizedSalary(job, salaryCadence);
     const postedDisplay = formatPostedDisplay(job.posted_at);
     const ingestedExact = formatExactDate(detail?.created_at ?? job.created_at ?? null);
     const closedExact = formatExactDate(detail?.closed_at ?? null);
@@ -483,20 +549,10 @@ export function JobPostingDrawer({
 
                 <div className="min-w-0 flex-1 space-y-4 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4 sm:space-y-6 sm:px-8 sm:py-7">
                     <section className="grid min-w-0 gap-3.5 sm:grid-cols-2 sm:gap-4">
-                        <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
-                            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
-                                <Banknote className="h-4 w-4 text-emerald-400" />
-                                Compensation
-                            </div>
-                            <p className="mt-2 font-mono text-sm font-medium tabular-nums text-zinc-100">
-                                {salaryLabel ?? "Not disclosed"}
-                            </p>
-                            {job.salary_currency && salaryLabel && (
-                                <p className="mt-1 text-xs text-zinc-500">
-                                    Currency: {job.salary_currency.toUpperCase()}
-                                </p>
-                            )}
-                        </div>
+                        <CompensationMetaCard
+                            salaryDisplay={salaryDisplay}
+                            rawCurrency={job.salary_currency}
+                        />
 
                         <div className="rounded-2xl border border-zinc-800/90 bg-zinc-900/45 p-4 ring-1 ring-inset ring-white/[0.03]">
                             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">

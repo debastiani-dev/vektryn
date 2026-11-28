@@ -6,8 +6,14 @@ import type {
     CurrentUser,
     MatchScore,
     NotificationItem,
+    SalaryDisplayCadence,
     UserProfileDetail,
 } from "../../types/models";
+import {
+    getDefaultSalaryCadence,
+    readStoredSalaryCadence,
+    writeStoredSalaryCadence,
+} from "../../utils/format";
 import { extractPayloadString } from "../../utils/notifications";
 import { StackTrendsView } from "../analytics/StackTrendsView";
 import { GapAnalysisDrawer } from "../radar/GapAnalysisDrawer";
@@ -67,6 +73,14 @@ export function AuthenticatedWorkspace({
     const [openingMatchId, setOpeningMatchId] = useState<string | null>(null);
     const [savingJobId, setSavingJobId] = useState<string | null>(null);
     const [savedJobIds, setSavedJobIds] = useState<Set<string>>(() => new Set());
+    const [explicitSalaryCadence, setExplicitSalaryCadence] = useState<SalaryDisplayCadence | null>(
+        () => readStoredSalaryCadence(),
+    );
+
+    const handleChangeSalaryCadence = useCallback((next: SalaryDisplayCadence) => {
+        setExplicitSalaryCadence(next);
+        writeStoredSalaryCadence(next);
+    }, []);
 
     const {
         notifications,
@@ -193,6 +207,9 @@ export function AuthenticatedWorkspace({
     const activeMatchJobId = activeNotificationMatch?.job_posting.uuid ?? "";
     const defaultCopilotTone = user.profile?.default_copilot_tone ?? "balanced";
     const hasGeminiApiKey = Boolean(user.profile?.has_gemini_api_key);
+    const preferredCurrency = user.profile?.preferred_currency ?? "USD";
+    const salaryCadence =
+        explicitSalaryCadence ?? getDefaultSalaryCadence(preferredCurrency);
 
     return (
         <>
@@ -240,6 +257,9 @@ export function AuthenticatedWorkspace({
                         onConsumeInitialSearch={handleConsumeRadarSearch}
                         defaultCopilotTone={defaultCopilotTone}
                         hasGeminiApiKey={hasGeminiApiKey}
+                        preferredCurrency={preferredCurrency}
+                        salaryCadence={salaryCadence}
+                        onChangeSalaryCadence={handleChangeSalaryCadence}
                         onOpenAccountSettings={handleOpenAccountSettings}
                     />
                 )}
@@ -247,6 +267,8 @@ export function AuthenticatedWorkspace({
                     <PipelineTrackerView
                         defaultCopilotTone={defaultCopilotTone}
                         hasGeminiApiKey={hasGeminiApiKey}
+                        preferredCurrency={preferredCurrency}
+                        salaryCadence={salaryCadence}
                         onOpenAccountSettings={handleOpenAccountSettings}
                     />
                 )}
@@ -273,6 +295,7 @@ export function AuthenticatedWorkspace({
                 match={activeNotificationMatch}
                 defaultCopilotTone={defaultCopilotTone}
                 hasGeminiApiKey={hasGeminiApiKey}
+                salaryCadence={salaryCadence}
                 onOpenAccountSettings={handleOpenAccountSettings}
                 saving={activeMatchJobId !== "" && savingJobId === activeMatchJobId}
                 saved={activeMatchJobId !== "" && savedJobIds.has(activeMatchJobId)}

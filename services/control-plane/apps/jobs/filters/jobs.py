@@ -28,7 +28,6 @@ class JobPostingFilter(django_filters.FilterSet):
     region = django_filters.CharFilter(method="filter_region")
     work_mode = django_filters.CharFilter(method="filter_work_mode")
     language = django_filters.CharFilter(method="filter_language")
-    min_salary = django_filters.NumberFilter(field_name="salary_max", lookup_expr="gte")
 
     class Meta:
         model = JobPosting

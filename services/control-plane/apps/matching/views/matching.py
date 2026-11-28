@@ -5,7 +5,6 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
-from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
 from apps.base.services.byok import (
@@ -14,7 +13,16 @@ from apps.base.services.byok import (
     BYOKQuotaExhaustedError,
     BYOKStorageUnavailableError,
 )
+from apps.jobs.filters.salary_filtering import (
+    NullsLastOrderingFilter,
+    apply_salary_filters,
+    parse_and_validate_salary_filter_params,
+)
 from apps.jobs.models.jobs import JobPosting, JobPostingSource
+from apps.jobs.services.fx_rates import (
+    get_request_fx_snapshot,
+    resolve_display_currency,
+)
 from apps.jobs.services.hybrid_search import (
     annotate_rrf_score,
     execute_hybrid_search,
@@ -37,32 +45,6 @@ from apps.matching.services.copilot import (
 from apps.resumes.models.resumes import ResumeProfile
 
 
-class NullsLastOrderingFilter(OrderingFilter):
-    """Apply NULLS LAST for nullable ordering fields so unscored/undated rows sort below populated rows."""
-
-    nulls_last_fields = frozenset({"fit_score", "job_posting__posted_at"})
-
-    def filter_queryset(self, request, queryset, view):
-        ordering = self.get_ordering(request, queryset, view)
-        if not ordering:
-            return queryset
-
-        expressions = []
-        for term in ordering:
-            descending = term.startswith("-")
-            field_name = term.lstrip("-")
-            if field_name in self.nulls_last_fields:
-                expr = F(field_name)
-                expressions.append(
-                    expr.desc(nulls_last=True)
-                    if descending
-                    else expr.asc(nulls_last=True)
-                )
-            else:
-                expressions.append(term)
-        return queryset.order_by(*expressions)
-
-
 class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = MatchScoreSerializer
     filter_backends = [DjangoFilterBackend, NullsLastOrderingFilter]
@@ -72,10 +54,22 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
         "cosine_similarity",
         "created_at",
         "job_posting__posted_at",
+        "job_posting__salary_annual_mid_usd",
+        "job_posting__salary_annual_max_usd",
     ]
     ordering = ["-fit_score", "-cosine_similarity", "-created_at"]
     lookup_field = "uuid"
     queryset = MatchScore.objects.none()
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action in ("list", "retrieve"):
+            fx_snapshot = get_request_fx_snapshot(self.request)
+            context["fx_snapshot"] = fx_snapshot
+            context["display_currency"] = resolve_display_currency(
+                self.request, fx_snapshot
+            )
+        return context
 
     def get_queryset(self):
         if getattr(self, "swagger_fake_view", False):
@@ -126,9 +120,32 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
                 qs = qs.filter(job_posting__is_active=True)
         return qs
 
+    def _apply_match_ordering(self, request, queryset):
+        if (
+            "ordering" not in request.query_params
+            and (request.query_params.get("sort_by") or "").strip().lower() == "salary"
+        ):
+            return queryset.order_by(
+                F("job_posting__salary_annual_mid_usd").desc(nulls_last=True),
+                F("fit_score").desc(nulls_last=True),
+                "-created_at",
+            )
+        return NullsLastOrderingFilter().filter_queryset(request, queryset, self)
+
     def list(self, request, *args, **kwargs):
+        fx_snapshot = get_request_fx_snapshot(request)
+        resolve_display_currency(request, fx_snapshot)
+        salary_bounds = parse_and_validate_salary_filter_params(
+            request.query_params,
+            user=request.user,
+            fx_snapshot=fx_snapshot,
+        )
+
         structured_qs = DjangoFilterBackend().filter_queryset(
             request, self.get_queryset(), self
+        )
+        structured_qs = apply_salary_filters(
+            structured_qs, salary_bounds, field_prefix="job_posting__"
         )
         structured_qs = apply_triage_filters(
             structured_qs,
@@ -138,6 +155,10 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
         )
         search_query = extract_search_query(request.query_params)
         search_mode: str | None = None
+        has_explicit_ordering = (
+            "ordering" in request.query_params
+            or (request.query_params.get("sort_by") or "").strip().lower() == "salary"
+        )
 
         if search_query:
             base_jobs = JobPosting.objects.filter(
@@ -147,10 +168,8 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
             search_mode = result.search_mode
             matched_ids = list(result.rrf_scores.keys())
             summary_qs = structured_qs.filter(job_posting_id__in=matched_ids)
-            if "ordering" in request.query_params:
-                ordered_qs = NullsLastOrderingFilter().filter_queryset(
-                    request, summary_qs, self
-                )
+            if has_explicit_ordering:
+                ordered_qs = self._apply_match_ordering(request, summary_qs)
             else:
                 ordered_qs = annotate_rrf_score(
                     structured_qs, result.rrf_scores, id_field="job_posting_id"
@@ -162,9 +181,7 @@ class MatchScoreViewSet(viewsets.ReadOnlyModelViewSet):
                 )
         else:
             summary_qs = structured_qs
-            ordered_qs = NullsLastOrderingFilter().filter_queryset(
-                request, structured_qs, self
-            )
+            ordered_qs = self._apply_match_ordering(request, structured_qs)
 
         summary = summary_qs.aggregate(
             ai_scored_count=Count("uuid", filter=Q(fit_score__isnull=False)),

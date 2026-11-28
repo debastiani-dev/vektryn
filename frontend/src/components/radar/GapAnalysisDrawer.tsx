@@ -19,7 +19,12 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { vektrynApi } from "../../api/client";
-import type { CopilotTone, JobPostingDetail, MatchScore } from "../../types/models";
+import type {
+    CopilotTone,
+    JobPostingDetail,
+    MatchScore,
+    SalaryDisplayCadence,
+} from "../../types/models";
 import {
     DEFAULT_MIN_ALERT_SCORE,
     formatApplyLinkLabel,
@@ -27,8 +32,8 @@ import {
     formatAtsSource,
     formatContractType,
     formatExactDate,
+    formatNormalizedSalary,
     formatRelativeTime,
-    formatSalaryRange,
     formatScoreLabel,
     formatSeniority,
     formatWorkMode,
@@ -55,6 +60,7 @@ interface GapAnalysisDrawerProps {
     minAlertScore?: number;
     defaultCopilotTone?: CopilotTone;
     hasGeminiApiKey?: boolean;
+    salaryCadence?: SalaryDisplayCadence;
     onOpenAccountSettings?: () => void;
     saving: boolean;
     saved: boolean;
@@ -386,6 +392,7 @@ function GapAnalysisDrawerContent({
     minAlertScore,
     defaultCopilotTone,
     hasGeminiApiKey,
+    salaryCadence = "annual",
     onOpenAccountSettings,
     saving,
     saved,
@@ -396,6 +403,7 @@ function GapAnalysisDrawerContent({
     minAlertScore?: number;
     defaultCopilotTone?: CopilotTone;
     hasGeminiApiKey?: boolean;
+    salaryCadence?: SalaryDisplayCadence;
     onOpenAccountSettings?: () => void;
     saving: boolean;
     saved: boolean;
@@ -444,12 +452,7 @@ function GapAnalysisDrawerContent({
     const isAlert = isAlertMatch(rawFit, effectiveMinAlertScore);
     const vectorPct = Math.max(0, Math.min(100, Math.round(match.cosine_similarity * 100)));
     const fitPct = hasAiScore ? Math.max(0, Math.min(100, Math.round(rawFit))) : null;
-    const salaryLabel = formatSalaryRange(
-        job.salary_min,
-        job.salary_max,
-        job.salary_currency,
-        job.salary_period,
-    );
+    const salaryDisplay = formatNormalizedSalary(jobDetail ?? job, salaryCadence);
     const seniorityLabel = formatSeniority(job.seniority);
     const postedAge = formatRelativeTime(job.posted_at);
     const postedExact = formatExactDate(job.posted_at);
@@ -568,11 +571,22 @@ function GapAnalysisDrawerContent({
                                 </Tooltip>
                             )}
 
-                            {salaryLabel && (
-                                <Tooltip content="Reported compensation range" side="bottom">
-                                    <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1 font-mono text-xs font-medium tabular-nums text-emerald-300 ring-1 ring-emerald-500/25">
+                            {salaryDisplay && (
+                                <Tooltip content={salaryDisplay.tooltip} side="bottom">
+                                    <span
+                                        className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs font-medium tabular-nums ring-1 ${
+                                            salaryDisplay.isUnverified
+                                                ? "bg-zinc-800/80 text-zinc-300 ring-zinc-700/70"
+                                                : "bg-emerald-500/10 text-emerald-300 ring-emerald-500/25"
+                                        }`}
+                                    >
                                         <Banknote className="h-3.5 w-3.5" />
-                                        {salaryLabel}
+                                        {salaryDisplay.label}
+                                        {salaryDisplay.isUnverified && (
+                                            <span className="font-sans text-[10px] font-normal text-amber-300/85">
+                                                · Unverified
+                                            </span>
+                                        )}
                                     </span>
                                 </Tooltip>
                             )}
@@ -721,6 +735,7 @@ export function GapAnalysisDrawer({
     minAlertScore,
     defaultCopilotTone,
     hasGeminiApiKey,
+    salaryCadence,
     onOpenAccountSettings,
     saving,
     saved,
@@ -738,6 +753,7 @@ export function GapAnalysisDrawer({
             minAlertScore={minAlertScore}
             defaultCopilotTone={defaultCopilotTone}
             hasGeminiApiKey={hasGeminiApiKey}
+            salaryCadence={salaryCadence}
             onOpenAccountSettings={onOpenAccountSettings}
             saving={saving}
             saved={saved}

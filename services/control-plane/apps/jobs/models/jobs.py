@@ -97,6 +97,15 @@ class JobPosting(BaseModel):
         null=True,
         blank=True,
     )
+    salary_annual_min_usd = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True, db_index=True
+    )
+    salary_annual_max_usd = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True, db_index=True
+    )
+    salary_annual_mid_usd = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True, db_index=True
+    )
     tech_stack = models.JSONField(default=list, blank=True)
 
     embedding = VectorField(
@@ -152,6 +161,14 @@ class JobPosting(BaseModel):
                 ),
                 name="chk_job_posting_salary_max_gte_min",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(salary_annual_max_usd__isnull=True)
+                    | Q(salary_annual_min_usd__isnull=True)
+                    | Q(salary_annual_max_usd__gte=F("salary_annual_min_usd"))
+                ),
+                name="ck_job_salary_annual_usd_order",
+            ),
         ]
         indexes = [
             GinIndex(fields=["tech_stack"], name="gin_job_posting_tech_stack"),
@@ -178,6 +195,24 @@ class JobPosting(BaseModel):
                 fields=["company_name_normalized", "description_fingerprint"],
                 condition=Q(is_deleted=False) & ~Q(description_fingerprint=""),
                 name="idx_job_dedup_company_fp",
+            ),
+            models.Index(
+                fields=["-salary_annual_mid_usd"],
+                condition=Q(
+                    is_deleted=False,
+                    is_active=True,
+                    salary_annual_mid_usd__isnull=False,
+                ),
+                name="idx_job_salary_mid_active",
+            ),
+            models.Index(
+                fields=["-salary_annual_max_usd"],
+                condition=Q(
+                    is_deleted=False,
+                    is_active=True,
+                    salary_annual_max_usd__isnull=False,
+                ),
+                name="idx_job_salary_max_active",
             ),
         ]
 

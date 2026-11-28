@@ -257,11 +257,11 @@ def test_jobs_matches_and_leads_api_fields_filters_and_zero_n_plus_one(
     assert lead_item["last_reposted_at"] is not None
 
     # Measure baseline query count for 1 job, then add 4 more multi-source jobs -> exact same query count (0 N+1)
-    with django_assert_num_queries(4):
-        assert client.get("/api/v1/jobs/").status_code == 200
     with django_assert_num_queries(5):
+        assert client.get("/api/v1/jobs/").status_code == 200
+    with django_assert_num_queries(6):
         assert client.get("/api/v1/matches/").status_code == 200
-    with django_assert_num_queries(3):
+    with django_assert_num_queries(4):
         assert client.get("/api/v1/leads/").status_code == 200
 
     for idx in range(2, 6):
@@ -297,13 +297,13 @@ def test_jobs_matches_and_leads_api_fields_filters_and_zero_n_plus_one(
         )
 
     # Exact same query counts with 5 multi-source jobs proves zero N+1!
-    with django_assert_num_queries(4):
+    with django_assert_num_queries(5):
         res_jobs = client.get("/api/v1/jobs/")
         assert res_jobs.data["count"] == 5
-    with django_assert_num_queries(5):
+    with django_assert_num_queries(6):
         res_matches = client.get("/api/v1/matches/")
         assert res_matches.data["count"] == 5
-    with django_assert_num_queries(3):
+    with django_assert_num_queries(4):
         res_leads = client.get("/api/v1/leads/")
         assert res_leads.data["count"] == 5
 

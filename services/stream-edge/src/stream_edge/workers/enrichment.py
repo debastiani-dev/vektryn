@@ -5,7 +5,7 @@ import signal
 
 from confluent_kafka import KafkaError
 
-from stream_edge.clients.gemini import GeminiStreamClient, normalize_salary_currency
+from stream_edge.clients.gemini import GeminiStreamClient
 from stream_edge.clients.heartbeat import WorkerHeartbeat
 from stream_edge.clients.kafka import (
     KafkaEventProducer,
@@ -32,6 +32,7 @@ from vektryn_contracts import (
     is_generic_company_name,
     job_partition_key,
     normalize_company_for_dedup,
+    normalize_currency_code,
     normalize_language_code,
 )
 
@@ -242,7 +243,7 @@ async def process_raw_message(
         region_eligibility=metadata.region_eligibility,
         salary_min=metadata.salary_min,
         salary_max=metadata.salary_max,
-        salary_currency=normalize_salary_currency(metadata.salary_currency),
+        salary_currency=normalize_currency_code(metadata.salary_currency),
         salary_period=metadata.salary_period,
         tech_stack=metadata.tech_stack,
         embedding=embedding,

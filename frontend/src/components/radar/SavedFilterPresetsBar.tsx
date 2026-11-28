@@ -1,13 +1,18 @@
 import { Bookmark, Check, Loader2, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import type { ResumeProfile, SavedFilter } from "../../types/models";
-import { isPresetActive, type RadarFilterState } from "../../utils/savedFilters";
+import {
+    isPresetActive,
+    type RadarFilterState,
+    type SalaryPresetDefaults,
+} from "../../utils/savedFilters";
 import { Tooltip } from "../ui/Tooltip";
 
 interface SavedFilterPresetsBarProps {
     presets: ReadonlyArray<SavedFilter>;
     currentState: RadarFilterState;
     resumes: ReadonlyArray<ResumeProfile>;
+    salaryDefaults?: SalaryPresetDefaults;
     canSaveCurrent: boolean;
     saving: boolean;
     deletingId: string | null;
@@ -21,6 +26,7 @@ export function SavedFilterPresetsBar({
     presets,
     currentState,
     resumes,
+    salaryDefaults,
     canSaveCurrent,
     saving,
     deletingId,
@@ -60,7 +66,12 @@ export function SavedFilterPresetsBar({
                 )}
 
                 {presets.map((preset) => {
-                    const active = isPresetActive(currentState, preset.query_params, resumes);
+                    const active = isPresetActive(
+                        currentState,
+                        preset.query_params,
+                        resumes,
+                        salaryDefaults,
+                    );
                     const isDeleting = deletingId === preset.uuid;
                     return (
                         <div

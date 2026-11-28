@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { EMPTY_METADATA_FILTERS } from "./radarFilters";
 import {
     hydrateRadarStateFromPreset,
     isPresetActive,
@@ -19,6 +20,7 @@ describe("savedFilters helpers", () => {
             hideDismissed: false,
             hideMuted: true,
             metadataFilters: {
+                ...EMPTY_METADATA_FILTERS,
                 seniority: "senior",
                 contractType: "pj",
                 workMode: "remote",

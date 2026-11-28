@@ -28,6 +28,7 @@ describe("radarFilters", () => {
                 resumeFilter: "resume-1",
                 minScore: 70,
                 metadataFilters: {
+                    ...EMPTY_METADATA_FILTERS,
                     seniority: "senior",
                     contractType: "pj",
                     workMode: "remote",
@@ -46,6 +47,7 @@ describe("radarFilters", () => {
             resumeLabel: "Senior Python Backend",
             minScore: 80,
             metadataFilters: {
+                ...EMPTY_METADATA_FILTERS,
                 seniority: "senior",
                 contractType: "pj",
                 workMode: "onsite",
