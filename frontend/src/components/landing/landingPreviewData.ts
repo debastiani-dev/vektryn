@@ -26,6 +26,8 @@ export interface RadarPreviewRole {
     company: string;
     location: string;
     source: string;
+    additionalSources?: string[];
+    repostCount?: number;
     seniority: string;
     workMode: WorkMode;
     language: "EN" | "PT";
@@ -189,6 +191,7 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         company: "Linearity Labs",
         location: "Remote · Global",
         source: "Ashby",
+        additionalSources: ["Remotive", "Himalayas"],
         seniority: "Senior",
         workMode: "remote",
         language: "EN",
@@ -210,6 +213,7 @@ export const RADAR_PREVIEW_ROLES: RadarPreviewRole[] = [
         company: "NuvemPay",
         location: "Remote · Brazil / LATAM",
         source: "Greenhouse",
+        repostCount: 1,
         seniority: "Staff",
         workMode: "remote",
         language: "PT",

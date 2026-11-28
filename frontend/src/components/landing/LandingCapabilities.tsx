@@ -82,14 +82,18 @@ export function LandingCapabilities() {
                             </h3>
                             <p className="mt-2 text-sm leading-relaxed text-zinc-400">
                                 Reciprocal Rank Fusion merges full-text and vector search with
-                                work-mode and ISO 639-1 language filters, saved presets, role
-                                hiding, company muting, and manual URL imports.
+                                cross-source near-duplicate merging (promoting Direct ATS links),
+                                repost detection and filtering, work-mode &amp; language filters,
+                                saved presets, company muting, and manual URL imports.
                             </p>
                         </div>
 
                         <div className="mt-6 flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800/90 bg-zinc-950/80 p-3.5 font-mono text-[11px]">
                             <span className="rounded-md bg-violet-500/15 px-2 py-1 text-violet-300 ring-1 ring-violet-500/30">
                                 Hybrid RRF
+                            </span>
+                            <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-zinc-300">
+                                Cross-Source Dedup
                             </span>
                             <span className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-zinc-300">
                                 Work &amp; Language

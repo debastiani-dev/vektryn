@@ -91,6 +91,8 @@ describe("LandingPage and interactive coded preview helpers", () => {
         expect(html).toContain("Resumes");
         expect(html).toContain("Interactive preview");
         expect(html).toContain("Click tabs and filters to explore");
+        expect(html).toContain("Cross-Source Dedup");
+        expect(html).toContain("Two-layer near-duplicate");
         expect(html).toContain("BYOK Gemini 3.5/4");
         expect(html).toContain("text-balance");
         expect(html).toContain("Live Stream");
@@ -125,6 +127,9 @@ describe("LandingPage and interactive coded preview helpers", () => {
         expect(panels[0]).toContain("Hybrid");
         expect(panels[0]).toContain("Senior Backend");
         expect(panels[0]).toContain("Staff Platform");
+        expect(panels[0]).toContain("+2 sources");
+        expect(panels[0]).toContain("Also seen on Remotive, Himalayas");
+        expect(panels[0]).toContain("Reposted");
         expect(panels[0]).toContain("Gap Details");
         expect(panels[1]).toContain("Fit Summary");
         expect(panels[1]).toContain("Matched Skills");
